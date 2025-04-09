@@ -1,0 +1,22 @@
+.platform-menu {
+  animation: fadeIn 0.2s ease-out;
+}
+
+.platform-button {
+  transition: all 0.2s ease;
+}
+
+.platform-button:hover {
+  transform: translateY(-1px);
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

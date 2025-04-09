@@ -1,0 +1,88 @@
+.settings-container {
+    padding: 24px;
+    max-width: 800px;
+    margin: 0 auto;
+  }
+  
+  .profile-section {
+    background: #1E1E2D;
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 24px;
+  }
+  
+  .profile-header {
+    display: flex;
+    align-items: center;
+    margin-bottom: 24px;
+  }
+  
+  .profile-avatar {
+    width: 64px;
+    height: 64px;
+    background: #646cff;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    color: white;
+    margin-right: 16px;
+  }
+  
+  .profile-title {
+    flex: 1;
+  }
+  
+  .profile-title h3 {
+    margin: 0;
+    color: white;
+  }
+  
+  .role-badge {
+    display: inline-block;
+    padding: 4px 8px;
+    background: #646cff;
+    color: white;
+    border-radius: 4px;
+    font-size: 12px;
+    margin-top: 4px;
+  }
+  
+  .profile-details {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+  }
+  
+  .detail-item {
+    display: flex;
+    flex-direction: column;
+  }
+  
+  .detail-item label {
+    color: #a1a1b5;
+    margin-bottom: 4px;
+    font-size: 14px;
+  }
+  
+  .detail-item span {
+    color: white;
+  }
+  
+  .matrix-connection {
+    background: #1E1E2D;
+    border-radius: 12px;
+    padding: 24px;
+  }
+  
+  .matrix-connection h3 {
+    color: white;
+    margin-top: 0;
+  }
+  
+  .connection-details {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+  }

@@ -1,0 +1,549 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { useDispatch, useSelector } from 'react-redux';
+import { motion, AnimatePresence } from 'framer-motion';
+import { 
+  fetchOnboardingStatus, 
+  updateOnboardingStep,
+  setOnboardingError,
+  ONBOARDING_ROUTES,
+  ONBOARDING_STEPS
+} from '../store/slices/onboardingSlice';
+import { onboardingService } from '../services/onboardingService';
+import WhatsAppBridgeSetup from '../components/WhatsAppBridgeSetup';
+import api from '../utils/api';
+import { toast } from 'react-hot-toast';
+import logger from '../utils/logger';
+import DFLogo from '../images/DF.png';
+import { FiCheck } from 'react-icons/fi';
+
+// Step metadata for consistent content
+const STEP_METADATA = {
+  [ONBOARDING_STEPS.WELCOME]: {
+    title: 'Welcome to DailyFix',
+    description: 'Let\'s get you set up.'
+  },
+  [ONBOARDING_STEPS.PROTOCOL_SELECTION]: {
+    title: 'Messaging Platform',
+    description: 'Select the platform you want to connect to start.'
+  },
+  [ONBOARDING_STEPS.MATRIX]: {
+    title: 'Setting Up Connection',
+    description: 'We\'re preparing your secure connection. This may take a few seconds.'
+  },
+  [ONBOARDING_STEPS.WHATSAPP]: {
+    title: 'Login setup',
+    description: 'Scan the QR code with your WhatsApp mobile app to connect.'
+  },
+  [ONBOARDING_STEPS.COMPLETE]: {
+    title: 'Setup Complete',
+    description: 'You\'re all set! Taking you to the right place..'
+  }
+};
+
+// Timeline step component
+const TimelineStep = ({ step, currentStep, completedSteps, index, totalSteps }) => {
+  const isActive = currentStep === step;
+  const isCompleted = completedSteps.includes(step);
+  const stepNumber = index + 1;
+
+  return (
+    <div className="flex items-center mb-8">
+      <div className={`relative flex items-center justify-center w-12 h-10 rounded-full border-2 ${
+        isActive
+          ? 'border-white bg-white text-purple-700'
+          : isCompleted
+            ? 'border-green-400 bg-green-400 text-white'
+            : 'border-gray-400 bg-transparent text-gray-400'
+      } z-10`}>
+        {isCompleted ? (
+          <FiCheck className="w-5 h-5" />
+        ) : (
+          <span>{stepNumber}</span>
+        )}
+      </div>
+      <div className="ml-4 w-auto">
+        <p className={`font-base w-auto text-sm ${isActive || isCompleted ? 'text-white' : 'text-gray-400'}`}>
+          {STEP_METADATA[step]?.title || step}
+        </p>
+      </div>
+    </div>
+  );
+};
+
+// Welcome step component
+const WelcomeStep = ({ onNext }) => {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -20 }}
+      className="text-center"
+    >
+      <h1 className="text-3xl font-bold mb-6 text-white">{STEP_METADATA[ONBOARDING_STEPS.WELCOME].title}</h1>
+      <p className="text-xl mb-8 text-gray-200">{STEP_METADATA[ONBOARDING_STEPS.WELCOME].description}</p>
+      <button
+        onClick={() => onNext(ONBOARDING_STEPS.PROTOCOL_SELECTION)}
+        className="bg-white text-purple-700 font-bold py-3 px-8 rounded-lg hover:bg-gray-100 transition-colors w-auto"
+      >
+        Get Started
+      </button>
+    </motion.div>
+  );
+};
+
+// Protocol selection step component
+const ProtocolSelectionStep = ({ onNext }) => {
+  const dispatch = useDispatch();
+  const [loading, setLoading] = useState(false);
+
+  const handleWhatsAppSelection = async () => {
+    try {
+      setLoading(true);
+      logger.info('[ProtocolSelection] Selected WhatsApp platform');
+
+      // First update the onboarding step to matrix
+      await dispatch(updateOnboardingStep({
+        step: ONBOARDING_STEPS.MATRIX
+      })).unwrap();
+
+      logger.info('[ProtocolSelection] Successfully updated step to matrix, calling auto-initialize');
+
+      // Call the auto-initialize endpoint
+      const response = await api.post('/api/v1/matrix/auto-initialize');
+      
+      logger.info('[ProtocolSelection] Auto-initialize response:', response.data);
+
+      if (response.data.status !== 'active') {
+        throw new Error(response.data.message || 'Failed to initialize Matrix connection');
+      }
+
+      // Update onboarding step to WhatsApp
+      await dispatch(updateOnboardingStep({
+        step: ONBOARDING_STEPS.WHATSAPP,
+        data: {
+          matrixConnected: true,
+          connectedPlatforms: ['matrix']
+        }
+      })).unwrap();
+
+      logger.info('[ProtocolSelection] Successfully updated step to whatsapp');
+
+      setLoading(false);
+      toast.success('Initiating WhatsApp connection!');
+      onNext(ONBOARDING_STEPS.WHATSAPP);
+    } catch (error) {
+      logger.error('[ProtocolSelection] Error:', error);
+      const errorMessage = error.response?.data?.message ||
+                          error.message ||
+                          'Failed to initialize connection. Please try again.';
+      toast.error(errorMessage);
+      setLoading(false);
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -20 }}
+      className="text-center"
+    >
+      <h2 className="text-2xl font-bold mb-6 text-white">{STEP_METADATA[ONBOARDING_STEPS.PROTOCOL_SELECTION].title}</h2>
+      <p className="text-lg mb-8 text-gray-200">{STEP_METADATA[ONBOARDING_STEPS.PROTOCOL_SELECTION].description}</p>
+
+      <div className="flex justify-center space-x-6">
+        {/* WhatsApp Button */}
+        <button
+          onClick={handleWhatsAppSelection}
+          disabled={loading}
+          className={`flex flex-col items-center p-6 rounded-xl transition-all ${
+            loading
+              ? 'bg-gray-700 cursor-not-allowed opacity-50'
+              : 'bg-white/10 hover:bg-white/20'
+          }`}
+        >
+          <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mb-3">
+            <svg viewBox="0 0 24 24" width="32" height="32" fill="white">
+              <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
+            </svg>
+          </div>
+          <span className="text-white font-medium">WhatsApp</span>
+        </button>
+
+        {/* Telegram Button (Disabled) */}
+        <button
+          disabled
+          className="flex flex-col items-center p-6 rounded-xl bg-white/5 opacity-50 cursor-not-allowed"
+        >
+          <div className="w-16 h-16 bg-blue-500 rounded-full flex items-center justify-center mb-3">
+            <svg viewBox="0 0 24 24" width="32" height="32" fill="white">
+              <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.562 8.248l-1.97 9.269c-.145.658-.537.818-1.084.51l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.332-.373-.119L8.48 13.278l-2.95-.924c-.642-.204-.654-.642.135-.953l11.447-4.415c.538-.196 1.006.128.45 1.262z"/>
+            </svg>
+          </div>
+          <span className="text-white font-medium">Telegram</span>
+          <span className="text-xs text-gray-400 mt-1">Coming Soon</span>
+        </button>
+        
+        {/* Instagram Button (Disabled) */}
+        <button
+          disabled
+          className="flex flex-col items-center p-6 rounded-xl bg-white/5 opacity-50 cursor-not-allowed"
+        >
+          <div className="w-16 h-16 bg-gradient-to-tr from-yellow-500 via-red-500 to-purple-500 rounded-full flex items-center justify-center mb-3">
+            <svg viewBox="0 0 24 24" width="32" height="32" fill="white">
+              <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z"/>
+            </svg>
+          </div>
+          <span className="text-white font-medium">Instagram</span>
+          <span className="text-xs text-gray-400 mt-1">Coming Soon</span>
+        </button>
+      </div>
+    </motion.div>
+  );
+};
+
+// Matrix setup step component
+const MatrixSetupStep = () => {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -20 }}
+      className="text-center"
+    >
+      <h2 className="text-2xl font-bold mb-6 text-white">{STEP_METADATA[ONBOARDING_STEPS.MATRIX].title}</h2>
+      <p className="text-lg mb-8 text-gray-200">{STEP_METADATA[ONBOARDING_STEPS.MATRIX].description}</p>
+      <div className="flex justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-white"></div>
+      </div>
+    </motion.div>
+  );
+};
+
+// WhatsApp setup step component
+const WhatsAppSetupStep = ({ onComplete }) => {
+  const dispatch = useDispatch();
+  const { whatsappConnected, isReloginFlow } = useSelector(state => state.onboarding);
+
+  const handleComplete = async () => {
+    try {
+      logger.info('[WhatsAppSetupStep] Completing WhatsApp setup');
+      
+      await dispatch(updateOnboardingStep({
+        step: 'complete',
+        data: {
+          whatsappConnected: true,
+          matrixConnected: true,
+          isComplete: true,
+          isReloginFlow: false,
+          connectedPlatforms: ['matrix', 'whatsapp']
+        }
+      })).unwrap();
+
+      logger.info('[WhatsAppSetupStep] Successfully updated step to complete');
+      onComplete(ONBOARDING_STEPS.COMPLETE);
+    } catch (error) {
+      logger.error('[WhatsAppSetupStep] Error completing setup:', error);
+      dispatch(setOnboardingError('Failed to complete setup. Please try again.'));
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -20 }}
+      className="text-center"
+    >
+      <h2 className="text-2xl font-bold mb-4 text-white">
+        {isReloginFlow ? 'Reconnect WhatsApp' : STEP_METADATA[ONBOARDING_STEPS.WHATSAPP].title}
+      </h2>
+      <p className="text-lg mb-6 text-gray-200">
+        {isReloginFlow
+          ? 'Scan the QR code to reconnect your WhatsApp account'
+          : STEP_METADATA[ONBOARDING_STEPS.WHATSAPP].description}
+      </p>
+
+      {whatsappConnected ? (
+        <div className="text-center">
+          <div className="text-green-400 mb-4">
+            <FiCheck className="w-12 h-12 mx-auto" />
+          </div>
+          <p className="text-green-400 mb-4">WhatsApp connected successfully!</p>
+          <button
+            onClick={handleComplete}
+            className="bg-white text-purple-700 font-bold py-3 px-8 rounded-lg hover:bg-gray-100 transition-colors"
+          >
+            Continue
+          </button>
+        </div>
+      ) : (
+        <div className="flex justify-center">
+          <WhatsAppBridgeSetup onComplete={handleComplete} />
+        </div>
+      )}
+    </motion.div>
+  );
+};
+
+// Completion step component
+const CompletionStep = () => {
+  const navigate = useNavigate();
+  const dispatch = useDispatch();
+  const [hasAttempted, setHasAttempted] = useState(false);
+
+  useEffect(() => {
+    const redirectToDashboard = async () => {
+      console.log('[CompletionStep] Redirecting to dashboard...');
+
+      // Safety timeout to ensure redirect happens
+      const timeoutId = setTimeout(() => {
+        console.log('[CompletionStep] Timeout triggered, forcing redirect...');
+        window.location.href = '/dashboard';
+      }, 3000);
+
+      // If we've already attempted to update, just exit
+      if (hasAttempted) {
+        console.log('[CompletionStep] Already attempted update, skipping...');
+        return () => clearTimeout(timeoutId);
+      }
+
+      try {
+        setHasAttempted(true);
+        console.log('[CompletionStep] Updating onboarding step to complete...');
+
+        // Update onboarding step to complete with all necessary data
+        await dispatch(updateOnboardingStep({
+          step: 'complete',
+          data: {
+            whatsappConnected: true,
+            matrixConnected: true,
+            isComplete: true,
+            connectedPlatforms: ['matrix', 'whatsapp']
+          }
+        })).unwrap();
+
+        console.log('[CompletionStep] Update successful, navigating to dashboard...');
+        navigate('/dashboard', { replace: true });
+      } catch (error) {
+        // Log error but continue to dashboard
+        console.error('[CompletionStep] Error in completion step:', error);
+        toast.error('Note: Failed to save onboarding status, but continuing to dashboard...');
+        navigate('/dashboard', { replace: true });
+      }
+
+      return () => clearTimeout(timeoutId);
+    };
+
+    redirectToDashboard();
+  }, [dispatch, navigate, hasAttempted]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -20 }}
+      className="text-center"
+    >
+      <h2 className="text-2xl font-bold mb-4 text-white">{STEP_METADATA[ONBOARDING_STEPS.COMPLETE].title}</h2>
+      <p className="text-lg mb-6 text-gray-200">{STEP_METADATA[ONBOARDING_STEPS.COMPLETE].description}</p>
+      <div className="flex justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-white"></div>
+      </div>
+    </motion.div>
+  );
+};
+
+// Main onboarding component
+const NewOnboarding = () => {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const dispatch = useDispatch();
+  const { session } = useSelector(state => state.auth);
+  const { currentStep, isComplete } = useSelector(state => state.onboarding);
+  const [activeStep, setActiveStep] = useState(ONBOARDING_STEPS.WELCOME);
+  const [completedSteps, setCompletedSteps] = useState([]);
+  const navigationAttemptedRef = useRef(false);
+
+  // Define the order of steps
+  const stepOrder = [
+    ONBOARDING_STEPS.WELCOME,
+    ONBOARDING_STEPS.PROTOCOL_SELECTION,
+    ONBOARDING_STEPS.MATRIX,
+    ONBOARDING_STEPS.WHATSAPP,
+    ONBOARDING_STEPS.COMPLETE
+  ];
+
+  // Check if user is authenticated and redirect if needed
+  useEffect(() => {
+    const checkAndRedirect = async () => {
+      if (!session) {
+        navigate('/login');
+        return;
+      }
+
+      try {
+        const statusResponse = await onboardingService.getOnboardingStatus(true);
+
+        // Handle both response formats
+        const status = statusResponse.data || statusResponse;
+
+        // Log what we're receiving
+        console.log('[Onboarding] Status check response:', statusResponse);
+
+        // Check for completion in both formats
+        const isCompleted =
+          status.is_complete === true ||
+          status.isComplete === true ||
+          statusResponse.is_complete === true ||
+          statusResponse.isComplete === true;
+
+        console.log('[Onboarding] Is onboarding complete?', isCompleted);
+
+        // If onboarding is complete, redirect to dashboard
+        if (isCompleted) {
+          console.log('[Onboarding] Redirecting to dashboard - onboarding complete');
+          navigate('/dashboard', { replace: true });
+          return;
+        }
+
+        // Set active step based on current step from backend
+        const currentStepFromBackend = status.current_step || status.currentStep;
+        if (currentStepFromBackend && stepOrder.includes(currentStepFromBackend)) {
+          setActiveStep(currentStepFromBackend);
+
+          // Set completed steps based on current step
+          const currentStepIndex = stepOrder.indexOf(currentStepFromBackend);
+          const newCompletedSteps = stepOrder.slice(0, currentStepIndex);
+          setCompletedSteps(newCompletedSteps);
+        }
+      } catch (error) {
+        console.error('[Onboarding] Error checking status:', error);
+        toast.error('Failed to check onboarding status');
+      }
+    };
+
+    checkAndRedirect();
+  }, [session, navigate, dispatch, stepOrder]);
+
+  // Handle step change
+  const handleStepChange = async (nextStep) => {
+    try {
+      if (stepOrder.includes(nextStep)) {
+        logger.info(`[NewOnboarding] Changing step from ${activeStep} to ${nextStep}`);
+        
+        // If we're not in the welcome step, update the backend
+        if (activeStep !== ONBOARDING_STEPS.WELCOME || nextStep !== ONBOARDING_STEPS.PROTOCOL_SELECTION) {
+          // Dispatch the Redux action to update the backend
+          await dispatch(updateOnboardingStep({
+            step: nextStep
+          })).unwrap();
+          logger.info(`[NewOnboarding] Successfully updated backend step to ${nextStep}`);
+        }
+        
+        // Add current step to completed steps
+        if (!completedSteps.includes(activeStep)) {
+          setCompletedSteps([...completedSteps, activeStep]);
+        }
+
+        // Set new active step
+        setActiveStep(nextStep);
+      }
+    } catch (error) {
+      logger.error(`[NewOnboarding] Error changing step to ${nextStep}:`, error);
+      toast.error(`Failed to update onboarding step: ${error.message}`);
+    }
+  };
+
+  // Render step content based on active step
+  const renderStepContent = () => {
+    switch (activeStep) {
+      case ONBOARDING_STEPS.WELCOME:
+        return <WelcomeStep onNext={handleStepChange} />;
+      case ONBOARDING_STEPS.PROTOCOL_SELECTION:
+        return <ProtocolSelectionStep onNext={handleStepChange} />;
+      case ONBOARDING_STEPS.MATRIX:
+        return <MatrixSetupStep />;
+      case ONBOARDING_STEPS.WHATSAPP:
+        return <WhatsAppSetupStep onComplete={handleStepChange} />;
+      case ONBOARDING_STEPS.COMPLETE:
+        return <CompletionStep />;
+      default:
+        return null;
+    }
+  };
+
+  // Calculate progress percentage for the timeline
+  const calculateProgress = () => {
+    const currentIndex = stepOrder.indexOf(activeStep);
+    const totalSteps = stepOrder.length - 1; // Exclude COMPLETE step from calculation
+    return Math.max(0, Math.min(100, (currentIndex / totalSteps) * 100));
+  };
+
+  return (
+    <div className="min-h-screen flex bg-[#1B1C1E] p-4 rounded-lg">
+      {/* Left Panel - Logo and Image */}
+      <div className="hidden md:flex md:w-1/3 rounded flex-col items-center justify-center p-8 relative">
+        {/* Background image with 30% opacity */}
+        <div
+          className="absolute inset-0"
+          style={{
+            backgroundSize: 'cover',
+            backgroundPosition: 'center',
+            opacity: 0.3, // 30% opacity for the background only
+          }}
+        ></div>
+
+        {/* Content with full opacity */}
+        <div className="relative z-10 flex flex-col items-center justify-center">
+          <img src={DFLogo} alt="DailyFix Logo" className="w-24 h-24 mb-6" />
+          <h1 className="text-3xl font-bold text-white mb-4">DailyFix</h1>
+          <p className="text-gray-400 text-center mb-8">This is your daily fix to all your social media</p>
+        </div>
+      </div>
+
+      {/* Right Panel - Onboarding Steps */}
+      <div className="flex-1 bg-gradient-to-b from-[rgba(101,89,130,0.2)] via-[rgba(43,99,194,0.3)] to-[rgba(188,226,159,0.2)] flex">
+        <div className="max-w-4xl mx-auto flex flex-col md:flex-row p-8 w-full opacity-90">
+          {/* Timeline */}
+          <div className="md:w-1/3 mb-8 md:mb-0 md:pr-8">
+            <div className="relative">
+              {/* Timeline Line */}
+              <div className="absolute left-5 top-5 bottom-5 w-0.5 bg-gray-400 bg-opacity-30"></div>
+
+              {/* Progress Line */}
+              <div
+                className="absolute left-5 top-5 w-0.5 bg-white transition-all duration-500 ease-in-out"
+                style={{ height: `${calculateProgress()}%` }}
+              ></div>
+
+              {/* Timeline Steps */}
+              {stepOrder.map((step, index) => (
+                <TimelineStep
+                  key={step}
+                  step={step}
+                  currentStep={activeStep}
+                  completedSteps={completedSteps}
+                  index={index}
+                  totalSteps={stepOrder.length}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Step Content */}
+          <div className="md:w-2/3 flex items-center justify-center">
+            <AnimatePresence mode="wait">
+              <div className="w-full max-w-md">
+                {renderStepContent()}
+              </div>
+            </AnimatePresence>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default NewOnboarding;

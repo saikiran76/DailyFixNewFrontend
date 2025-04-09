@@ -1,0 +1,371 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: 'Poppins', sans-serif;
+  }
+  
+  :root {
+    --gradient: conic-gradient(
+      from 90deg at 50% 50%,
+      rgb(251, 55, 60),
+      rgba(235, 114, 119, 1),
+      rgba(255, 228, 0, 1),
+      rgba(27, 206, 255, 1),
+      rgba(42, 187, 255, 1),
+      rgba(217, 41, 255, 1),
+      rgba(255, 49, 92, 1)
+    );
+  }
+  
+  .card {
+    --start: 0;
+    /* width: 300px;
+    height: 300px;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-start;
+    width: 100%;
+    padding: 10px 20px;
+    border-radius: 10px;
+    background-color: #000000; */
+    transition: border-color 0.3s ease-in-out;
+  }
+  
+  .card:before {
+    position: absolute;
+    content: "";
+    width: 40%;
+    height: 50%;
+    top: 50%;
+    left: 30%;
+    transform: translate(-5%, -5%);
+    border-radius: 10px;
+    background: var(--gradient);
+    background-attachment: fixed;
+    mask: linear-gradient(#0000, #000000),
+    conic-gradient(
+        from calc((var(--start) - (20 * 1.1) * 1deg)),
+        #ffffff1f 0deg,
+        white,
+        #ffffff00 100deg
+    );
+    mask-composite: intersect;
+    mask-clip: padding-box, border-box;
+    -webkit-mask-composite: intersect;
+    /* mask-composite: exclude; */
+    opacity: 0;
+    transition: .5s ease;
+  }
+  
+  .glow {
+    pointer-events: none;
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    filter: blur(14px);
+  }
+  
+  .glow:before {
+    position: absolute;
+    content: "";
+    width: 98%;
+    height: 98%;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    border: 14px solid transparent;
+    border-radius: 13px;
+    background: var(--gradient);
+    background-attachment: fixed;
+    mask: linear-gradient(#0000, #0000),
+    conic-gradient(
+        from calc(var(--start) * 1deg),
+        #000 0deg,
+        #ffffff,
+        rgba(0, 0, 0, 0) 60deg
+    );
+    mask-composite: intersect;
+    mask-clip: padding-box, border-box;
+    -webkit-mask-composite: intersect;
+    /* mask-composite: exclude; */
+    opacity: 0;
+    transition: 1s ease;
+  }
+  
+  .card:hover > .glow:before {
+    opacity: 1;
+  }
+  
+  .card:hover:before {
+    opacity: 0.6;
+  }
+  
+  /* h1 {
+    font-size: 65px;
+    color: rgb(71, 71, 71);
+    text-align: center;
+    font-weight: 600;
+  }
+  
+  p {
+    font-size: 20px;
+    color: rgb(174, 174, 174);
+    font-weight: 600;
+  } */
+  
+  /* Custom analytics dashboard card styling */
+  .analytics-card {
+    background-color: #000000;
+    border-radius: 10px;
+    overflow: hidden;
+    position: relative;
+    transition: all 0.3s ease;
+  }
+  
+  .analytics-card .glow {
+    pointer-events: none;
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    filter: blur(15px);
+  }
+  
+  .analytics-card:hover {
+    transform: translateY(-5px);
+  }
+  
+  .analytics-card:hover .glow:before {
+    opacity: 1;
+  }
+  
+  /* Apply styles to various cards in the analytics dashboard */
+  .metric-card, 
+  .chart-card, 
+  .report-card,
+  .priority-card {
+    position: relative;
+    background-color: #1f1f1f; /* Darker background */
+  }
+  
+  .metric-card .glow:before,
+  .chart-card .glow:before,
+  .report-card .glow:before,
+  .priority-card .glow:before {
+    border: 1px solid transparent;
+    border-radius: 10px;
+  }
+  
+  .metric-card:hover,
+  .chart-card:hover,
+  .report-card:hover,
+  .priority-card:hover {
+    box-shadow: 0 10px 20px rgba(0,0,0,0.3);
+}
+
+/* Border animation for report cards */
+.report-card {
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+/* Pseudo-elements for the animated borders */
+.report-card .border-top,
+.report-card .border-right,
+.report-card .border-bottom,
+.report-card .border-left {
+  position: absolute;
+  z-index: 2;
+}
+
+.report-card .border-top {
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.5s ease;
+}
+
+.report-card .border-right {
+  top: 0;
+  right: 0;
+  width: 2px;
+  height: 100%;
+  transform: scaleY(0);
+  transform-origin: top;
+  transition: transform 0.5s ease;
+}
+
+.report-card .border-bottom {
+  bottom: 0;
+  right: 0;
+  width: 100%;
+  height: 2px;
+  transform: scaleX(0);
+  transform-origin: right;
+  transition: transform 0.5s ease;
+}
+
+.report-card .border-left {
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  height: 100%;
+  transform: scaleY(0);
+  transform-origin: bottom;
+  transition: transform 0.5s ease;
+}
+
+/* Green card variant */
+.report-card.green-card .border-top,
+.report-card.green-card .border-right,
+.report-card.green-card .border-bottom,
+.report-card.green-card .border-left {
+  background: rgba(16, 185, 129, 0.8);
+  box-shadow: 0 0 5px rgba(16, 185, 129, 0.6);
+}
+
+/* Neutral card variant */
+.report-card.neutral-card .border-top,
+.report-card.neutral-card .border-right,
+.report-card.neutral-card .border-bottom,
+.report-card.neutral-card .border-left {
+  background: rgba(107, 114, 128, 0.8);
+  box-shadow: 0 0 5px rgba(107, 114, 128, 0.6);
+}
+
+/* Red card variant */
+.report-card.red-card .border-top,
+.report-card.red-card .border-right,
+.report-card.red-card .border-bottom,
+.report-card.red-card .border-left {
+  background: rgba(239, 68, 68, 0.8);
+  box-shadow: 0 0 5px rgba(239, 68, 68, 0.6);
+}
+
+/* Hover animations for border elements */
+.report-card:hover .border-top {
+  transform: scaleX(1);
+  transition: transform 0.5s ease;
+}
+
+.report-card:hover .border-right {
+  transform: scaleY(1);
+  transition: transform 0.5s ease 0.1s;
+}
+
+.report-card:hover .border-bottom {
+  transform: scaleX(1);
+  transition: transform 0.5s ease 0.2s;
+}
+
+.report-card:hover .border-left {
+  transform: scaleY(1);
+  transition: transform 0.5s ease 0.3s;
+}
+
+/* Content wrapper to ensure content stays on top */
+.report-card-content {
+  position: relative;
+  z-index: 3;
+}
+
+/* Continuous border animation variant */
+.report-card.animated .border-top {
+  animation: borderTopAnim 4s ease-in-out infinite;
+}
+
+.report-card.animated .border-right {
+  animation: borderRightAnim 4s ease-in-out infinite 1s;
+}
+
+.report-card.animated .border-bottom {
+  animation: borderBottomAnim 4s ease-in-out infinite 2s;
+}
+
+.report-card.animated .border-left {
+  animation: borderLeftAnim 4s ease-in-out infinite 3s;
+}
+
+@keyframes borderTopAnim {
+  0%, 100% {
+    transform: scaleX(0);
+    opacity: 0;
+    transform-origin: left;
+  }
+  25%, 45% {
+    transform: scaleX(1);
+    opacity: 1;
+    transform-origin: left;
+  }
+  50%, 95% {
+    transform: scaleX(0);
+    opacity: 0;
+    transform-origin: right;
+  }
+}
+
+@keyframes borderRightAnim {
+  0%, 100% {
+    transform: scaleY(0);
+    opacity: 0;
+    transform-origin: top;
+  }
+  25%, 45% {
+    transform: scaleY(1);
+    opacity: 1;
+    transform-origin: top;
+  }
+  50%, 95% {
+    transform: scaleY(0);
+    opacity: 0;
+    transform-origin: bottom;
+  }
+}
+
+@keyframes borderBottomAnim {
+  0%, 100% {
+    transform: scaleX(0);
+    opacity: 0;
+    transform-origin: right;
+  }
+  25%, 45% {
+    transform: scaleX(1);
+    opacity: 1;
+    transform-origin: right;
+  }
+  50%, 95% {
+    transform: scaleX(0);
+    opacity: 0;
+    transform-origin: left;
+  }
+}
+
+@keyframes borderLeftAnim {
+  0%, 100% {
+    transform: scaleY(0);
+    opacity: 0;
+    transform-origin: bottom;
+  }
+  25%, 45% {
+    transform: scaleY(1);
+    opacity: 1;
+    transform-origin: bottom;
+  }
+  50%, 95% {
+    transform: scaleY(0);
+    opacity: 0;
+    transform-origin: top;
+  }
+}
