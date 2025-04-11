@@ -4,6 +4,8 @@ import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   updateOnboardingStep,
+  setCurrentStep,
+  setIsComplete,
   ONBOARDING_STEPS
 } from '../store/slices/onboardingSlice';
 import logger from '../utils/logger';
@@ -88,15 +90,25 @@ const NewOnboarding = () => {
     try {
       logger.info('[NewOnboarding] Completing onboarding tutorial');
 
-      // Update onboarding step to complete
-      await dispatch(updateOnboardingStep({
-        step: ONBOARDING_STEPS.COMPLETE,
-        data: {
-          isComplete: true
+      // CRITICAL FIX: Directly update Redux state without API call
+      dispatch(setCurrentStep('complete'));
+      dispatch(setIsComplete(true));
+
+      // Also update localStorage for persistence
+      try {
+        const onboardingData = localStorage.getItem('persist:onboarding');
+        if (onboardingData) {
+          const parsedData = JSON.parse(onboardingData);
+          parsedData.currentStep = JSON.stringify('complete');
+          parsedData.isComplete = JSON.stringify(true);
+          localStorage.setItem('persist:onboarding', JSON.stringify(parsedData));
         }
-      })).unwrap();
+      } catch (storageError) {
+        logger.error('[NewOnboarding] Error updating localStorage:', storageError);
+      }
 
       logger.info('[NewOnboarding] Onboarding completed successfully');
+      toast.success('Onboarding completed successfully!');
       navigate('/dashboard');
     } catch (error) {
       logger.error('[NewOnboarding] Error completing onboarding:', error);

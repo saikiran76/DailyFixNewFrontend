@@ -26,12 +26,12 @@ export const ErrorTypes = {
 // API response validator
 export const validateResponse = (data, schema) => {
   if (!data) return false;
-  
+
   for (const [key, type] of Object.entries(schema)) {
     if (!(key in data)) return false;
     if (typeof data[key] !== type) return false;
   }
-  
+
   return true;
 };
 
@@ -67,15 +67,56 @@ const api = axios.create({
 api.interceptors.request.use(async (config) => {
   try {
     // Get token from token manager
-    const token = await tokenManager.getValidToken();
+    let token = null;
     
+    try {
+      token = await tokenManager.getValidToken();
+    } catch (tokenError) {
+      console.error('[API] Error getting token from tokenManager:', tokenError);
+      
+      // Fallback token retrieval if tokenManager fails
+      token = localStorage.getItem('access_token');
+      
+      // If token not found in access_token, try to get from dailyfix_auth
+      if (!token) {
+        const authDataStr = localStorage.getItem('dailyfix_auth');
+        if (authDataStr) {
+          try {
+            const authData = JSON.parse(authDataStr);
+            token = authData.session?.access_token;
+            logger.info('[API] Retrieved token from dailyfix_auth');
+          } catch (e) {
+            logger.error('[API] Error parsing auth data:', e);
+          }
+        }
+      }
+      
+      // If still no token, try to get from persist:auth (Redux persisted state)
+      if (!token) {
+        const authStr = localStorage.getItem('persist:auth');
+        if (authStr) {
+          try {
+            const authData = JSON.parse(authStr);
+            const sessionData = JSON.parse(authData.session);
+            token = sessionData?.access_token;
+            logger.info('[API] Retrieved token from persist:auth');
+          } catch (e) {
+            logger.error('[API] Error parsing persisted auth data:', e);
+          }
+        }
+      }
+    }
+
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
+      logger.info('[API] Added Authorization header');
+    } else {
+      logger.warn('[API] No token available for request');
     }
-    
+
     return config;
   } catch (error) {
-    logger.info('[API] Error setting auth token:', error);
+    logger.error('[API] Error setting auth token:', error);
     return config;
   }
 }, (error) => {
@@ -88,18 +129,39 @@ api.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config;
 
+    // CRITICAL FIX: Improved token refresh handling
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
+      logger.info('[API] Received 401 error, attempting to refresh token');
 
       try {
-        // Try to get a fresh token
-        const newToken = await tokenManager.getValidToken(null, true);
+        // Force token refresh
+        const newToken = await tokenManager.refreshToken();
+
         if (newToken) {
+          logger.info('[API] Token refreshed successfully, retrying request');
+          // Update the Authorization header with the new token
           originalRequest.headers.Authorization = `Bearer ${newToken}`;
+          // Also update the default headers for future requests
+          api.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
           return api(originalRequest);
+        } else {
+          logger.error('[API] Token refresh returned null token');
+          // If we're on a protected route and token refresh failed, redirect to login
+          if (!window.location.pathname.includes('/login') &&
+              !window.location.pathname.includes('/auth/callback')) {
+            logger.info('[API] Redirecting to login due to authentication failure');
+            window.location.href = '/login';
+          }
         }
       } catch (refreshError) {
-        logger.info('[API] Token refresh failed:', refreshError);
+        logger.error('[API] Token refresh failed:', refreshError);
+        // If we're on a protected route and token refresh failed, redirect to login
+        if (!window.location.pathname.includes('/login') &&
+            !window.location.pathname.includes('/auth/callback')) {
+          logger.info('[API] Redirecting to login due to authentication failure');
+          window.location.href = '/login';
+        }
       }
     }
 
@@ -121,4 +183,4 @@ api.getAuthState = async () => {
   }
 };
 
-export default api; 
+export default api;

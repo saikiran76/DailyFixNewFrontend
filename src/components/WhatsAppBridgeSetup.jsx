@@ -6,7 +6,6 @@ import QRCode from 'qrcode';
 import logger from '../utils/logger';
 import { toast } from 'react-toastify';
 // EMERGENCY FIX: Removed supabase import to prevent infinite reload
-import { refreshTokenWithTimeout } from '../utils/tokenRefreshHelper';
 // Use localStorage as a fallback for WhatsApp connection status
 import { saveWhatsAppStatus } from '../utils/connectionStorage';
 import { shouldAllowCompleteTransition } from '../utils/onboardingFix';
@@ -17,7 +16,6 @@ import {
   resetWhatsappSetup,
   setBridgeRoomId,
   selectWhatsappSetup,
-  setWhatsappPhoneNumber,
   setWhatsappConnected
 } from '../store/slices/onboardingSlice';
 
@@ -174,14 +172,27 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
               error.response &&
               (error.response.status === 429 || error.response.status === 500)) {
 
-            logger.info(`[WhatsAppBridgeSetup] Retrying (${retryCount + 1}/${maxRetries})...`);
+            // CRITICAL FIX: Add exponential backoff with jitter for retries
+            const baseDelay = Math.pow(2, retryCount) * 1000; // 2^retryCount seconds
+            const jitter = Math.random() * 1000; // Add up to 1 second of random jitter
+            const retryDelay = baseDelay + jitter;
+
+            logger.info(`[WhatsAppBridgeSetup] Retrying (${retryCount + 1}/${maxRetries}) after ${Math.round(retryDelay/1000)}s delay...`);
             setRetryCount(prevCount => prevCount + 1);
 
             // Don't show error toast for retries
             setIsInitializing(false);
+
+            // CRITICAL FIX: Use a more reasonable delay with exponential backoff
             setTimeout(() => {
-              initializeConnection(); // Retry the connection
-            }, 1000); // Wait a second before retrying to avoid UI flicker
+              // CRITICAL FIX: Check if we should still retry
+              const shouldStillRetry = sessionStorage.getItem('whatsapp_initializing');
+              if (shouldStillRetry) {
+                initializeConnection(); // Retry the connection
+              } else {
+                logger.info('[WhatsAppBridgeSetup] Initialization cancelled, skipping retry');
+              }
+            }, retryDelay);
             return;
           }
 
@@ -273,7 +284,7 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
         if (data.bridgeRoomId) {
           dispatch(setBridgeRoomId(data.bridgeRoomId));
         }
-        
+
           // Call onComplete callback if provided
           if (onComplete && typeof onComplete === 'function') {
             if (shouldAllowCompleteTransition()) {
@@ -320,8 +331,19 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
 
   // Initiate connection when component mounts
   useEffect(() => {
+    // CRITICAL FIX: Add a flag to prevent multiple initializations
+    const initializationFlag = sessionStorage.getItem('whatsapp_initializing');
+    if (initializationFlag) {
+      logger.info('[WhatsAppBridgeSetup] Initialization already in progress, skipping');
+      return;
+    }
+
+    // Set the flag to prevent multiple initializations
+    sessionStorage.setItem('whatsapp_initializing', 'true');
+
     // Always call handleConnect when component mounts
     logger.info('[WhatsAppBridgeSetup] Component mounted, initiating connection');
+
     // Wrap in try-catch to handle any errors
     try {
       initializeConnection();
@@ -329,8 +351,15 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
       logger.error('[WhatsAppBridgeSetup] Error initiating connection:', error);
       dispatch(setWhatsappError('Failed to connect to WhatsApp. Please try again.'));
       dispatch(setWhatsappSetupState('error'));
+      // Clear the initialization flag on error
+      sessionStorage.removeItem('whatsapp_initializing');
     }
-  }, [initializeConnection, dispatch]);
+
+    // Clear the flag when the component unmounts
+    return () => {
+      sessionStorage.removeItem('whatsapp_initializing');
+    };
+  }, [dispatch]); // CRITICAL FIX: Remove initializeConnection from dependencies
 
   // Refined unmount cleanup: only reset if a QR code has not been received
   useEffect(() => {

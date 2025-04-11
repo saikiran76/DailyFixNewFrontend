@@ -27,6 +27,33 @@ const AppContent = () => {
       if (!mounted) return;
 
       try {
+        // Check if we already have a valid session in localStorage
+        const authDataStr = localStorage.getItem('dailyfix_auth');
+        if (authDataStr) {
+          try {
+            const authData = JSON.parse(authDataStr);
+            const expiryStr = authData.session?.expires_at || localStorage.getItem('session_expiry');
+            const now = new Date();
+            const expiryTime = expiryStr ? new Date(expiryStr) : null;
+            const isSessionValid = expiryTime && expiryTime > now;
+
+            logger.info('[AppContent] Checking stored session:', {
+              hasExpiry: !!expiryTime,
+              expiryTime: expiryTime?.toISOString(),
+              now: now.toISOString(),
+              isValid: isSessionValid
+            });
+
+            // If session is still valid, we can skip initialization
+            if (isSessionValid && session) {
+              logger.info('[AppContent] Using stored session - still valid');
+              return;
+            }
+          } catch (parseError) {
+            logger.error('[AppContent] Error parsing stored auth data:', parseError);
+          }
+        }
+
         logger.info('[AppContent] Starting auth initialization');
         await dispatch(initializeAuth()).unwrap();
         if (mounted) {
@@ -46,7 +73,7 @@ const AppContent = () => {
     return () => {
       mounted = false;
     };
-  }, [dispatch, hasInitialized, initializing]);
+  }, [dispatch, hasInitialized, initializing, session]);
 
   // Show loading state while initializing
   if (initializing) {

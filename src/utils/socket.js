@@ -123,30 +123,134 @@ export const initializeSocket = async (options = {}) => {
           await cleanupSocket();
         }
 
-        // Get valid token using token service with retry
+        // Get valid token using token service with improved error handling
         let tokens = null;
         let retryCount = 0;
         const maxRetries = CONNECTION_CONFIG.RECONNECTION_ATTEMPTS;
+        let lastError = null;
 
         while (retryCount < maxRetries) {
           try {
-            const tokenData = await tokenService.getValidToken();
-            tokens = {
-              accessToken: tokenData.access_token,
-              userId: tokenData.userId
-            };
+            // Check if we have auth data in localStorage before trying tokenService
+            let token = null;
+            let userId = null;
+            
+            // First check 'dailyfix_auth'
+            const authDataStr = localStorage.getItem('dailyfix_auth');
+            if (authDataStr) {
+              try {
+                const authData = JSON.parse(authDataStr);
+                if (authData?.session?.access_token) {
+                  token = authData.session.access_token;
+                  userId = authData.session.user?.id || authData.user?.id;
+                  logger.info(`[Socket] Found token in dailyfix_auth (attempt ${retryCount + 1}/${maxRetries})`);
+                }
+              } catch (parseError) {
+                logger.warn(`[Socket] Error parsing dailyfix_auth (attempt ${retryCount + 1}/${maxRetries}):`, parseError.message);
+              }
+            }
+            
+            // Then check 'access_token'
+            if (!token) {
+              token = localStorage.getItem('access_token');
+              if (token) {
+                logger.info(`[Socket] Found token in access_token (attempt ${retryCount + 1}/${maxRetries})`);
+                // Try to get user ID from other sources
+                try {
+                  const persistAuthStr = localStorage.getItem('persist:auth');
+                  if (persistAuthStr) {
+                    const persistAuth = JSON.parse(persistAuthStr);
+                    const userStr = persistAuth.user;
+                    if (userStr && userStr !== 'null') {
+                      const user = JSON.parse(userStr);
+                      userId = user?.id;
+                    }
+                  }
+                } catch (parseError) {
+                  logger.warn('[Socket] Error parsing persist:auth:', parseError.message);
+                }
+              }
+            }
+            
+            // Then check 'persist:auth'
+            if (!token) {
+              try {
+                const persistAuthStr = localStorage.getItem('persist:auth');
+                if (persistAuthStr) {
+                  const persistAuth = JSON.parse(persistAuthStr);
+                  const sessionStr = persistAuth.session;
+                  if (sessionStr && sessionStr !== 'null') {
+                    const session = JSON.parse(sessionStr);
+                    token = session?.access_token;
+                    
+                    const userStr = persistAuth.user;
+                    if (userStr && userStr !== 'null') {
+                      const user = JSON.parse(userStr);
+                      userId = user?.id;
+                    }
+                    
+                    logger.info(`[Socket] Found token in persist:auth (attempt ${retryCount + 1}/${maxRetries})`);
+                  }
+                }
+              } catch (parseError) {
+                logger.warn(`[Socket] Error parsing persist:auth (attempt ${retryCount + 1}/${maxRetries}):`, parseError.message);
+              }
+            }
+            
+            // If we found a token directly, use it
+            if (token && userId) {
+              tokens = {
+                accessToken: token,
+                userId: userId
+              };
+              logger.info('[Socket] Using token from localStorage');
+              break;
+            }
+            
+            // If all direct methods failed, try tokenService as a last resort
+            if (!token) {
+              logger.warn(`[Socket] No token found in localStorage, trying tokenService (attempt ${retryCount + 1}/${maxRetries})`);
+              const tokenData = await tokenService.getValidToken();
+              tokens = {
+                accessToken: tokenData.access_token,
+                userId: tokenData.userId
+              };
+            }
+            
+            logger.info('[Socket] Successfully obtained valid token');
             break;
           } catch (error) {
+            lastError = error;
             retryCount++;
+            
+            logger.warn(`[Socket] Failed to get token (attempt ${retryCount}/${maxRetries}):`, error.message);
+            
             if (retryCount === maxRetries) {
+              logger.error('[Socket] Maximum token retrieval attempts reached');
               throw error;
             }
-            await new Promise(r => setTimeout(r, CONNECTION_CONFIG.RECONNECTION_DELAY));
+            
+            // Exponential backoff for retries
+            const delay = Math.min(
+              CONNECTION_CONFIG.RECONNECTION_DELAY * Math.pow(1.5, retryCount - 1),
+              CONNECTION_CONFIG.RECONNECTION_DELAY_MAX
+            );
+            
+            logger.info(`[Socket] Waiting ${delay}ms before retry ${retryCount}`);
+            await new Promise(r => setTimeout(r, delay));
           }
         }
 
         if (!tokens?.accessToken) {
-          throw new Error('No valid access token available');
+          const errorMsg = 'No valid access token available after retries';
+          logger.error('[Socket] Fatal initialization error:', errorMsg);
+          socketState.error = lastError || new Error(errorMsg);
+          socketState.state = SOCKET_STATES.ERROR;
+          
+          // Add socket recovery guidance
+          logger.info('[Socket] Recommended recovery: reload page or sign out and back in');
+          
+          throw new Error(errorMsg);
         }
 
         // Get socket URL and path based on platform
@@ -192,6 +296,45 @@ export const initializeSocket = async (options = {}) => {
         socketInstance = io(url, socketConfig);
 
         logger.info(`[Socket] Socket instance created for ${platform}`);
+
+        // Instrument socket to track acknowledgment callbacks
+        const originalOnevent = socketInstance.onevent;
+        socketInstance.onevent = function(packet) {
+          const args = packet.data || [];
+          if (args.length > 0) {
+            const [event] = args;
+            const lastArg = args[args.length - 1];
+            
+            // If this is a whatsapp message and has an ack function
+            if (typeof lastArg === 'function' && event && event.startsWith('whatsapp:')) {
+              logger.debug(`[Socket] Received ${event} with acknowledgment`);
+              
+              // Wrap the acknowledgment function to improve logging
+              const originalCallback = args[args.length - 1];
+              args[args.length - 1] = function(...ackArgs) {
+                logger.debug(`[Socket] Sending acknowledgment for ${event}:`, {
+                  response: ackArgs[0],
+                  timestamp: Date.now()
+                });
+                return originalCallback.apply(this, ackArgs);
+              };
+              packet.data = args;
+            }
+          }
+          return originalOnevent.call(this, packet);
+        };
+
+        // Add handler for authentication response
+        socketInstance.on('authenticated', (response) => {
+          logger.info('[Socket] Authentication response:', response);
+          socketState.authenticated = true;
+          socketState.lastActivity = Date.now();
+          
+          // Initialize pending room subscriptions array if it doesn't exist
+          if (!socketState.pendingRoomSubscriptions) {
+            socketState.pendingRoomSubscriptions = [];
+          }
+        });
 
         // Add a connection timeout
         const connectionTimeout = setTimeout(() => {

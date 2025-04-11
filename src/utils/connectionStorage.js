@@ -33,13 +33,13 @@ export const saveConnectionStatus = (status, userId) => {
 export const getConnectionStatus = (userId) => {
   try {
     const storageData = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    
+
     // Check if data exists and belongs to the current user
     if (storageData && storageData.userId === userId) {
       logger.info('[ConnectionStorage] Retrieved connection status from localStorage:', storageData.status);
       return storageData.status;
     }
-    
+
     return null;
   } catch (error) {
     logger.error('[ConnectionStorage] Failed to retrieve connection status:', error);
@@ -60,13 +60,33 @@ export const clearConnectionStatus = () => {
 };
 
 /**
- * Check if WhatsApp is connected based on localStorage data
+ * Check if WhatsApp is connected based on localStorage data and Redux state
  * @param {string} userId - User ID
  * @returns {boolean} True if WhatsApp is connected
  */
 export const isWhatsAppConnected = (userId) => {
+  // First check localStorage
   const status = getConnectionStatus(userId);
-  return status && status.whatsapp === true;
+  if (status && status.whatsapp === true) {
+    logger.info('[ConnectionStorage] WhatsApp connected according to localStorage');
+    return true;
+  }
+
+  // Also check if we have a session with WhatsApp in localStorage
+  try {
+    const authDataStr = localStorage.getItem('dailyfix_auth');
+    if (authDataStr) {
+      const authData = JSON.parse(authDataStr);
+      if (authData && authData.whatsappConnected === true) {
+        logger.info('[ConnectionStorage] WhatsApp connected according to auth data');
+        return true;
+      }
+    }
+  } catch (error) {
+    logger.error('[ConnectionStorage] Error checking auth data for WhatsApp connection:', error);
+  }
+
+  return false;
 };
 
 /**

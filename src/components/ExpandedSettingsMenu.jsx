@@ -283,6 +283,8 @@ const ExpandedSettingsMenu = ({ isOpen, onClose, activeOption = 'Account' }) => 
                 <FiDatabase className="w-5 h-5" />
                 <span>Data Controls</span>
               </button>
+
+
             </nav>
           </div>
         </div>
@@ -303,9 +305,9 @@ const ExpandedSettingsMenu = ({ isOpen, onClose, activeOption = 'Account' }) => 
               <h3 className={`font-semibold truncate ${isDarkTheme ? 'text-white' : 'text-gray-900'}`}>{userName}</h3>
               <p className={`text-sm truncate ${isDarkTheme ? 'text-gray-400' : 'text-gray-500'}`}>{userEmail}</p>
             </div>
-            <button className={`ml-2 px-4 py-2 rounded-lg transition-colors theme-transition ${isDarkTheme ? 'bg-neutral-800 hover:bg-neutral-700 text-white' : 'bg-gray-100 hover:bg-gray-200 text-gray-800'}`}>
+            {/* <button className={`ml-2 px-4 py-2 rounded-lg transition-colors theme-transition ${isDarkTheme ? 'bg-neutral-800 hover:bg-neutral-700 text-white' : 'bg-gray-100 hover:bg-gray-200 text-gray-800'}`}>
               Manage
-            </button>
+            </button> */}
           </div>
 
           {/* Content based on selected option */}

@@ -10,6 +10,20 @@ import socketReducer from './slices/socketSlice';
 import logger from '../utils/logger';
 import { tokenManager } from '../utils/tokenManager';
 
+// Configure persist for auth state
+const authPersistConfig = {
+  key: 'auth',
+  storage,
+  whitelist: ['session', 'user', 'hasInitialized', 'matrixCredentials'] // Persist these fields
+};
+
+// Configure persist for onboarding state
+const onboardingPersistConfig = {
+  key: 'onboarding',
+  storage,
+  whitelist: ['isComplete', 'currentStep', 'accounts', 'matrixConnected', 'whatsappConnected'] // Persist these fields
+};
+
 // Configure persist for contacts
 const contactsPersistConfig = {
   key: 'contacts',
@@ -17,6 +31,8 @@ const contactsPersistConfig = {
   whitelist: ['items', 'priorityMap'] // Only persist these fields
 };
 
+const persistedAuthReducer = persistReducer(authPersistConfig, authReducer);
+const persistedOnboardingReducer = persistReducer(onboardingPersistConfig, onboardingReducer);
 const persistedContactReducer = persistReducer(contactsPersistConfig, contactReducer);
 
 // Create auth state middleware
@@ -24,7 +40,7 @@ const authMiddleware = (store) => (next) => (action) => {
   // Handle session updates before the action is processed
   if (action.type === 'auth/updateSession') {
     const session = action.payload?.session;
-    
+
     // Validate session structure before storage
     if (session) {
       if (!session.access_token || !session.refresh_token) {
@@ -41,7 +57,7 @@ const authMiddleware = (store) => (next) => (action) => {
             expires_at: session.expires_at,
             user: session.user
           };
-          
+
           localStorage.setItem('dailyfix_auth', JSON.stringify(authData));
           logger.info('[Store] Updated token storage:', { userId: session.user?.id });
         } catch (error) {
@@ -88,8 +104,8 @@ const loggingMiddleware = (store) => (next) => (action) => {
 
 const store = configureStore({
   reducer: {
-    auth: authReducer,
-    onboarding: onboardingReducer,
+    auth: persistedAuthReducer,
+    onboarding: persistedOnboardingReducer,
     progress: progressReducer,
     contacts: persistedContactReducer,
     messages: messageReducer,
@@ -99,7 +115,7 @@ const store = configureStore({
     getDefaultMiddleware({
       serializableCheck: {
         ignoredActions: [
-          'socket/error', 
+          'socket/error',
           'auth/setSession',
           'persist/PERSIST',
           'persist/REHYDRATE'

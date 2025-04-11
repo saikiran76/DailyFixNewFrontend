@@ -13,12 +13,42 @@ class TokenService {
     try {
       // Check if we're already refreshing
       if (this.tokenRefreshPromise) {
+        logger.info('[TokenService] Token refresh in progress, waiting for completion');
         return this.tokenRefreshPromise;
       }
 
-      const { data: { session } } = await supabase.auth.getSession();
+      // First check localStorage directly for a token
+      try {
+        const authDataStr = localStorage.getItem('dailyfix_auth');
+        if (authDataStr) {
+          const authData = JSON.parse(authDataStr);
+          if (authData?.session?.access_token) {
+            // Check if the token is still valid
+            const isValid = this.validateToken(authData.session.access_token);
+            if (isValid) {
+              // Use the token from localStorage if valid
+              logger.info('[TokenService] Using valid token from localStorage');
+              return {
+                access_token: authData.session.access_token,
+                userId: authData.session.user?.id || authData.user?.id
+              };
+            } else {
+              logger.warn('[TokenService] Token in localStorage is invalid or expired');
+            }
+          }
+        }
+      } catch (localStorageError) {
+        logger.error('[TokenService] Error reading from localStorage:', localStorageError);
+      }
 
-      logger.info('session fetching at getValidToken', { data: session })
+      // If localStorage check fails, try to get from Supabase
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      logger.info('[TokenService] Session fetch result:', { 
+        hasSession: !!session,
+        hasAccessToken: !!session?.access_token,
+        userId: session?.user?.id
+      });
       
       if (!session) {
         throw new Error('No session found');
@@ -26,7 +56,22 @@ class TokenService {
 
       // Check if token needs refresh
       if (this.shouldRefreshToken(session)) {
+        logger.info('[TokenService] Token needs refresh, refreshing...');
         return this.refreshToken();
+      }
+
+      // Update localStorage with the fresh session
+      try {
+        const authDataStr = localStorage.getItem('dailyfix_auth');
+        if (authDataStr) {
+          const authData = JSON.parse(authDataStr);
+          authData.session = session;
+          localStorage.setItem('dailyfix_auth', JSON.stringify(authData));
+          localStorage.setItem('access_token', session.access_token);
+          logger.info('[TokenService] Updated localStorage with fresh session');
+        }
+      } catch (updateError) {
+        logger.error('[TokenService] Error updating localStorage:', updateError);
       }
 
       return {
@@ -34,8 +79,13 @@ class TokenService {
         userId: session.user.id
       };
     } catch (error) {
-      logger.error('Failed to get valid token:', error);
-      throw error;
+      logger.error('[TokenService] Failed to get valid token:', error);
+      
+      // Throw a more detailed error
+      const enhancedError = new Error(`No session found: ${error.message}`);
+      enhancedError.originalError = error;
+      enhancedError.code = 'AUTH_SESSION_MISSING';
+      throw enhancedError;
     }
   }
 

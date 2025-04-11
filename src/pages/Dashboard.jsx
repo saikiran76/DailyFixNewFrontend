@@ -6,12 +6,14 @@ import AnalyticsDashboard from '../components/AnalyticsDashboard';
 import AISuggestionFeedback from '../components/AISuggestionFeedback';
 import TourPopup from '../components/TourPopup';
 import PlatformConnectionModal from '../components/PlatformConnectionModal';
+import LogoutModal from '../components/LogoutModal';
 import api from '../utils/api';
 import { useDispatch, useSelector } from 'react-redux';
 import { fetchContacts, selectContactById } from '../store/slices/contactSlice';
 import { connect as connectSocket } from '../store/slices/socketSlice';
 import { updateAccounts, setWhatsappConnected } from '../store/slices/onboardingSlice';
 import { isWhatsAppConnected } from '../utils/connectionStorage';
+import { isWhatsAppConnectedDB } from '../utils/connectionStorageDB';
 import logger from '../utils/logger';
 import { FiMenu, FiX } from 'react-icons/fi';
 import { IoArrowBack } from "react-icons/io5";
@@ -118,8 +120,30 @@ const Dashboard = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   // Initialize showTourPopup based on WhatsApp connection status
   const [showTourPopup, setShowTourPopup] = useState(false);
+  // Track if component is mounted to ensure proper rendering
+  const [isMounted, setIsMounted] = useState(false);
+
+  // Set mounted state on component mount
+  useEffect(() => {
+    setIsMounted(true);
+
+    // CRITICAL FIX: Initialize accounts if WhatsApp is connected
+    if (whatsappConnected && accounts.length === 0) {
+      setAccounts([{
+        id: 'whatsapp',
+        platform: 'whatsapp',
+        name: 'WhatsApp',
+        status: 'active'
+      }]);
+      setSelectedPlatform('whatsapp');
+    }
+
+    return () => setIsMounted(false);
+  }, [whatsappConnected, accounts]);
   const [showConnectionModal, setShowConnectionModal] = useState(false);
   const [isContactListVisible, setIsContactListVisible] = useState(true);
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const [showFixButton, setShowFixButton] = useState(false);
 
   // State for toggling between WhatsApp view and Analytics Dashboard
   const [isAnalyticsView, setIsAnalyticsView] = useState(false);
@@ -148,13 +172,74 @@ const Dashboard = () => {
   // Initialize accounts from Redux store
   useEffect(() => {
     const initializeFromStore = async () => {
-      // CRITICAL FIX: Check localStorage for WhatsApp connection status
-      const userId = session?.user?.id;
-      const whatsappConnectedInCache = userId && isWhatsAppConnected(userId);
+      // CRITICAL FIX: Add loop detection
+      const now = Date.now();
+      const lastInitTime = parseInt(sessionStorage.getItem('dashboard_last_init') || '0');
+      const timeSinceLastInit = now - lastInitTime;
+
+      // If we're initializing too frequently (less than 2 seconds apart), we might be in a loop
+      if (lastInitTime > 0 && timeSinceLastInit < 2000) {
+        const loopCount = parseInt(sessionStorage.getItem('dashboard_init_loop_count') || '0') + 1;
+        sessionStorage.setItem('dashboard_init_loop_count', loopCount.toString());
+
+        // If we detect more than 3 rapid initializations, we're probably in a loop
+        if (loopCount > 3) {
+          logger.error('[Dashboard] Infinite loop detected, breaking out');
+          sessionStorage.removeItem('dashboard_init_loop_count');
+          // REMOVED: setLoading(false) - causing errors
+          return; // Break out of the initialization
+        }
+      } else {
+        // Reset loop counter if enough time has passed
+        sessionStorage.setItem('dashboard_init_loop_count', '0');
+      }
+
+      // Update last init time
+      sessionStorage.setItem('dashboard_last_init', now.toString());
+
+      // Check if we have a valid session
+      if (!session || !session.user || !session.user.id) {
+        logger.warn('[Dashboard] No valid session found, cannot initialize');
+        return;
+      }
+
+      // Check IndexedDB and localStorage for WhatsApp connection status
+      const userId = session.user.id;
+      const whatsappConnectedInCache = userId && await isWhatsAppConnectedDB(userId);
 
       if (whatsappConnectedInCache) {
-        logger.info('[Dashboard] Found WhatsApp connection in localStorage');
+        logger.info('[Dashboard] Found WhatsApp connection in persistent storage');
         dispatch(setWhatsappConnected(true));
+
+        // Save WhatsApp connection status in auth data for persistence
+        try {
+          const authDataStr = localStorage.getItem('dailyfix_auth');
+          if (authDataStr) {
+            const authData = JSON.parse(authDataStr);
+            authData.whatsappConnected = true;
+            localStorage.setItem('dailyfix_auth', JSON.stringify(authData));
+            logger.info('[Dashboard] Updated auth data with WhatsApp connection status');
+          }
+        } catch (error) {
+          logger.error('[Dashboard] Error updating auth data with WhatsApp connection:', error);
+        }
+      }
+
+      // CRITICAL FIX: Always ensure we have a WhatsApp account if connected
+      if (whatsappConnectedInCache && (!accounts.length || !accounts.some(acc => acc.platform === 'whatsapp'))) {
+        logger.info('[Dashboard] Setting up WhatsApp account after connection detected');
+        const whatsappAccount = {
+          id: 'whatsapp',
+          platform: 'whatsapp',
+          name: 'WhatsApp',
+          status: 'active'
+        };
+
+        setAccounts([whatsappAccount]);
+        setSelectedPlatform('whatsapp');
+
+        // Also update Redux store
+        dispatch(updateAccounts([whatsappAccount]));
       }
 
       // CRITICAL FIX: If whatsappConnected is true but no WhatsApp account in storeAccounts, add it
@@ -255,6 +340,10 @@ const Dashboard = () => {
             }
           }
         } else {
+          // CRITICAL FIX: Add a button to fix WhatsApp connection status
+          logger.info('[Dashboard] WhatsApp not connected, showing fix button');
+          setShowFixButton(true);
+
           // Fallback to API check if Redux state says not connected
           try {
             logger.info('[Dashboard] Checking connected platforms via API');
@@ -269,6 +358,7 @@ const Dashboard = () => {
                 status: 'active'
               }]);
               setSelectedPlatform('whatsapp');
+              setShowFixButton(false);
 
               // Initialize socket connection
               if (!socketConnected) {
@@ -326,6 +416,35 @@ const Dashboard = () => {
   //   initializeAccounts();
   // }, []);
 
+  // Ensure socket connection is established after page refresh
+  useEffect(() => {
+    // If we have a WhatsApp account but no socket connection, initialize it
+    const hasWhatsappAccount = accounts.some(acc => acc.platform === 'whatsapp');
+
+    // CRITICAL FIX: If whatsappConnected is true but accounts array is empty, add WhatsApp account
+    if (whatsappConnected && accounts.length === 0) {
+      logger.info('[Dashboard] WhatsApp is connected but accounts array is empty, adding WhatsApp account');
+      setAccounts([{
+        id: 'whatsapp',
+        platform: 'whatsapp',
+        name: 'WhatsApp',
+        status: 'active'
+      }]);
+      setSelectedPlatform('whatsapp');
+    }
+
+    // CRITICAL FIX: Always initialize socket connection if WhatsApp is connected
+    if ((hasWhatsappAccount || whatsappConnected) && !socketConnected) {
+      logger.info('[Dashboard] Initializing socket connection after page refresh');
+      try {
+        dispatch(connectSocket('whatsapp'));
+        logger.info('[Dashboard] Socket connection initialized after page refresh');
+      } catch (error) {
+        logger.error('[Dashboard] Error initializing socket connection after page refresh:', error);
+      }
+    }
+  }, [accounts, socketConnected, selectedPlatform, dispatch, whatsappConnected]);
+
   const handlePlatformSelect = (platform) => {
     setSelectedPlatform(platform);
     // Reset selected contact when platform changes
@@ -365,6 +484,19 @@ const Dashboard = () => {
     dispatch(fetchContacts());
   };
 
+
+
+  // Only render when component is mounted and initialized
+  if (!isMounted) {
+    return (
+      <div className="flex h-screen bg-neutral-900 items-center justify-center">
+        <div className="text-center">
+          <h2 className="text-xl font-semibold text-white mb-4">Loading Dashboard...</h2>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       {/* Tour popup - Only show when no WhatsApp is connected */}
@@ -395,6 +527,9 @@ const Dashboard = () => {
         onClose={() => setShowFeedbackPopup(false)}
       />
 
+      {/* Logout Modal */}
+      <LogoutModal isOpen={showLogoutModal} onClose={() => setShowLogoutModal(false)} />
+
       <div className="flex h-screen bg-dark">
         {/* Mobile Menu Button */}
         <button
@@ -421,20 +556,37 @@ const Dashboard = () => {
         </div>
 
         {/* Main Content Area - Conditionally render based on connected platforms and view mode */}
-        {accounts.length === 0 || !accounts.some(account =>
-          account.platform === 'whatsapp' && (account.status === 'active' || account.status === 'pending')
-        ) ? (
+        {/* CRITICAL FIX: Simplified condition to ensure something always renders */}
+        {!whatsappConnected && !accounts.some(account => account.platform === 'whatsapp') ? (
           // No platforms connected or no WhatsApp account - Show connect platform message
           <div className="flex-1 flex items-center justify-center bg-neutral-900">
             <div className="text-center p-8 max-w-md">
-              <h2 className="text-2xl font-bold text-white mb-4">Connect a Messaging Platform</h2>
-              <p className="text-gray-400 mb-6">You need to connect a messaging platform to start using DailyFix.</p>
-              <button
-                onClick={() => setShowConnectionModal(true)}
-                className="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
-              >
-                Connect WhatsApp
-              </button>
+              {showFixButton ? (
+                <>
+                  <h2 className="text-2xl font-bold text-white mb-4">WhatsApp Connection Issue</h2>
+                  <p className="text-gray-400 mb-6 text-center">
+                    We detected that your WhatsApp connection status is not properly reflected.
+                    Click the button below to fix this issue.
+                  </p>
+                  <button
+                    onClick={() => setShowConnectionModal(true)}
+                    className="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+                  >
+                    Connect WhatsApp
+                  </button>
+                </>
+              ) : (
+                <>
+                  <h2 className="text-2xl font-bold text-white mb-4">Connect a Messaging Platform</h2>
+                  <p className="text-gray-400 mb-6">You need to connect a messaging platform to start using DailyFix.</p>
+                  <button
+                    onClick={() => setShowConnectionModal(true)}
+                    className="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+                  >
+                    Connect WhatsApp
+                  </button>
+                </>
+              )}
             </div>
           </div>
         ) : isAnalyticsView ? (

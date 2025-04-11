@@ -3,9 +3,11 @@ import { FiMessageSquare, FiCompass, FiSettings, FiLogOut, FiX, FiBarChart2, FiU
 import { BsFillInboxesFill } from 'react-icons/bs';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useDispatch } from 'react-redux';
+import { useTheme } from '../context/ThemeContext';
 import { initiateWhatsAppRelogin } from '../store/slices/onboardingSlice';
 import { toast } from 'react-hot-toast';
 import ReloginConfirmationModal from './ReloginConfirmationModal';
+import LogoutModal from './LogoutModal';
 import summaryImage from '../images/summary.png'
 import dropImage from '../images/Drop.png'
 import priorityImage from '../images/priority.png'
@@ -103,9 +105,11 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
   const navigate = useNavigate();
   const location = useLocation();
   const dispatch = useDispatch();
+  const { isDarkTheme } = useTheme();
   const [showTutorial, setShowTutorial] = useState(false);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [showPlatformMenu, setShowPlatformMenu] = useState(false);
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
 
   // Default platforms - can be filtered based on accounts
   const availablePlatforms = [
@@ -170,7 +174,7 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
             <button
               data-platform-button
               onClick={togglePlatformMenu}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-neutral-800 text-white hover:bg-neutral-700 transition-colors"
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg transition-colors theme-transition ${isDarkTheme ? 'bg-neutral-800 text-white hover:bg-neutral-700' : 'bg-gray-100 text-gray-900 hover:bg-gray-200'}`}
             >
               <div className="flex items-center">
                 <img
@@ -187,12 +191,14 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
 
             {/* Platform Menu */}
             {showPlatformMenu && (
-              <div className="absolute top-full left-0 w-full mt-1 bg-neutral-800 rounded-lg shadow-lg overflow-hidden z-50 platform-menu">
+              <div className={`absolute top-full left-0 w-full mt-1 rounded-lg shadow-lg overflow-hidden z-50 platform-menu theme-transition ${isDarkTheme ? 'bg-neutral-800' : 'bg-white border border-gray-200'}`}>
                 {availablePlatforms.map(platform => (
                   <button
                     key={platform.id}
                     onClick={() => handlePlatformClick(platform.id)}
-                    className={`w-full flex items-center px-3 py-2 text-sm ${selectedPlatform === platform.id ? 'bg-neutral-700 text-white' : 'text-gray-300 hover:bg-neutral-700 hover:text-white'}`}
+                    className={`w-full flex items-center px-3 py-2 text-sm theme-transition ${selectedPlatform === platform.id ?
+                      (isDarkTheme ? 'bg-neutral-700 text-white' : 'bg-gray-100 text-gray-900') :
+                      (isDarkTheme ? 'text-gray-300 hover:bg-neutral-700 hover:text-white' : 'text-gray-700 hover:bg-gray-100')}`}
                   >
                     <img src={platform.icon} alt={platform.name} className="w-5 h-5 mr-2" />
                     <span>{platform.name}</span>
@@ -217,10 +223,12 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
         ) && (
           <button
             onClick={() => onViewToggle(!isAnalyticsView)}
-            className={`w-full flex items-center space-x-3 px-3 py-2 rounded-lg transition-colors ${
+            className={`w-full flex items-center space-x-3 px-3 py-2 rounded-lg transition-colors theme-transition ${
               isAnalyticsView
                 ? 'bg-purple-600 text-white'
-                : 'text-gray-400 bg-neutral-800 hover:bg-neutral-700 hover:text-white'
+                : isDarkTheme
+                  ? 'text-gray-400 bg-neutral-800 hover:bg-neutral-700 hover:text-white'
+                  : 'text-gray-600 bg-gray-100 hover:bg-gray-200 hover:text-gray-900'
             }`}
           >
             {isAnalyticsView ? (
@@ -289,9 +297,7 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
 
         {/* Logout Button */}
         <button
-          onClick={() => {
-            alert("Logout not implemented");
-          }}
+          onClick={() => setShowLogoutModal(true)}
           className="w-full flex items-center bg-neutral-800 space-x-3 px-3 py-2 rounded-lg text-gray-400 hover:bg-neutral-700 hover:text-white transition-colors"
         >
           <FiLogOut className="w-5 h-5" />
@@ -309,6 +315,9 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
       {showTutorial && (
         <TutorialModal isOpen={showTutorial} onClose={() => setShowTutorial(false)} />
       )}
+
+      {/* Logout Modal */}
+      <LogoutModal isOpen={showLogoutModal} onClose={() => setShowLogoutModal(false)} />
     </div>
   );
 };

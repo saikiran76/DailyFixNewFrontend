@@ -8,6 +8,30 @@ class TokenManager {
 
   async getValidToken(userId = 'default', forceRefresh = false) {
     try {
+      // CRITICAL FIX: Check token expiration
+      const checkTokenExpiration = () => {
+        const expiryStr = localStorage.getItem('session_expiry');
+        if (!expiryStr) return true; // If no expiry, assume expired
+
+        try {
+          const expiryTime = new Date(expiryStr).getTime();
+          const currentTime = Date.now();
+          // Add a 5-minute buffer to ensure we refresh before expiration
+          const isExpired = expiryTime - currentTime < 5 * 60 * 1000;
+
+          if (isExpired) {
+            logger.info('[TokenManager] Token is expired or expiring soon');
+          }
+
+          return isExpired;
+        } catch (e) {
+          logger.error('[TokenManager] Error checking token expiration:', e);
+          return true; // Assume expired on error
+        }
+      };
+
+      const isTokenExpired = checkTokenExpiration();
+
       // Try to get token from localStorage first
       const dailyfixAuth = localStorage.getItem('dailyfix_auth');
       const accessToken = localStorage.getItem('access_token');
@@ -16,8 +40,15 @@ class TokenManager {
         hasDailyfixAuth: !!dailyfixAuth,
         hasAccessToken: !!accessToken,
         userId,
-        forceRefresh
+        forceRefresh,
+        isTokenExpired
       });
+
+      // If token is expired or force refresh is requested, refresh immediately
+      if (forceRefresh || isTokenExpired) {
+        logger.info('[TokenManager] Token expired or force refresh requested, refreshing token');
+        return this.refreshToken(userId);
+      }
 
       if (dailyfixAuth) {
         const authData = JSON.parse(dailyfixAuth);
@@ -43,27 +74,48 @@ class TokenManager {
 
   async refreshToken(userId = 'default') {
     try {
-      // Get refresh token from storage
-      const dailyfixAuth = localStorage.getItem('dailyfix_auth');
-      if (!dailyfixAuth) {
-        throw new Error('No refresh token available');
-      }
+      logger.info('[TokenManager] Attempting to refresh token');
 
-      const authData = JSON.parse(dailyfixAuth);
-      const refreshToken = authData.session?.refresh_token;
+      // CRITICAL FIX: Try multiple sources for refresh token
+      let refreshToken = null;
+
+      // First try to get refresh token from separate localStorage item
+      refreshToken = localStorage.getItem('refresh_token');
+
+      // If not found, try to get from dailyfix_auth
+      if (!refreshToken) {
+        const authData = localStorage.getItem('dailyfix_auth');
+        if (authData) {
+          const parsedAuthData = JSON.parse(authData);
+          if (parsedAuthData.session && parsedAuthData.session.refresh_token) {
+            refreshToken = parsedAuthData.session.refresh_token;
+          }
+        }
+      }
 
       if (!refreshToken) {
-        throw new Error('No refresh token in auth data');
+        throw new Error('No refresh token found in any storage location');
       }
 
+      logger.info('[TokenManager] Found refresh token, attempting to refresh session');
+
       // Use Supabase to refresh the token
-      const { data: { session }, error } = await supabase.auth.refreshSession({
+      const { data, error } = await supabase.auth.refreshSession({
         refresh_token: refreshToken
       });
 
-      if (error || !session) {
+      if (error || !data || !data.session) {
         throw error || new Error('Failed to refresh token');
       }
+
+      const session = data.session;
+
+      // Log the refreshed session details
+      logger.info('[TokenManager] Session refreshed successfully:', {
+        hasAccessToken: !!session.access_token,
+        hasRefreshToken: !!session.refresh_token,
+        expiresAt: session.expires_at
+      });
 
       // Update stored tokens
       const newAuthData = {
@@ -80,10 +132,13 @@ class TokenManager {
         user: session.user
       };
 
+      // Store all token information
       localStorage.setItem('dailyfix_auth', JSON.stringify(newAuthData));
       localStorage.setItem('access_token', session.access_token);
+      localStorage.setItem('refresh_token', session.refresh_token);
+      localStorage.setItem('session_expiry', session.expires_at);
 
-      logger.info('[TokenManager] Token refreshed successfully');
+      logger.info('[TokenManager] Token refreshed and stored successfully');
       return session.access_token;
     } catch (error) {
       logger.info('[TokenManager] Token refresh failed:', error);
@@ -101,7 +156,34 @@ class TokenManager {
       logger.info('[TokenManager] Error clearing tokens:', error);
     }
   }
+
+  setToken(token, userId = 'default') {
+    try {
+      this.tokens.set(userId, token);
+      localStorage.setItem('access_token', token);
+
+      // Ensure the token is also set in the dailyfix_auth object
+      const dailyfixAuth = localStorage.getItem('dailyfix_auth');
+      if (dailyfixAuth) {
+        const authData = JSON.parse(dailyfixAuth);
+        if (authData.session) {
+          authData.session.access_token = token;
+        } else {
+          authData.session = {
+            access_token: token,
+            refresh_token: null,
+            expires_at: new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString()
+          };
+        }
+        localStorage.setItem('dailyfix_auth', JSON.stringify(authData));
+      }
+
+      logger.info('[TokenManager] Token set for user:', userId);
+    } catch (error) {
+      logger.error('[TokenManager] Error setting token:', error);
+    }
+  }
 }
 
 export const tokenManager = new TokenManager();
-export default tokenManager; 
+export default tokenManager;

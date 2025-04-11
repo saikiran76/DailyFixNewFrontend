@@ -1,14 +1,15 @@
 // frontend/src/pages/Signup.jsx
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { useDispatch } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import supabase from '../utils/supabase';
 import api from '../utils/api';
 import '../styles/Login.css';
 import logger from '../utils/logger';
-import { updateSession } from '../store/slices/authSlice';
+import { updateSession, signInWithGoogle } from '../store/slices/authSlice';
 import { toast } from 'react-toastify';
 import { FiEye, FiEyeOff } from 'react-icons/fi';
+import { FcGoogle } from 'react-icons/fc';
 import bgLeft from '../images/loginbg.png'
 import bgRight from '../images/loginbg2.png'
 
@@ -39,6 +40,7 @@ const Signup = () => {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const navigate = useNavigate();
   const dispatch = useDispatch();
+  const { googleAuthPending } = useSelector(state => state.auth);
 
   const validateForm = () => {
     if (!firstName.trim() || !lastName.trim()) {
@@ -60,6 +62,18 @@ const Signup = () => {
     return true;
   };
 
+  const handleGoogleSignIn = async () => {
+    try {
+      setError('');
+      await dispatch(signInWithGoogle()).unwrap();
+      // The page will be redirected by the Google OAuth flow
+    } catch (error) {
+      logger.error('[Signup] Google sign-in error:', error);
+      setError(error.message || 'Failed to sign in with Google');
+      toast.error(error.message || 'Failed to sign in with Google');
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
@@ -73,7 +87,7 @@ const Signup = () => {
 
     try {
       logger.info('[Signup] Attempting signup with email:', email);
-      
+
       // Sign up with Supabase
       const { data, signUpError } = await supabase.auth.signUp({
         email,
@@ -87,7 +101,7 @@ const Signup = () => {
         }
       });
 
-      logger.info('[Signup] Supabase response:', { 
+      logger.info('[Signup] Supabase response:', {
         hasData: !!data,
         hasUser: !!data?.user,
         hasSession: !!data?.session,
@@ -109,10 +123,10 @@ const Signup = () => {
 
       if (data?.user && data?.session) {
         logger.info('[Signup] Signup successful, storing session');
-        
+
         // Store complete session in Redux
         dispatch(updateSession({ session: data.session }));
-        
+
         // Store auth data in localStorage
         const authData = {
           access_token: data.session.access_token,
@@ -120,10 +134,10 @@ const Signup = () => {
           expires_at: data.session.expires_at
         };
         localStorage.setItem('dailyfix_auth', JSON.stringify(authData));
-        
+
         // Update API headers
         api.defaults.headers.common['Authorization'] = `Bearer ${data.session.access_token}`;
-        
+
         logger.info('[Signup] Session stored, navigating to onboarding');
         navigate('/onboarding');
       } else {
@@ -173,9 +187,9 @@ const Signup = () => {
         {verificationRequired ? (
           <div className="bg-green-500/10 border border-green-500 text-green-500 p-4 rounded mb-4">
             <div className="flex items-center space-x-3">
-              <img 
-                src="https://cdn4.iconfinder.com/data/icons/social-media-logos-6/512/112-gmail_email_mail-512.png" 
-                alt="Gmail" 
+              <img
+                src="https://cdn4.iconfinder.com/data/icons/social-media-logos-6/512/112-gmail_email_mail-512.png"
+                alt="Gmail"
                 className="w-12 h-10 object-contain"
               />
               <div>
@@ -273,10 +287,38 @@ const Signup = () => {
           </div>
           <button
             type="submit"
-            disabled={isLoading}
+            disabled={isLoading || googleAuthPending}
             className="w-full p-3 bg-gradient-to-r from-purple-400 to-pink-600 text-white rounded transition-all duration-300 ease-in-out hover:bg-gradient-to-r hover:from-lime-500 delay-100 hover:to-lime-600 disabled:opacity-50"
           >
             {isLoading ? 'Signing up...' : 'Sign Up'}
+          </button>
+
+          <div className="relative my-4">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-gray-600"></div>
+            </div>
+            <div className="relative flex justify-center text-sm">
+              <span className="px-2 bg-neutral-900 text-gray-400">Or continue with</span>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleGoogleSignIn}
+            disabled={isLoading || googleAuthPending}
+            className={`w-full flex items-center justify-center p-3 border border-gray-700 rounded shadow-sm text-sm font-medium text-gray-300 bg-neutral-800 hover:bg-neutral-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 ${
+              (isLoading || googleAuthPending) ? 'opacity-50 cursor-not-allowed' : ''
+            }`}
+          >
+            {googleAuthPending ? (
+              <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            ) : (
+              <FcGoogle className="h-5 w-5 mr-2" />
+            )}
+            {googleAuthPending ? 'Connecting...' : 'Sign up with Google'}
           </button>
         </form>
         <p className="text-center text-gray-400 mt-4">
@@ -307,7 +349,7 @@ export const ForgotPassword = () => {
 
       setMessage('Check your email for the password reset link');
       toast.success('Password reset email sent! Please check your inbox.');
-      
+
       // Redirect to login after 3 seconds
       setTimeout(() => {
         navigate('/login');
@@ -327,7 +369,7 @@ export const ForgotPassword = () => {
         <h2 className="text-2xl font-bold text-white mb-6 text-center">Reset Password</h2>
         {message && (
           <div className={`p-4 rounded mb-4 ${
-            message.includes('Check your email') 
+            message.includes('Check your email')
               ? 'bg-green-500/10 border border-green-500 text-green-500'
               : 'bg-red-500/10 border border-red-500 text-red-500'
           }`}>

@@ -11,6 +11,7 @@ import { MessageBatchProcessor } from '../utils/MessageBatchProcessor';
 import { debounce } from 'lodash';
 import { ErrorBoundary } from 'react-error-boundary';
 import { useSocket } from '../hooks/useSocket';
+import { initializeSocket } from '../utils/socket';
 import LoadingSpinner from './LoadingSpinner';
 import MessageItem from './MessageItem';
 import { messageService } from '../services/messageService';
@@ -188,6 +189,30 @@ const handleSyncError = (error, contactId) => {
   });
 };
 
+// Socket error specific fallback
+const SocketErrorFallback = ({ onRetry }) => {
+  return (
+    <div className="flex flex-col items-center justify-center h-full p-4 text-center">
+      <div className="w-16 h-16 mb-4 text-red-500">
+        <FiWifiOff className="w-full h-full" />
+      </div>
+      <h3 className="text-xl font-semibold text-white mb-2">Socket Connection Failed</h3>
+      <p className="text-gray-400 mb-6 max-w-md">
+        Unable to connect to the chat server. This could be due to network issues or server maintenance.
+      </p>
+      <button
+        onClick={onRetry}
+        className="px-4 py-2 bg-gradient-to-r from-purple-500 to-blue-500 text-white rounded-md hover:opacity-90 transition-opacity"
+      >
+        Retry Connection
+      </button>
+      <p className="text-xs text-gray-500 mt-4">
+        If this problem persists, try refreshing the page or contact support.
+      </p>
+    </div>
+  );
+};
+
 const ErrorFallback = ({ error }) => {
   return (
     <div className="flex flex-col items-center justify-center h-full p-4">
@@ -289,6 +314,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     retries: 0,
     lastError: null,
   });
+  const [socketInitError, setSocketInitError] = useState(false);
   const [previewMedia, setPreviewMedia] = useState(null);
   const [priority, setPriority] = useState(null);
   const [showSummary, setShowSummary] = useState(false);
@@ -334,13 +360,31 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     }
   }, []);
 
+  // Helper method to check socket availability and log issues
+  const checkSocketAvailability = useCallback(() => {
+    if (!socket) {
+      logger.warn('[ChatView] Socket not available');
+      return false;
+    }
+    
+    if (!socket.connected) {
+      logger.warn('[ChatView] Socket not connected', {
+        socketId: socket.id,
+        readyState: socket.readyState
+      });
+      return false;
+    }
+    
+    return true;
+  }, [socket]);
+
   const handleMessageSend = useCallback(
     async (content) => {
       if (!selectedContact?.id) return;
 
       const message = { content };
 
-      if (!socketReady) {
+      if (!checkSocketAvailability() || !socketReady) {
         dispatch(addToMessageQueue(message));
         toast.success('Message queued for delivery');
         return;
@@ -355,7 +399,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
         toast.error('Failed to send message, queued for retry');
       }
     },
-    [dispatch, selectedContact?.id, socketReady, scrollToBottom]
+    [dispatch, selectedContact?.id, socketReady, scrollToBottom, checkSocketAvailability]
   );
 
   const handleMarkAsRead = useCallback(
@@ -626,27 +670,37 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
 
     const processedMessageIds = new Set();
 
-    const handleNewMessage = (payload) => {
-      logger.info('[ChatView] Received socket message:', {
-        payload,
-        selectedContactId: selectedContact.id,
-        matches: payload.contactId === selectedContact.id,
-        socketId: socket.id,
-        rooms: socket.rooms,
+    const handleNewMessage = (payload, ack) => {
+      // Log message receipt
+      logger.info('[ChatView] New message received via socket:', {
+        hasAck: !!ack,
+        contactId: payload?.contactId,
+        messageId: payload?.message?.message_id || 'unknown',
+        timestamp: payload?.message?.timestamp
       });
 
-      if (payload.contactId === selectedContact.id) {
+      // Always acknowledge receipt, even if we don't process the message
+      // This is critical for the server's guaranteed delivery system
+      if (typeof ack === 'function') {
+        try {
+          ack({ 
+            success: true, 
+            received: true, 
+            timestamp: Date.now() 
+          });
+          logger.debug('[ChatView] Message acknowledged successfully');
+        } catch (ackError) {
+          logger.error('[ChatView] Error acknowledging message:', ackError);
+        }
+      }
+
+      // Process the message if it's for the selected contact
+      if (payload && payload.contactId === selectedContact?.id && payload.message) {
         const messageId = payload.message.message_id || payload.message.id;
-        const normalized = messageService.normalizeMessage(payload.message);
-
-        const isDuplicate = messages.some(
-          (m) =>
-            m.id === normalized.id ||
-            m.message_id === normalized.message_id ||
-            m.content_hash === normalized.content_hash
-        );
-
-        if (!isDuplicate && !processedMessageIds.has(normalized.id)) {
+        
+        if (messageId && !processedMessageIds.has(messageId)) {
+          // Normalize the message format
+          const normalized = messageService.normalizeMessage(payload.message);
           processedMessageIds.add(normalized.id);
 
           logger.info('[ChatView] Processing new message:', {
@@ -708,9 +762,53 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     if (!socket) {
       setConnectionStatus(CONNECTION_STATUS.DISCONNECTED);
       setSocketReady(false);
+      
+      // Direct initialization when socket from useSocketConnection is not available
+      // We need to import initializeSocket directly from socket.js
+      // This ensures we can create a socket even when the hook hasn't provided one yet
+      const initSocket = async () => {
+        try {
+          setSocketInitError(false); // Reset error state on attempt
+          logger.info('[ChatView] Attempting to initialize socket');
+          // Pass the correct platform and options to initializeSocket
+          const newSocket = await initializeSocket({ 
+            platform: 'whatsapp',
+            onConnect: () => {
+              logger.info('[ChatView] Socket connected via manual initialization');
+              setConnectionStatus(CONNECTION_STATUS.CONNECTED);
+              setSocketReady(true);
+              setSocketInitError(false);
+            },
+            onDisconnect: () => {
+              logger.info('[ChatView] Socket disconnected via manual initialization');
+              setConnectionStatus(CONNECTION_STATUS.DISCONNECTED);
+              setSocketReady(false);
+            },
+            onError: (error) => {
+              logger.error('[ChatView] Socket error via manual initialization:', error);
+              setConnectionStatus(CONNECTION_STATUS.ERROR);
+              setSocketReady(false);
+              setSocketInitError(true);
+            }
+          });
+          
+          if (newSocket) {
+            logger.info('[ChatView] Socket initialized successfully');
+            // The socket will be available through the useSocketConnection hook on next render
+          }
+        } catch (error) {
+          logger.error('[ChatView] Failed to initialize socket:', error);
+          setSocketInitError(true);
+          toast.error('Failed to connect to chat server. Please retry or refresh the page.');
+        }
+      };
+      
+      initSocket();
       return;
     }
 
+    // Reset error state if we have a socket
+    setSocketInitError(false);
     setConnectionStatus(socket.connected ? CONNECTION_STATUS.CONNECTED : CONNECTION_STATUS.CONNECTING);
     setSocketReady(socket.connected);
 
@@ -718,12 +816,27 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
       logger.info('[ChatView] Socket connected');
       setConnectionStatus(CONNECTION_STATUS.CONNECTED);
       setSocketReady(true);
+      
+      // When socket connects, join the user room again
+      if (currentUser?.id) {
+        const userRoom = `user:${currentUser.id}`;
+        logger.info(`[ChatView] Joining room ${userRoom}`);
+        socket.emit('join:room', userRoom, (response) => {
+          logger.info(`[ChatView] Room join response:`, response);
+        });
+      }
     };
 
-    const handleDisconnect = () => {
-      logger.info('[ChatView] Socket disconnected');
+    const handleDisconnect = (reason) => {
+      logger.info('[ChatView] Socket disconnected:', reason);
       setConnectionStatus(CONNECTION_STATUS.DISCONNECTED);
       setSocketReady(false);
+      
+      // If the disconnect reason suggests we should reconnect, attempt to do so
+      if (reason === 'io server disconnect' || reason === 'transport close') {
+        logger.info('[ChatView] Attempting to reconnect socket');
+        socket.connect();
+      }
     };
 
     const handleConnecting = () => {
@@ -731,17 +844,58 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
       setConnectionStatus(CONNECTION_STATUS.CONNECTING);
       setSocketReady(false);
     };
+    
+    const handleError = (error) => {
+      logger.error('[ChatView] Socket error:', error);
+      setSocketReady(false);
+      
+      // Sometimes the socket state doesn't update properly on errors,
+      // check the actual connection state after a short delay
+      setTimeout(() => {
+        setConnectionStatus(socket.connected ? CONNECTION_STATUS.CONNECTED : CONNECTION_STATUS.DISCONNECTED);
+        setSocketReady(socket.connected);
+      }, 1000);
+    };
 
     socket.on('connect', handleConnect);
     socket.on('disconnect', handleDisconnect);
     socket.on('connecting', handleConnecting);
+    socket.on('connect_error', handleError);
+    socket.on('error', handleError);
+
+    // Perform a health check on mount
+    const checkConnection = () => {
+      const isConnected = socket.connected;
+      logger.info('[ChatView] Socket health check:', { 
+        connected: isConnected,
+        readyState: socket.readyState,
+        id: socket.id
+      });
+      
+      if (!isConnected && connectionStatus === CONNECTION_STATUS.CONNECTED) {
+        logger.warn('[ChatView] Socket reports disconnected but state is connected - correcting');
+        setConnectionStatus(CONNECTION_STATUS.DISCONNECTED);
+        setSocketReady(false);
+        
+        // Try to reconnect
+        socket.connect();
+      }
+    };
+    
+    checkConnection();
+    
+    // Set up periodic health check
+    const healthCheckInterval = setInterval(checkConnection, 30000); // 30 seconds
 
     return () => {
       socket.off('connect', handleConnect);
       socket.off('disconnect', handleDisconnect);
       socket.off('connecting', handleConnecting);
+      socket.off('connect_error', handleError);
+      socket.off('error', handleError);
+      clearInterval(healthCheckInterval);
     };
-  }, [socket]);
+  }, [socket, currentUser?.id]);
 
   useEffect(() => {
     if (loadingState === LOADING_STATES.FETCHING) {
@@ -874,12 +1028,49 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     );
   };
 
+  // Retry socket connection
+  const retrySocketConnection = useCallback(() => {
+    logger.info('[ChatView] Retrying socket connection');
+    // Reset the socket init error state
+    setSocketInitError(false);
+    // Attempt to initialize a new socket connection
+    initializeSocket({ 
+      platform: 'whatsapp',
+      onConnect: () => {
+        logger.info('[ChatView] Socket connected via retry');
+        setConnectionStatus(CONNECTION_STATUS.CONNECTED);
+        setSocketReady(true);
+        setSocketInitError(false);
+      },
+      onDisconnect: () => {
+        logger.info('[ChatView] Socket disconnected via retry');
+        setConnectionStatus(CONNECTION_STATUS.DISCONNECTED);
+        setSocketReady(false);
+      },
+      onError: (error) => {
+        logger.error('[ChatView] Socket error via retry:', error);
+        setConnectionStatus(CONNECTION_STATUS.ERROR);
+        setSocketReady(false);
+        setSocketInitError(true);
+      }
+    }).catch(error => {
+      logger.error('[ChatView] Retry socket initialization failed:', error);
+      setSocketInitError(true);
+      toast.error('Connection retry failed. Please try again or refresh the page.');
+    });
+  }, []);
+
   if (!selectedContact) {
     return (
-      <div className="flex-1 flex items-center justify-center mt-[35%] bg-neutral-900 text-[#757575]">
-        <p>Select a contact to view the chat</p>
+      <div className="flex items-center justify-center h-full bg-black/25 rounded-xl">
+        <p className="text-lg text-[#757575]">Select a contact to start chatting</p>
       </div>
     );
+  }
+
+  // Show socket error fallback if we have initialization errors
+  if (socketInitError) {
+    return <SocketErrorFallback onRetry={retrySocketConnection} />;
   }
 
   return (

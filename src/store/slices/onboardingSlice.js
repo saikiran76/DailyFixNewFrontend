@@ -1,6 +1,8 @@
 import { createSlice, createAsyncThunk, createAction } from '@reduxjs/toolkit';
 import api from '../../utils/api';
 import logger from '../../utils/logger';
+import { saveWhatsAppStatus } from '../../utils/connectionStorage';
+import { setWhatsAppConnectedDB } from '../../utils/connectionStorageDB';
 
 // CRITICAL UPDATE: Simplified onboarding routes for new flow
 export const ONBOARDING_ROUTES = {
@@ -97,7 +99,6 @@ export const updateOnboardingStep = createAsyncThunk(
 );
 
 export const setWhatsappPhoneNumber = createAction('onboarding/setWhatsappPhoneNumber');
-export const setWhatsappConnected = createAction('onboarding/setWhatsappConnected');
 
 // CRITICAL UPDATE: Modified to work with new simplified flow
 export const initiateWhatsAppRelogin = createAsyncThunk(
@@ -121,6 +122,32 @@ const onboardingSlice = createSlice({
   reducers: {
     setOnboardingError: (state, action) => {
       state.error = action.payload;
+    },
+    setCurrentStep: (state, action) => {
+      state.currentStep = action.payload;
+    },
+    setIsComplete: (state, action) => {
+      state.isComplete = action.payload;
+    },
+    setWhatsappConnected: (state, action) => {
+      try {
+        state.whatsappConnected = action.payload;
+
+        // Save to IndexedDB and localStorage
+        try {
+          // Use the new IndexedDB storage
+          setWhatsAppConnectedDB(action.payload);
+
+          // Also update the old localStorage as a fallback
+          saveWhatsAppStatus(action.payload);
+
+          logger.info('[onboardingSlice] WhatsApp connection status updated:', action.payload);
+        } catch (storageError) {
+          logger.error('[onboardingSlice] Error saving WhatsApp connection status:', storageError);
+        }
+      } catch (error) {
+        logger.error('[onboardingSlice] Error setting WhatsApp connection status:', error);
+      }
     },
     setWhatsappQRCode: (state, action) => {
       state.whatsappSetup.qrCode = action.payload;
@@ -214,6 +241,49 @@ const onboardingSlice = createSlice({
           if (whatsappAccount) {
             whatsappAccount.status = 'active';
           }
+        }
+
+        // Also save to localStorage for persistence
+        try {
+          // Save in connection storage
+          const userId = JSON.parse(localStorage.getItem('dailyfix_auth'))?.user?.id;
+          if (userId) {
+            const connectionStatus = { whatsapp: true };
+            const storageData = {
+              userId,
+              timestamp: Date.now(),
+              status: connectionStatus
+            };
+            localStorage.setItem('dailyfix_connection_status', JSON.stringify(storageData));
+          }
+
+          // Also update auth data
+          try {
+            const authDataStr = localStorage.getItem('dailyfix_auth');
+            if (authDataStr) {
+              // Make sure we're working with an object, not a string
+              let authData;
+              try {
+                authData = JSON.parse(authDataStr);
+                // Check if authData is actually an object
+                if (typeof authData !== 'object' || authData === null) {
+                  throw new Error('Auth data is not an object');
+                }
+              } catch (parseError) {
+                // If parsing fails or it's not an object, create a new object
+                console.error('Error parsing auth data, creating new object:', parseError);
+                authData = {};
+              }
+
+              // Now safely add the whatsappConnected property
+              authData.whatsappConnected = true;
+              localStorage.setItem('dailyfix_auth', JSON.stringify(authData));
+            }
+          } catch (authError) {
+            console.error('Error updating auth data with WhatsApp connection:', authError);
+          }
+        } catch (error) {
+          console.error('Error saving WhatsApp connection status to localStorage:', error);
         }
       }
     },
@@ -313,6 +383,9 @@ const onboardingSlice = createSlice({
 // Export all actions individually for clarity
 export const {
   setOnboardingError,
+  setCurrentStep,
+  setIsComplete,
+  setWhatsappConnected,
   setWhatsappQRCode,
   setWhatsappSetupState,
   setWhatsappTimeLeft,

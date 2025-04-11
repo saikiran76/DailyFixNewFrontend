@@ -3,11 +3,12 @@ import { useSelector, useDispatch } from 'react-redux';
 import api from '../utils/api';
 import { toast } from 'react-hot-toast';
 import logger from '../utils/logger';
-import { 
-  FiBarChart2, 
-  FiPieChart, 
-  FiActivity, 
-  FiCalendar, 
+import { useTheme } from '../context/ThemeContext';
+import {
+  FiBarChart2,
+  FiPieChart,
+  FiActivity,
+  FiCalendar,
   FiClock,
   FiMessageCircle,
   FiUsers,
@@ -32,21 +33,23 @@ const BarChart = ({ data, title }) => {
   // Get the maximum value, ensure it's at least 1 to avoid division by zero
   const maxValue = Math.max(1, ...data.map(d => d.value));
   const hasData = data.some(item => item.value > 0);
-  
+
+  const { isDarkTheme } = useTheme();
+
   return (
-  <div className="bg-neutral-800 p-4 rounded-lg">
-    <h3 className="text-sm font-medium text-gray-300 mb-3 flex items-center gap-2">
+  <div className={`p-4 rounded-lg theme-transition ${isDarkTheme ? 'bg-neutral-800' : 'bg-white border border-gray-200'}`}>
+    <h3 className={`text-sm font-medium mb-3 flex items-center gap-2 theme-transition ${isDarkTheme ? 'text-gray-300' : 'text-gray-700'}`}>
       <FiBarChart2 className="text-purple-500" /> {title}
     </h3>
-      
+
       {hasData ? (
     <div className="h-48 flex items-end justify-between gap-1">
       {data.map((item, index) => (
         <div key={index} className="flex flex-col items-center flex-1">
               {item.value > 0 && (
-          <div 
-                  className="w-full bg-purple-500 rounded-t-sm" 
-            style={{ 
+          <div
+                  className="w-full bg-purple-500 rounded-t-sm"
+            style={{
                     height: `${Math.max(5, (item.value / maxValue) * 100)}%`,
                     opacity: 0.8
             }}
@@ -71,7 +74,7 @@ const BarChart = ({ data, title }) => {
 const PieChart = ({ data, title }) => {
   // Calculate total for percentages
   const total = data.reduce((sum, item) => sum + item.value, 0);
-  
+
   // Calculate each segment's angle
   let startAngle = 0;
   const segments = data.map((item, index) => {
@@ -101,18 +104,18 @@ const PieChart = ({ data, title }) => {
               // Convert angles to radians for SVG arc
               const startRad = (segment.startAngle - 90) * Math.PI / 180;
               const endRad = (segment.endAngle - 90) * Math.PI / 180;
-              
+
               // Calculate the coordinates
               const x1 = 50 + 40 * Math.cos(startRad);
               const y1 = 50 + 40 * Math.sin(startRad);
               const x2 = 50 + 40 * Math.cos(endRad);
               const y2 = 50 + 40 * Math.sin(endRad);
-              
+
               // Determine if the arc should take the long path
               const largeArcFlag = segment.endAngle - segment.startAngle <= 180 ? '0' : '1';
-              
+
               return (
-                <path 
+                <path
                   key={i}
                   d={`M 50 50 L ${x1} ${y1} A 40 40 0 ${largeArcFlag} 1 ${x2} ${y2} Z`}
                   fill={segment.color}
@@ -200,25 +203,25 @@ const isToday = (timestamp) => {
 // Helper to format timestamp in Month Day year - time with period of day format
 const formatTimestamp = (timestamp) => {
   if (!timestamp) return 'N/A';
-  
+
   const date = new Date(timestamp);
-  
+
   // Month Day, Year
-  const dateOptions = { 
-    year: 'numeric', 
-    month: 'long', 
-    day: 'numeric' 
+  const dateOptions = {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
   };
   const dateStr = date.toLocaleDateString('en-US', dateOptions);
-  
+
   // Time with AM/PM
-  const timeOptions = { 
-    hour: 'numeric', 
-    minute: 'numeric', 
-    hour12: true 
+  const timeOptions = {
+    hour: 'numeric',
+    minute: 'numeric',
+    hour12: true
   };
   const timeStr = date.toLocaleTimeString('en-US', timeOptions);
-  
+
   // Determine time of day
   const hour = date.getHours();
   let periodOfDay;
@@ -231,17 +234,17 @@ const formatTimestamp = (timestamp) => {
   } else {
     periodOfDay = "at night";
   }
-  
+
   return `${dateStr} - at ${timeStr} ${periodOfDay}`;
 };
 
 // Function to determine if the day has changed since last cache
 const hasDayChanged = (cachedTimestamp) => {
   if (!cachedTimestamp) return true;
-  
+
   const cachedDate = new Date(cachedTimestamp);
   const now = new Date();
-  
+
   // Compare year, month, and day
   return cachedDate.getFullYear() !== now.getFullYear() ||
          cachedDate.getMonth() !== now.getMonth() ||
@@ -282,7 +285,7 @@ const DailyReportCard = ({ contactId }) => {
         initReportCardAnimations();
       }
     }, 300);
-    
+
     return () => clearTimeout(timer);
   }, [reportData]);
 
@@ -292,22 +295,22 @@ const DailyReportCard = ({ contactId }) => {
       fetchDailyReportWithCache();
     }
   }, [contactId, userId]);
-  
+
   const fetchDailyReportWithCache = async () => {
     try {
       setIsLoading(true);
       setError(null);
-      
+
       const cacheKey = getCacheKey('dailyReport', userId, contactId);
       const cachedReport = localStorage.getItem(cacheKey);
-      
+
       if (cachedReport) {
         const parsedCache = JSON.parse(cachedReport);
-        
+
         // Check if cache is from today and has valid data
-        if (!hasDayChanged(parsedCache.timestamp) && 
-            parsedCache.data && 
-            parsedCache.data.report && 
+        if (!hasDayChanged(parsedCache.timestamp) &&
+            parsedCache.data &&
+            parsedCache.data.report &&
             !parsedCache.data.error) {
           console.log("Using cached daily report:", parsedCache.data);
           setReportData(parsedCache.data);
@@ -317,13 +320,13 @@ const DailyReportCard = ({ contactId }) => {
           return;
         }
       }
-      
+
       // If no valid cache or there was an error before, fetch new data
       const response = await api.get(`api/v1/priority/daily-report-analysis/${contactId}`);
-      
+
       if (response.data) {
         const newData = response.data;
-        
+
         // Only cache if we got a valid report with no errors
         if (newData.report && !newData.error) {
           setReportData(newData);
@@ -332,7 +335,7 @@ const DailyReportCard = ({ contactId }) => {
             timestamp: Date.now()
           }));
         }
-        
+
         // setCacheTimestamp(Date.now());
       } else {
         setError("Failed to generate daily report");
@@ -344,7 +347,7 @@ const DailyReportCard = ({ contactId }) => {
       setIsLoading(false);
     }
   };
-  
+
   const handleRefreshClick = (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -355,7 +358,7 @@ const DailyReportCard = ({ contactId }) => {
   // Render list items for each report section
   const renderListItems = (items) => {
     if (!items || items.length === 0) return <p className="text-neutral-700 text-xs">None identified.</p>;
-    
+
     return (
       <ul className="list-disc list-inside text-neutral-400 text-xs space-y-1 px-2 py-1 bg-opacity-50 rounded-md ">
         {items.map((item, index) => (
@@ -368,16 +371,16 @@ const DailyReportCard = ({ contactId }) => {
   // Customize the status message based on messagesAnalyzed
   const getStatusMessage = () => {
     if (!reportData) return "";
-    
-    const timeStr = reportData.lastMessageTimestamp 
+
+    const timeStr = reportData.lastMessageTimestamp
       ? formatTimestamp(reportData.lastMessageTimestamp)
       : "No messages found";
-    
+
     if (reportData.messagesAnalyzed === 'today') {
       return (
         <span className='mt-4 flex items-center justify-between'>
           The last message is on {timeStr}. Want to get another quick report?{' '}
-          <button 
+          <button
             onClick={handleRefreshClick}
             className="w-auto text-purple-400 bg-neutral-700 hover:text-purple-800 hover:underline"
           >
@@ -385,12 +388,12 @@ const DailyReportCard = ({ contactId }) => {
           </button>
         </span>
       );
-    } 
+    }
     else if (reportData.messagesAnalyzed === 'refreshed') {
       return (
         <span>
           The last message is on {timeStr}. Since the messages are not today's,{' '}
-          <button 
+          <button
             onClick={handleRefreshClick}
             className="ml-1 text-purple-400 bg-neutral-700 hover:text-purple-800 hover:underline"
           >
@@ -398,13 +401,13 @@ const DailyReportCard = ({ contactId }) => {
           </button>
         </span>
       );
-    } 
+    }
     else { // 'none'
       return (
         <span>
           {reportData.lastMessageTimestamp ? `The last message is on ${timeStr}.` : "No message history found."}{' '}
           No recent activity, but{' '}
-          <button 
+          <button
             onClick={handleRefreshClick}
             className="ml-1 text-purple-400 bg-neutral-700 hover:text-purple-800 hover:underline"
           >
@@ -423,7 +426,7 @@ const DailyReportCard = ({ contactId }) => {
           <FiCheck className="text-green-700 mr-1" />
           <span className="text-green-700 text-sm font-medium">Daily Report</span>
       </div>
-        
+
         <div className="p-4 bg-neutral-50 rounded-lg text-center">
           <p className="text-neutral-600 text-sm">Select a contact to view daily report.</p>
     </div>
@@ -436,7 +439,7 @@ const DailyReportCard = ({ contactId }) => {
     <div className="inline-flex items-center bg-green-100 px-3 py-1 rounded-md mb-4">
       <FiCheck className="text-green-700 mr-1" />
       <span className="text-green-700 text-sm font-medium">Daily Report</span>
-        
+
         {/* Badge for refresh status */}
         {(reportData?.messagesAnalyzed === 'refreshed' || reportData?.messagesAnalyzed === 'none') && (
           <span className="ml-2 inline-flex items-center text-purple-800 text-xs px-1 py-0.5 rounded">
@@ -446,13 +449,13 @@ const DailyReportCard = ({ contactId }) => {
             </button>
           </span>
         )}
-        
+
         {/* Loading spinner */}
         {isLoading && (
           <FiRefreshCw className="ml-2 w-4 h-4 text-green-700 animate-spin" />
         )}
     </div>
-    
+
       {/* Error state */}
       {error && !isLoading && (
         <div className="bg-red-50 p-4 rounded-lg mb-4">
@@ -462,7 +465,7 @@ const DailyReportCard = ({ contactId }) => {
           </div>
         </div>
       )}
-      
+
       {/* Loading state with no data */}
       {isLoading && !reportData && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -471,7 +474,7 @@ const DailyReportCard = ({ contactId }) => {
           <div className="bg-neutral-100 p-4 rounded-lg animate-pulse h-20"></div>
         </div>
       )}
-      
+
       {/* Content when data is available */}
       {reportData?.report && (
   <>
@@ -515,13 +518,13 @@ const DailyReportCard = ({ contactId }) => {
     </div>
   </>
       )}
-      
+
       {/* No data available */}
       {!isLoading && (!reportData || !reportData.report) && (
         <div className="p-4 bg-neutral-50 rounded-lg text-center">
           <p className="text-neutral-600 text-sm">
-            {reportData?.messagesAnalyzed === 'none' 
-              ? 'No recent messages found to generate a report.' 
+            {reportData?.messagesAnalyzed === 'none'
+              ? 'No recent messages found to generate a report.'
               : 'Failed to load report data.'}
           </p>
           {reportData && (
@@ -543,7 +546,7 @@ const PrioritizationBadge = ({ contactId }) => {
   const [loading, setLoading] = useState(false);
   const popupRef = useRef(null);
   const userId = useSelector(state => state.auth.user?.id);
-  
+
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (popupRef.current && !popupRef.current.contains(event.target)) {
@@ -559,27 +562,27 @@ const PrioritizationBadge = ({ contactId }) => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [showWhyPopup]);
-  
+
   // Fetch priority data when contact or time period changes, with caching
   useEffect(() => {
     if (contactId && userId) {
       fetchPriorityDataWithCache();
     }
   }, [contactId, timePeriod, userId]);
-  
+
   const fetchPriorityDataWithCache = async () => {
     try {
       setLoading(true);
-      
+
       // Create cache key specific to this contact, user, and time period
       const cacheKey = getCacheKey('priority', userId, contactId, timePeriod);
-      
+
       // Check if we have cached data
       const cachedData = localStorage.getItem(cacheKey);
-      
+
       if (cachedData) {
         const parsedCache = JSON.parse(cachedData);
-        
+
         // Check if cache is still valid (less than 3 hours old)
         if (isCacheValid(parsedCache.timestamp, 3)) {
           console.log("Using cached priority data:", parsedCache.data);
@@ -588,20 +591,20 @@ const PrioritizationBadge = ({ contactId }) => {
           return;
         }
       }
-      
+
       // If no valid cache, make API request
       const response = await api.get(`/api/v1/priority/contact/${contactId}/overview?timePeriod=${timePeriod}`);
-      
+
       if (response.data && response.data.success) {
         const newData = response.data.data;
         setPriorityData(newData);
-        
+
         // Cache the successful result with timestamp
         localStorage.setItem(cacheKey, JSON.stringify({
           data: newData,
           timestamp: Date.now()
         }));
-        
+
         console.log("Fetched fresh priority data:", newData);
       } else {
         console.error("Failed to fetch priority data:", response);
@@ -612,7 +615,7 @@ const PrioritizationBadge = ({ contactId }) => {
       setLoading(false);
     }
   };
-  
+
   // Determine priority details for UI elements
   const getPriorityDetails = () => {
     if (!priorityData) {
@@ -625,19 +628,19 @@ const PrioritizationBadge = ({ contactId }) => {
         text: "Low priority"
       };
     }
-    
+
     // Find the highest priority with non-zero count
     if (priorityData.priorityCounts.urgent > 0) {
       return {
         color: "red",
         textColor: "text-red-500",
-        iconColor: "text-red-600", 
+        iconColor: "text-red-600",
         bgColor: "bg-red-100",
         glow: true,
         text: "Urgent attention needed!"
       };
     }
-    
+
     if (priorityData.priorityCounts.high > 0) {
       return {
         color: "red",
@@ -648,7 +651,7 @@ const PrioritizationBadge = ({ contactId }) => {
         text: "High priority"
       };
     }
-    
+
     if (priorityData.priorityCounts.medium > 0) {
       return {
         color: "yellow",
@@ -659,7 +662,7 @@ const PrioritizationBadge = ({ contactId }) => {
         text: "Medium priority"
       };
     }
-    
+
     return {
       color: "green",
       textColor: "text-green-500",
@@ -669,9 +672,9 @@ const PrioritizationBadge = ({ contactId }) => {
       text: "Low priority"
     };
   };
-  
+
   const priorityDetails = getPriorityDetails();
-  
+
   return (
     <div className="mb-6">
       <div className="flex items-center justify-between mb-4">
@@ -679,9 +682,9 @@ const PrioritizationBadge = ({ contactId }) => {
         <FiCheck className="text-green-700 mr-1" />
         <span className="text-green-700 text-sm font-medium">Prioritization</span>
       </div>
-      
+
         <div className="flex items-center gap-2">
-          <select 
+          <select
             value={timePeriod}
             onChange={e => setTimePeriod(e.target.value)}
             className="text-xs bg-neutral-200 border border-neutral-300 rounded px-2 py-1"
@@ -691,8 +694,8 @@ const PrioritizationBadge = ({ contactId }) => {
             <option value="last_week">Last Week</option>
             <option value="last_month">Last Month</option>
           </select>
-          
-          <button 
+
+          <button
             onClick={() => setShowWhyPopup(true)}
             className="bg-neutral-700 hover:bg-neutral-600 bg-opacity-80 rounded-full p-1.5 transition-all duration-200"
           >
@@ -700,7 +703,7 @@ const PrioritizationBadge = ({ contactId }) => {
           </button>
         </div>
       </div>
-      
+
       <div className="relative">
         {/* Contact Avatars */}
         <div className="flex -space-x-2 mb-3">
@@ -709,17 +712,17 @@ const PrioritizationBadge = ({ contactId }) => {
           <img src="https://randomuser.me/api/portraits/men/86.jpg" alt="Contact 3" className="w-10 h-10 rounded-full border-2 border-white" />
           <div className="w-10 h-10 rounded-full bg-neutral-300 border-2 border-white flex items-center justify-center text-xs font-medium text-neutral-600">+1</div>
         </div>
-        
+
         {/* AI Suggestion - Dynamic based on priority data */}
         <div className={`rounded-md p-2 flex items-center ${priorityDetails.glow ? 'shadow-md' : ''}`}>
-          <FiAlertCircle 
-            className={`${priorityDetails.iconColor} mr-2 ${priorityDetails.glow ? 'animate-pulse shadow-lg' : ''}`} 
+          <FiAlertCircle
+            className={`${priorityDetails.iconColor} mr-2 ${priorityDetails.glow ? 'animate-pulse shadow-lg' : ''}`}
             style={priorityDetails.glow ? {filter: 'drop-shadow(0 0 4px rgba(220, 38, 38, 0.8))'} : {}}
           />
           <span className={`${priorityDetails.textColor} text-sm font-medium`}>
             {loading ? "Loading priority data..." : `AI suggestion: ${priorityDetails.text}`}
           </span>
-          <button 
+          <button
             onClick={() => setShowWhyPopup(true)}
             className={`ml-auto w-auto ${priorityDetails.glow ? 'bg-red-800 hover:bg-red-700' : 'bg-neutral-700 hover:bg-neutral-600'} bg-opacity-80 rounded-full p-1.5 transition-all duration-200`}
             style={priorityDetails.glow ? {animation: 'pulse 2s infinite', boxShadow: '0 0 8px rgba(220, 38, 38, 0.5)'} : {}}
@@ -727,10 +730,10 @@ const PrioritizationBadge = ({ contactId }) => {
             <FiInfo className={`${priorityDetails.glow ? 'text-red-200' : 'text-neutral-400'} w-4 h-4`} />
           </button>
         </div>
-        
+
         {/* Why Popup with API data */}
         {showWhyPopup && (
-          <div 
+          <div
             ref={popupRef}
             className={`absolute right-0 top-full mt-2 ${priorityDetails.glow ? 'bg-red-50 border border-red-200' : 'bg-white'} rounded-lg shadow-lg p-4 w-72 z-10`}
           >
@@ -771,21 +774,21 @@ const AIFeedbackPopup = ({ isOpen, onClose }) => {
   if (!isOpen) return null;
 
   return (
-    <div 
+    <div
       ref={popupRef}
       className="fixed bottom-6 right-6 bg-white rounded-lg shadow-lg p-4 w-64 z-50 animate-fadeIn"
     >
       <p className="text-sm font-medium text-neutral-800 mb-2">Is AI suggestion accurate?</p>
       <p className="text-xs text-neutral-600 mb-3">Did We help you prioritize your conversations? Help us improve.</p>
       <div className="flex space-x-2">
-        <button 
+        <button
           onClick={onClose}
           className="flex-1 flex items-center justify-center gap-1 bg-emerald-600 text-white py-1 px-3 rounded text-xs"
         >
           <FiCheck size={12} />
           <span>Yay, Indeed.</span>
         </button>
-        <button 
+        <button
           onClick={onClose}
           className="flex-1 flex items-center justify-center gap-1 bg-red-400 text-white py-1 px-3 rounded text-xs"
         >
@@ -806,14 +809,15 @@ const getDayName = (dayIndex) => {
  * AnalyticsDashboard component provides data visualization for messaging statistics
  */
 const AnalyticsDashboard = () => {
+  const { isDarkTheme } = useTheme();
   const [dateRange, setDateRange] = useState('7days');
   const [isLoading, setIsLoading] = useState(false);
   const [selectedContact, setSelectedContact] = useState(null);
   const [showFeedbackPopup, setShowFeedbackPopup] = useState(false);
   const [chartDataTimestamp, setChartDataTimestamp] = useState(null);
-  
+
   // Initialize with default empty data
-  
+
   const { user } = useSelector(state => state.auth);
   const { contacts, loading: contactsLoading } = useSelector(state => ({
     // The contacts slice stores the items in an "items" array property
@@ -836,25 +840,25 @@ const AnalyticsDashboard = () => {
       console.log('Using existing contacts from store:', contacts.length);
     }
   }, [dispatch, contacts]);
-  
+
   // Get messages for the selected contact at the component level
-  const contactMessages = useSelector(state => 
+  const contactMessages = useSelector(state =>
     selectedContact?.id ? state.messages.items[selectedContact.id] || [] : []
   );
-  
+
   // Then modify the useEffect that fetches messages
   useEffect(() => {
     if (selectedContact?.id) {
       // Only fetch if we haven't already fetched for this contact
-      if (!messageFetchedRef.current[selectedContact.id] && 
+      if (!messageFetchedRef.current[selectedContact.id] &&
           (!contactMessages || contactMessages.length === 0)) {
         console.log(`Fetching messages for contact: ${selectedContact.id}`);
-        dispatch(fetchMessages({ 
-          contactId: selectedContact.id, 
-          page: 0, 
-          limit: 20 
+        dispatch(fetchMessages({
+          contactId: selectedContact.id,
+          page: 0,
+          limit: 20
         }));
-        
+
         // Mark this contact as fetched
         messageFetchedRef.current[selectedContact.id] = true;
       } else {
@@ -862,31 +866,31 @@ const AnalyticsDashboard = () => {
       }
     }
   }, [dispatch, selectedContact]); // Remove contactMessages from dependency array
-  
+
   // Calculate message counts WITHOUT using hooks inside
   const calculateMessageCounts = () => {
     if (!selectedContact?.id || !contactMessages || contactMessages.length === 0) {
       return { sent: 0, received: 0 };
     }
-    
+
     // Count sent messages (from the user)
-    const sentCount = contactMessages.filter(msg => 
-      (msg.sender_id && msg.sender_id.includes('matrix')) || 
+    const sentCount = contactMessages.filter(msg =>
+      (msg.sender_id && msg.sender_id.includes('matrix')) ||
       msg.is_from_me === true
     ).length;
-    
+
     // Count received messages (from the contact)
-    const receivedCount = contactMessages.filter(msg => 
-      !(msg.sender_id && msg.sender_id.includes('matrix')) && 
+    const receivedCount = contactMessages.filter(msg =>
+      !(msg.sender_id && msg.sender_id.includes('matrix')) &&
       msg.is_from_me !== true
     ).length;
-    
+
     return { sent: sentCount, received: receivedCount };
   };
-  
+
   // Calculate the counts in a memoized way for performance
-  const messageCounts = useMemo(() => 
-    calculateMessageCounts(), 
+  const messageCounts = useMemo(() =>
+    calculateMessageCounts(),
     [selectedContact, contactMessages]
   );
 
@@ -898,7 +902,7 @@ const AnalyticsDashboard = () => {
       const timer = setTimeout(() => {
         setShowFeedbackPopup(true);
       }, 5000);
-      
+
       return () => clearTimeout(timer);
     }
   }, [selectedContact, dateRange]);
@@ -908,7 +912,7 @@ const AnalyticsDashboard = () => {
     try {
       // In a real implementation, you would fetch data from the API
       console.log('Fetching analytics data for contact:', selectedContact?.id);
-      
+
       // For now, just simulate a delay
       await new Promise(resolve => setTimeout(resolve, 1000));
     } catch (error) {
@@ -961,17 +965,17 @@ const AnalyticsDashboard = () => {
         value: 0
       }));
     }
-    
+
     // Initialize counts for each day
     const dayCounts = Array(7).fill(0);
-    
+
     // Count messages by day
     contactMessages.forEach(message => {
       const date = new Date(message.timestamp);
       const dayIndex = date.getDay();
       dayCounts[dayIndex]++;
     });
-    
+
     // Format the data for the chart
     return dayCounts.map((count, index) => ({
       label: getDayName(index),
@@ -991,15 +995,15 @@ const AnalyticsDashboard = () => {
     }
 
     console.log("Calculating hourly message activity...");
-    
+
     // Create a map to store message counts by hour
     const hourCounts = {};
-    
+
     // Initialize all hours (0-23)
     for (let i = 0; i < 24; i++) {
       hourCounts[i] = 0;
     }
-    
+
     // Count messages for each hour
     contactMessages.forEach(message => {
       if (message.timestamp) {
@@ -1008,7 +1012,7 @@ const AnalyticsDashboard = () => {
         hourCounts[hour]++;
       }
     });
-    
+
     // Convert to array format for the chart (only show 9AM-7PM range)
     const result = [];
     for (let i = 9; i <= 19; i++) {
@@ -1018,7 +1022,7 @@ const AnalyticsDashboard = () => {
         value: hourCounts[i]
       });
     }
-    
+
     console.log("Hourly activity:", result);
     return result;
   };
@@ -1026,13 +1030,13 @@ const AnalyticsDashboard = () => {
   // Filter and sort contacts by recent activity
   const getFilteredSortedContacts = useMemo(() => {
     if (!contacts || contacts.length === 0) return [];
-    
+
     // Filter out system contacts
-    const filteredContacts = contacts.filter(contact => 
-      contact.display_name !== 'WhatsApp bridge bot' && 
+    const filteredContacts = contacts.filter(contact =>
+      contact.display_name !== 'WhatsApp bridge bot' &&
       contact.display_name !== 'WhatsApp Status Broadcast'
     );
-    
+
     // Sort by last_message_at (most recent first)
     return [...filteredContacts].sort((a, b) => {
       const dateA = a.last_message_at ? new Date(a.last_message_at) : new Date(0);
@@ -1063,7 +1067,7 @@ const AnalyticsDashboard = () => {
     const diffMin = Math.floor(diffSec / 60);
     const diffHour = Math.floor(diffMin / 60);
     const diffDay = Math.floor(diffHour / 24);
-    
+
     if (diffDay > 0) {
       return `${diffDay} day${diffDay > 1 ? 's' : ''} ago`;
     } else if (diffHour > 0) {
@@ -1081,12 +1085,12 @@ const AnalyticsDashboard = () => {
     try {
       // Refresh contacts
       await dispatch(fetchContacts());
-      
+
       // Refresh messages if a contact is selected
       if (selectedContact) {
         await dispatch(fetchMessages({ contactId: selectedContact.id }));
       }
-      
+
       toast.success('Dashboard data refreshed');
     } catch (error) {
       console.error('Error refreshing dashboard data:', error);
@@ -1100,49 +1104,49 @@ const AnalyticsDashboard = () => {
   const fetchData = async () => {
     try {
       setIsLoading(true);
-      
+
       if (selectedContact && userId) {
         // Handle caching for message charts
         const chartCacheKey = getCacheKey('charts', userId, selectedContact.id);
         const cachedCharts = localStorage.getItem(chartCacheKey);
-        
+
         if (cachedCharts && !forceRefresh) {
           const parsedCache = JSON.parse(cachedCharts);
-          
+
           // Check if cache is valid (less than 2 hours old) and has data
-          if (isCacheValid(parsedCache.timestamp, 2) && 
-              parsedCache.data && 
+          if (isCacheValid(parsedCache.timestamp, 2) &&
+              parsedCache.data &&
               parsedCache.data.length > 0) {
             setContactMessages(parsedCache.data);
             setChartDataTimestamp(parsedCache.timestamp);
-            
+
             // Still fetch other data that might need to be updated
             // ...
-            
+
             return;
           }
         }
-        
+
         // If no valid cache or we need fresh data, fetch messages
         try {
           const messagesResponse = await api.get(`/api/v1/whatsapp-entity/contacts/${selectedContact.id}/messages`);
-          
+
           if (messagesResponse.data && messagesResponse.data.success) {
             const messages = messagesResponse.data.data;
             setContactMessages(messages);
-            
+
             // Cache the chart data
             localStorage.setItem(chartCacheKey, JSON.stringify({
               data: messages,
               timestamp: Date.now()
             }));
-            
+
             setChartDataTimestamp(Date.now());
           }
         } catch (error) {
           console.error("Error fetching messages:", error);
         }
-        
+
         // Continue with other data fetching
         // ...
       }
@@ -1156,14 +1160,14 @@ const AnalyticsDashboard = () => {
   };
 
   return (
-    <div className="bg-neutral-900 text-white p-4 md:p-6 rounded-lg max-w-6xl mx-auto">
+    <div className={`p-4 md:p-6 rounded-lg max-w-6xl mx-auto theme-transition ${isDarkTheme ? 'bg-neutral-900 text-white' : 'bg-gray-50 text-gray-900 border border-gray-200'}`}>
       <div className="flex flex-col md:flex-row justify-between mb-6 items-start md:items-center gap-4">
         {/* <div>
           <h2 className="text-xl font-bold">Analytics Space</h2>
           <p className="text-gray-400 text-sm">Insights from your messaging data</p>
         </div> */}
-        
-        
+
+
 
         <div className="p-6 bg-[url('/img/analytics-bg.jpg')] bg-cover bg-center rounded-lg mb-6 relative w-full">
             <div className="absolute inset-0 bg-gradient-to-r from-purple-900/80 to-indigo-900/80 rounded-lg"></div>
@@ -1178,7 +1182,7 @@ const AnalyticsDashboard = () => {
                 {/* Contact Selection and Refresh */}
                 <div className="flex items-center gap-2">
                 <div className="relative">
-                  <select 
+                  <select
                       value={selectedContact?.id || ''}
                       onChange={(e) => handleContactSelect(e.target.value)}
                       className="bg-neutral-700 text-white rounded px-2 py-1 text-sm w-32"
@@ -1194,8 +1198,8 @@ const AnalyticsDashboard = () => {
                       <FiChevronDown className="text-neutral-400" />
                   </div>
                 </div>
-                
-                <button 
+
+                <button
                     onClick={refreshDashboardData}
                     className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1.5 rounded text-sm flex items-center"
                   disabled={isLoading}
@@ -1209,7 +1213,7 @@ const AnalyticsDashboard = () => {
             </div>
           </div>
       </div>
-      
+
       {isLoading ? (
         <div className="flex justify-center items-center py-20">
           <FiRefreshCw className="animate-spin text-purple-500 mr-2" />
@@ -1220,68 +1224,68 @@ const AnalyticsDashboard = () => {
           <div className="bg-neutral-800 bg-opacity-60 p-6 rounded-lg text-black mb-6">
             {/* Prioritization Component - passing contact ID */}
             <PrioritizationBadge contactId={selectedContact?.id} />
-            
+
             {/* Message Counts */}
             <div className="flex flex-wrap gap-4 mb-6">
-              <MessageCountCard 
-                title="Messages Sent" 
-                count={messageCounts.sent} 
+              <MessageCountCard
+                title="Messages Sent"
+                count={messageCounts.sent}
                 icon="send"
                 loading={messagesLoading}
               />
-              <MessageCountCard 
-                title="Messages Received" 
-                count={messageCounts.received} 
+              <MessageCountCard
+                title="Messages Received"
+                count={messageCounts.received}
                 icon="receive"
                 loading={messagesLoading}
               />
             </div>
-            
+
             {/* Daily Report */}
             <DailyReportCard contactId={selectedContact?.id} />
           </div>
-            
+
           {/* Metrics overview - reduced to only show relevant metrics */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-            <MetricCard 
-              icon={FiMessageCircle} 
-              title="Total Messages" 
-              value={contactMessages?.length || 0} 
-              // change={placeholderData.metrics.totalMessagesChange} 
+            <MetricCard
+              icon={FiMessageCircle}
+              title="Total Messages"
+              value={contactMessages?.length || 0}
+              // change={placeholderData.metrics.totalMessagesChange}
               // isPositive={placeholderData.metrics.totalMessagesChange > 0}
             />
-            <MetricCard 
-              icon={FiUsers} 
-              title="Active Contacts" 
-              value={contacts?.length || 0} 
-              // change={placeholderData.metrics.activeContactsChange} 
+            <MetricCard
+              icon={FiUsers}
+              title="Active Contacts"
+              value={contacts?.length || 0}
+              // change={placeholderData.metrics.activeContactsChange}
               // isPositive={placeholderData.metrics.activeContactsChange > 0}
             />
           </div>
-          
+
           {/* Charts - removed Response Time Trend */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <BarChart 
-              data={calculateMessagesByDay()} 
-              title="Communication Rhythm (When Do You Chat Most?)" 
+            <BarChart
+              data={calculateMessagesByDay()}
+              title="Communication Rhythm (When Do You Chat Most?)"
             />
-            
+
             {/* Top contacts list */}
             <div className="bg-neutral-800 p-4 rounded-lg">
               <h3 className="text-sm font-medium text-gray-300 mb-4 flex items-center gap-2">
                 <FiUsers className="text-purple-500" /> Recent Activity
               </h3>
-              
+
               <div className="space-y-3">
                 {topContacts.length > 0 ? (
                   topContacts.map((contact, i) => {
                     // Calculate time since last message
                     const lastMessageDate = contact.last_message_at ? new Date(contact.last_message_at) : null;
                     const timeAgo = lastMessageDate ? formatTimeAgo(lastMessageDate) : 'Never';
-                    
+
                     // Use first letter of name for avatar
                     const initial = contact.display_name ? contact.display_name.charAt(0).toUpperCase() : '?';
-                    
+
                     return (
                       <div key={contact.id} className="flex items-center">
                         <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-400 to-indigo-600 flex items-center justify-center text-xs font-bold text-white">
@@ -1310,13 +1314,13 @@ const AnalyticsDashboard = () => {
               </div>
             </div>
           </div>
-          
+
           {/* Messaging Activity by Hour */}
-          
+
           {/* Feedback Popup */}
-          <AIFeedbackPopup 
-            isOpen={showFeedbackPopup} 
-            onClose={() => setShowFeedbackPopup(false)} 
+          <AIFeedbackPopup
+            isOpen={showFeedbackPopup}
+            onClose={() => setShowFeedbackPopup(false)}
           />
         </>
       ) : (
@@ -1326,7 +1330,7 @@ const AnalyticsDashboard = () => {
           <p className="text-gray-400">Choose a contact from the dropdown above to see analytics and insights.</p>
         </div>
       )}
-      
+
       <div className="text-center text-xs text-gray-400 mt-8">
         <p>Data refreshed {new Date().toLocaleString()}</p>
         <p>For demonstration purposes only. In production, connects to the analytics microservice.</p>
@@ -1335,4 +1339,4 @@ const AnalyticsDashboard = () => {
   );
 };
 
-export default AnalyticsDashboard; 
+export default AnalyticsDashboard;

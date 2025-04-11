@@ -4,6 +4,7 @@ import { tokenManager } from '../../utils/tokenManager';
 import { fetchOnboardingStatus } from './onboardingSlice';
 import logger from '../../utils/logger';
 import authService from '../../services/authService';
+import { initiateGoogleSignIn } from '../../utils/googleAuth';
 
 // Initial state with proper typing
 const initialState = {
@@ -14,16 +15,34 @@ const initialState = {
   initializing: false,
   hasInitialized: false,
   matrixCredentials: null,
-  onboardingFetching: false
+  onboardingFetching: false,
+  googleAuthPending: false
 };
 
 // Async thunks
+export const signInWithGoogle = createAsyncThunk(
+  'auth/signInWithGoogle',
+  async (_, { dispatch, rejectWithValue }) => {
+    try {
+      dispatch(setGoogleAuthPending(true));
+      await initiateGoogleSignIn();
+      // Note: The actual authentication will be handled by the redirect
+      // We're not returning anything here as the page will be redirected
+      return null;
+    } catch (error) {
+      logger.error('[Auth] Google sign-in error:', error);
+      dispatch(setGoogleAuthPending(false));
+      return rejectWithValue(error.message || 'Failed to sign in with Google');
+    }
+  }
+);
+
 export const signIn = createAsyncThunk(
   'auth/signIn',
   async ({ email, password }, { dispatch, getState, rejectWithValue }) => {
     try {
       const authData = await authService.signIn(email, password);
-      
+
       // Validate complete session data
       if (!authData?.session?.access_token || !authData?.session?.refresh_token || !authData?.session?.user) {
         throw new Error('Invalid authentication response - incomplete session data');
@@ -70,27 +89,68 @@ export const initializeAuth = createAsyncThunk(
   async (_, { getState, dispatch, rejectWithValue }) => {
     try {
       const state = getState().auth;
-      
+
       // Only skip if we have both initialized AND a valid session
       if (state.initializing) {
         logger.info('⏭️ [Auth] Skipping initialization - already in progress');
         return state.session ? { session: state.session, user: state.user } : null;
       }
 
+      // CRITICAL FIX: First check localStorage for session data
+      try {
+        const authDataStr = localStorage.getItem('dailyfix_auth');
+        if (authDataStr) {
+          const authData = JSON.parse(authDataStr);
+          if (authData?.session?.access_token) {
+            logger.info('🔍 [Auth] Found session in localStorage');
+
+            // Validate the token
+            const { data: { user }, error: validateError } = await supabase.auth.getUser(authData.session.access_token);
+            if (!validateError && user) {
+              logger.info('✅ [Auth] Session from localStorage is valid');
+              return { session: authData.session, user };
+            }
+          }
+        }
+      } catch (localStorageError) {
+        logger.warn('⚠️ [Auth] Error checking localStorage session:', localStorageError);
+      }
+
+      // Check if we have a persisted session in Redux store
       if (state.hasInitialized && state.session?.access_token) {
-        // Validate existing session before skipping
-        const { data: { user }, error: validateError } = await supabase.auth.getUser(state.session.access_token);
-        if (!validateError && user) {
-          logger.info('⏭️ [Auth] Skipping initialization - valid session exists');
-          return { session: state.session, user };
+        // Check if the session is still valid based on expiry time
+        const expiryStr = state.session.expires_at || localStorage.getItem('session_expiry');
+        const now = new Date();
+        const expiryTime = expiryStr ? new Date(expiryStr) : null;
+        const isSessionValid = expiryTime && expiryTime > now;
+
+        logger.info('🔍 [Auth] Checking persisted session:', {
+          hasExpiry: !!expiryTime,
+          expiryTime: expiryTime?.toISOString(),
+          now: now.toISOString(),
+          isValid: isSessionValid
+        });
+
+        if (isSessionValid) {
+          // Validate existing session before skipping
+          try {
+            const { data: { user }, error: validateError } = await supabase.auth.getUser(state.session.access_token);
+            if (!validateError && user) {
+              logger.info('⏭️ [Auth] Skipping initialization - valid session exists');
+              return { session: state.session, user };
+            }
+          } catch (tokenError) {
+            logger.warn('⚠️ [Auth] Token validation failed:', tokenError);
+            // Continue to refresh attempt
+          }
         }
       }
 
       logger.info('🚀 [Auth] Starting auth initialization');
-      
+
       // Force session validation
       const validatedSession = await authService.validateSession(true);
-      
+
       if (!validatedSession) {
         logger.warn('⚠️ [Auth] No valid session found during initialization');
         return null;
@@ -138,13 +198,23 @@ export const signOut = createAsyncThunk(
   'auth/signOut',
   async (_, { rejectWithValue }) => {
     try {
+      // First, clear specific session data from localStorage
+      localStorage.removeItem('dailyfix_auth');
+      localStorage.removeItem('access_token');
+      localStorage.removeItem('session_expiry');
+      localStorage.removeItem('matrix_credentials');
+      localStorage.removeItem('dailyfix_connection_status');
+
+      // Sign out from Supabase
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
 
-      // Clear stored tokens and local storage
+      // Clear all remaining storage
       localStorage.clear();
       tokenManager.clearTokens();
-      
+
+      logger.info('[Auth] User signed out successfully');
+
       return null;
     } catch (error) {
       logger.info('[Auth] Sign out failed:', error);
@@ -199,6 +269,9 @@ const authSlice = createSlice({
     },
     setOnboardingFetching: (state, action) => {
       state.onboardingFetching = action.payload;
+    },
+    setGoogleAuthPending: (state, action) => {
+      state.googleAuthPending = action.payload;
     }
   },
   extraReducers: (builder) => {
@@ -223,7 +296,7 @@ const authSlice = createSlice({
         state.session = null;
         state.user = null;
       })
-      
+
       // Initialize Auth
       .addCase(initializeAuth.pending, (state) => {
         if (!state.initializing) { // Only set if not already initializing
@@ -255,7 +328,7 @@ const authSlice = createSlice({
         state.user = null;
         state.matrixCredentials = null;
       })
-      
+
       // Sign Out
       .addCase(signOut.fulfilled, (state) => {
         return { ...initialState, loading: false, hasInitialized: true };
@@ -285,7 +358,8 @@ export const {
   setHasInitialized,
   updateMatrixCredentials,
   clearAuth,
-  setOnboardingFetching
+  setOnboardingFetching,
+  setGoogleAuthPending
 } = authSlice.actions;
 
 export const selectSession = (state) => state.auth.session;
@@ -295,5 +369,6 @@ export const selectError = (state) => state.auth.error;
 export const selectIsInitializing = (state) => state.auth.initializing;
 export const selectHasInitialized = (state) => state.auth.hasInitialized;
 export const selectMatrixCredentials = (state) => state.auth.matrixCredentials;
+export const selectGoogleAuthPending = (state) => state.auth.googleAuthPending;
 
 export const authReducer = authSlice.reducer;

@@ -5,17 +5,18 @@ import PropTypes from 'prop-types';
 import { toast } from 'react-hot-toast';
 import { fetchContacts, syncContact, selectContactPriority, updateContactMembership, freshSyncContacts, addContact, hideContact, updateContactDisplayName } from '../store/slices/contactSlice';
 import logger from '../utils/logger';
-import SyncProgressIndicator from './SyncProgressIndicator';
 import { SYNC_STATES } from '../utils/syncUtils';
 import { getSocket, initializeSocket } from '../utils/socket';
 import { format } from 'date-fns';
 import PriorityBubble from './PriorityBubble';
-import ChatView from './ChatView';
 import api from '../utils/api';
 import { BiSolidHide } from "react-icons/bi";
 import { MdCloudSync } from "react-icons/md";
 import { FiEdit3 } from "react-icons/fi";
+import useAvatarCache from '../hooks/useAvatarCache';
+import { FiRefreshCw } from "react-icons/fi";
 import ContactAvatar from './ContactAvatar';
+import '../styles/ShakeAnimation.css';
 
 const AcknowledgmentModal = ({ isOpen, onClose }) => {
   const modalRef = React.useRef();
@@ -40,7 +41,7 @@ const AcknowledgmentModal = ({ isOpen, onClose }) => {
 
   return (
     <div className="fixed inset-0 bg-black/75 flex items-center justify-center z-50">
-      <div 
+      <div
         ref={modalRef}
         className="bg-[#24283b] rounded-lg p-6 max-w-md w-full mx-4"
       >
@@ -118,7 +119,7 @@ const ContactItem = memo(({ contact, onClick, isSelected }) => {
       setIsEditing(false);
     }
   };
-  
+
   return (
     <div
       className={`relative flex items-center px-4 py-3 cursor-pointer hover:bg-gray-100 ${
@@ -129,7 +130,7 @@ const ContactItem = memo(({ contact, onClick, isSelected }) => {
       onMouseLeave={() => setShowTooltip(false)}
     >
       <PriorityBubble priority={priority} />
-      
+
       {showTooltip && (
         <div className="absolute right-2 top-1/2 transform -translate-y-1/2 flex gap-2 bg-[#1a1b26] p-1 rounded shadow-lg z-10">
           <button
@@ -148,7 +149,7 @@ const ContactItem = memo(({ contact, onClick, isSelected }) => {
           </button>
         </div>
       )}
-      
+
       <div className="w-10 h-10 rounded-full bg-[#757575] flex items-center justify-center flex-shrink-0">
         <ContactAvatar contact={contact} size={40} />
       </div>
@@ -200,6 +201,11 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
   const [showAcknowledgment, setShowAcknowledgment] = useState(false);
   const [hasShownAcknowledgment, setHasShownAcknowledgment] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  // syncRequestId is used in the refreshContacts function
+  const [syncRequestId, setSyncRequestId] = useState(null);
+  const [refreshCooldown, setRefreshCooldown] = useState(false);
+  const [refreshTooltip, setRefreshTooltip] = useState('');
+  const refreshButtonRef = useRef(null);
 
   const loadContactsWithRetry = useCallback(async (retryCount = 0) => {
     try {
@@ -235,20 +241,100 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
   }, [dispatch, syncProgress]);
 
   const handleRefresh = async () => {
+    // Check if we're in cooldown period
+    if (refreshCooldown) {
+      // IMPROVED: More engaging messages when clicking refresh multiple times
+      const messages = [
+        'Whoa there! Still refreshing, give it a moment...',
+        'Patience, young padawan. Contacts are still syncing...',
+        'Hold your horses! Sync in progress...',
+        "I'm working as fast as I can! Still syncing...",
+        "Rome wasn't built in a day, and neither is your contact list. Still syncing...",
+      ];
+      const randomMessage = messages[Math.floor(Math.random() * messages.length)];
+      setRefreshTooltip(randomMessage);
+
+      // Shake the button to provide visual feedback
+      if (refreshButtonRef.current) {
+        refreshButtonRef.current.classList.add('shake-animation');
+        setTimeout(() => {
+          refreshButtonRef.current?.classList.remove('shake-animation');
+        }, 500);
+      }
+      return;
+    }
+
+    // Check if we've refreshed recently (within 3 seconds)
+    const now = Date.now();
+    if (now - lastManualRefreshTime < 3000) {
+      toast.info('Please wait a moment before refreshing again');
+      return;
+    }
+
+    // CRITICAL FIX: Set a timeout to ensure we don't get stuck
+    const syncTimeout = setTimeout(() => {
+      if (syncProgress.state === SYNC_STATES.SYNCING) {
+        logger.warn('[WhatsAppContactList] Sync timeout reached, forcing completion');
+        setRefreshCooldown(false);
+        setIsRefreshing(false);
+        setSyncProgress({
+          state: SYNC_STATES.COMPLETED,
+          message: 'Sync timed out, showing available contacts',
+          progress: 100
+        });
+        dispatch(fetchContacts());
+      }
+    }, 60000); // 1 minute timeout
+
     try {
       setIsRefreshing(true);
+      setRefreshCooldown(true);
+      setLastManualRefreshTime(now);
+
       setSyncProgress({
         state: SYNC_STATES.SYNCING,
         message: 'Starting fresh sync...',
         progress: 0
       });
+
       const result = await dispatch(freshSyncContacts()).unwrap();
-      setSyncProgress({
-        state: SYNC_STATES.COMPLETED,
-        message: 'Sync completed successfully',
-        progress: 100
-      });
-      toast.success(result?.message || 'Contacts refreshed successfully');
+
+      // Check if we have a request ID to track
+      if (result?.meta?.sync_info?.request_id) {
+        setSyncRequestId(result.meta.sync_info.request_id);
+      }
+
+      // Check if sync is still in progress
+      if (result?.meta?.sync_info?.is_syncing) {
+        setSyncProgress({
+          state: SYNC_STATES.SYNCING,
+          message: 'Sync in progress...',
+          progress: result?.meta?.sync_info?.progress || 10
+        });
+
+        // Start polling for sync status if we have a request ID
+        if (result?.meta?.sync_info?.request_id) {
+          pollSyncStatus(result.meta.sync_info.request_id);
+        }
+
+        toast.success('Contacts are being refreshed in the background');
+      } else {
+        // Sync completed immediately
+        setSyncProgress({
+          state: SYNC_STATES.COMPLETED,
+          message: 'Sync completed successfully',
+          progress: 100
+        });
+        toast.success(result?.message || 'Contacts refreshed successfully');
+
+        // Reset cooldown after a short delay
+        setTimeout(() => {
+          setRefreshCooldown(false);
+        }, 2000);
+
+        // Clear the sync timeout
+        clearTimeout(syncTimeout);
+      }
     } catch (error) {
       const errorMsg = error?.message || String(error);
       let errorMessage = 'Failed to refresh contacts.';
@@ -257,16 +343,186 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
       } else if (errorMsg.toLowerCase().includes('failed')) {
         errorMessage = errorMsg;
       }
-      toast.success('Fresh sync stopped');
+
+      toast.error('Sync encountered an issue: ' + errorMessage);
       setSyncProgress({
         state: SYNC_STATES.ERROR,
         message: errorMessage,
         progress: 0
       });
+
+      // Reset cooldown after error
+      setRefreshCooldown(false);
+
+      // Clear the sync timeout
+      clearTimeout(syncTimeout);
     } finally {
       setIsRefreshing(false);
+
+      // Clear tooltip after a delay
+      setTimeout(() => {
+        setRefreshTooltip('');
+      }, 3000);
     }
   };
+
+  // Function to poll sync status
+  const pollSyncStatus = useCallback((requestId) => {
+    if (!requestId) return;
+
+    let pollCount = 0;
+    const maxPolls = 15; // Maximum number of polls (15 * 2s = 30s)
+    let consecutiveErrors = 0;
+    let lastProgress = 0;
+    let stuckCount = 0;
+
+    const pollInterval = setInterval(async () => {
+      try {
+        pollCount++;
+
+        // Get sync status from API
+        const response = await api.get(`/api/v1/whatsapp/syncStatus?requestId=${requestId}`);
+        const statusData = response.data;
+
+        logger.info('[WhatsAppContactList] Sync status poll:', {
+          requestId,
+          pollCount,
+          status: statusData
+        });
+
+        // CRITICAL FIX: Check if progress is stuck
+        if (statusData.progress === lastProgress) {
+          stuckCount++;
+        } else {
+          stuckCount = 0;
+          lastProgress = statusData.progress;
+        }
+
+        // If progress is stuck for too long (5 polls = 10 seconds), consider it completed
+        if (stuckCount >= 5) {
+          logger.warn('[WhatsAppContactList] Sync progress appears stuck, forcing completion');
+          clearInterval(pollInterval);
+          setRefreshCooldown(false);
+          setSyncProgress({
+            state: SYNC_STATES.COMPLETED,
+            message: 'Sync completed (timeout)',
+            progress: 100
+          });
+
+          // Fetch the updated contacts
+          dispatch(fetchContacts());
+          return;
+        }
+
+        // CRITICAL FIX: Double-check with /contacts endpoint if sync is really still in progress
+        if (pollCount % 3 === 0 && statusData.is_syncing) {
+          try {
+            const contactsResponse = await api.get('/api/v1/whatsapp/contacts');
+            const contactsData = contactsResponse.data;
+
+            // If contacts endpoint says sync is complete but status endpoint disagrees,
+            // trust the contacts endpoint
+            if (contactsData?.meta?.sync_info &&
+                !contactsData.meta.sync_info.is_syncing &&
+                statusData.is_syncing) {
+              logger.warn('[WhatsAppContactList] Sync status mismatch detected, forcing completion');
+              clearInterval(pollInterval);
+              setRefreshCooldown(false);
+              setSyncProgress({
+                state: SYNC_STATES.COMPLETED,
+                message: 'Sync completed successfully',
+                progress: 100
+              });
+
+              // Fetch the updated contacts
+              dispatch(fetchContacts());
+              return;
+            }
+          } catch (contactsError) {
+            logger.error('[WhatsAppContactList] Error checking contacts endpoint:', contactsError);
+          }
+        }
+
+        if (!statusData.is_syncing) {
+          // Sync completed
+          clearInterval(pollInterval);
+          setRefreshCooldown(false);
+          setSyncProgress({
+            state: SYNC_STATES.COMPLETED,
+            message: 'Sync completed successfully',
+            progress: 100
+          });
+
+          // Fetch the updated contacts
+          dispatch(fetchContacts());
+
+          toast.success('Contacts refreshed successfully');
+        } else {
+          // Update progress
+          setSyncProgress({
+            state: SYNC_STATES.SYNCING,
+            message: statusData.message || 'Sync in progress...',
+            progress: statusData.progress || 50
+          });
+        }
+
+        // Stop polling after max attempts
+        if (pollCount >= maxPolls) {
+          clearInterval(pollInterval);
+          setRefreshCooldown(false);
+          setSyncProgress({
+            state: SYNC_STATES.COMPLETED,
+            message: 'Sync completed (timeout)',
+            progress: 100
+          });
+
+          // Fetch the updated contacts anyway
+          dispatch(fetchContacts());
+        }
+
+        // Reset consecutive errors counter on success
+        consecutiveErrors = 0;
+      } catch (error) {
+        logger.error('[WhatsAppContactList] Error polling sync status:', error);
+        consecutiveErrors++;
+
+        // If polling fails consistently, stop after fewer attempts
+        if (consecutiveErrors >= 3 || pollCount > 5) {
+          clearInterval(pollInterval);
+          setRefreshCooldown(false);
+          setSyncProgress({
+            state: SYNC_STATES.COMPLETED,
+            message: 'Sync status unknown, showing available contacts',
+            progress: 100
+          });
+
+          // Fetch whatever contacts are available
+          dispatch(fetchContacts());
+        }
+      }
+    }, 2000); // Poll every 2 seconds
+
+    // Safety cleanup after 2 minutes
+    setTimeout(() => {
+      if (syncStatusPollingRef.current === pollInterval) {
+        clearInterval(pollInterval);
+        logger.info('[WhatsAppContactList] Safety cleanup triggered for sync polling');
+        setSyncProgress({
+          state: SYNC_STATES.COMPLETED,
+          message: 'Sync timed out',
+          progress: 100
+        });
+      }
+      if (refreshCooldown) {
+        setRefreshCooldown(false);
+        setSyncProgress({
+          state: SYNC_STATES.COMPLETED,
+          message: 'Sync status polling timed out',
+          progress: 100
+        });
+      }
+    }, 120000);
+  }, [dispatch, refreshCooldown]);
 
   const handleContactSelect = useCallback(async (contact) => {
     try {
@@ -334,6 +590,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
     }
   }, [onContactSelect, dispatch]);
 
+  // This function is used by child components via props
   const handleContactUpdate = useCallback((updatedContact) => {
     dispatch(updateContactMembership({ contactId: updatedContact.id, updatedContact }));
   }, [dispatch]);
@@ -366,10 +623,25 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
   useEffect(() => {
     const initSocket = async () => {
       try {
-        await initializeSocket();
-        const socket = getSocket();
-        if (!socket || !session?.user?.id) return;
+        // Add explicit check for valid session before initializing socket
+        if (!session?.access_token || !session?.user?.id) {
+          logger.warn('[WhatsAppContactList] Cannot initialize socket - no valid session');
+          return; // Exit early if no valid session
+        }
 
+        logger.info('[WhatsAppContactList] Initializing socket with session:', { 
+          hasToken: !!session?.access_token,
+          userId: session?.user?.id 
+        });
+        
+        // Now attempt socket initialization with the validated session
+        const socket = await initializeSocket({ platform: 'whatsapp' });
+        
+        if (!socket) {
+          logger.error('[WhatsAppContactList] Failed to get socket instance');
+          return;
+        }
+        
         const handleSyncProgress = (data) => {
           if (data.userId === session.user.id) {
             setSyncProgress({
@@ -410,11 +682,17 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
         logger.error('[WhatsAppContactList] Socket initialization error:', error);
       }
     };
-    initSocket();
+    
+    // Only attempt to initialize the socket if we have a session
+    if (session?.access_token) {
+      initSocket();
+    } else {
+      logger.warn('[WhatsAppContactList] Skipping socket initialization - no session available');
+    }
   }, [session, loadContactsWithRetry]);
 
   useEffect(() => {
-    const isInitialSync = !hasShownAcknowledgment && contacts.length === 1 && 
+    const isInitialSync = !hasShownAcknowledgment && contacts.length === 1 &&
       contacts[0]?.display_name?.toLowerCase().includes('whatsapp bridge bot');
     if (isInitialSync) {
       setShowAcknowledgment(true);
@@ -422,25 +700,30 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
     }
   }, [hasShownAcknowledgment, contacts]);
 
+  // Initialize avatar cache hook
+  const { prefetchAvatars, clearExpiredAvatars } = useAvatarCache();
+
+  // Prefetch avatars for visible contacts
   useEffect(() => {
-    // Debug - check if any contacts have avatar URLs
     if (contacts && contacts.length > 0) {
-      // Look for avatar_url at the ROOT level
+      // Get contacts with avatar URLs
       const contactsWithAvatars = contacts.filter(c => c.avatar_url);
       console.log(`Found ${contactsWithAvatars.length} contacts with avatars out of ${contacts.length} total`);
-      if (contactsWithAvatars.length > 0) {
-        console.log('Sample avatar URL:', contactsWithAvatars[0].avatar_url);
-        console.log('Sample contact:', contactsWithAvatars[0]);
-      }
+
+      // Prefetch avatars in the background
+      prefetchAvatars(contactsWithAvatars);
+
+      // Clear expired avatars once per session
+      clearExpiredAvatars(7); // Clear avatars older than 7 days
     }
-  }, [contacts]);
+  }, [contacts, prefetchAvatars, clearExpiredAvatars]);
 
   const filteredContacts = useMemo(() => {
     const displayNameMap = new Map();
     return contacts.filter(contact => {
       const displayName = contact.display_name?.toLowerCase() || '';
       const isBridgeBot = displayName === 'whatsapp bridge bot';
-      const isStatusBroadcast = displayName.includes('whatsapp status') || 
+      const isStatusBroadcast = displayName.includes('whatsapp status') ||
                                displayName.includes('broadcast');
       if (isBridgeBot || isStatusBroadcast) return false;
 
@@ -461,36 +744,65 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
 
   const searchedContacts = useMemo(() => {
     if (!searchQuery.trim()) return filteredContacts;
-    return filteredContacts.filter(contact => 
+    return filteredContacts.filter(contact =>
       contact.display_name?.toLowerCase().includes(searchQuery.toLowerCase())
     );
   }, [filteredContacts, searchQuery]);
 
   return (
     <>
-      <AcknowledgmentModal 
-        isOpen={showAcknowledgment} 
-        onClose={() => setShowAcknowledgment(false)} 
+      <AcknowledgmentModal
+        isOpen={showAcknowledgment}
+        onClose={() => setShowAcknowledgment(false)}
       />
-      
+
       <div className="flex flex-col h-full w-[100%] md:w-full bg-white">
         {/* Header */}
         <div className="flex items-center justify-between p-4 bg-neutral-900 border-b border-gray-200">
           <h1 className="text-[#ece5dd] font-bold text-xl">Chats</h1>
-          <div className="flex items-center space-x-2">
-            <MdCloudSync className="text-[#66b5ac] w-6 h-6" />
-            <button 
-              onClick={handleRefresh} 
-              disabled={loading || isRefreshing}
-              className={`bg-neutral-900 border-white/10 inline-flex px-3 py-1 md:py-2 items-center justify-center rounded-2xl text-sm ${
-                loading || isRefreshing ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-70'
-              }`}
-            >
-              Refresh
-            </button>
+          <div className="flex items-center space-x-2 relative">
+            {isRefreshing ? (
+              <MdCloudSync className="animate-spin text-[#66b5ac] w-6 h-6" />
+            ) : refreshCooldown ? (
+              <MdCloudSync className="text-[#66b5ac] w-6 h-6 pulse-animation" />
+            ) : (
+              <FiRefreshCw className="text-[#66b5ac] w-6 h-6" />
+            )}
+            <div className="flex flex-col">
+              <button
+                ref={refreshButtonRef}
+                onClick={handleRefresh}
+                disabled={loading || isRefreshing}
+                className={`bg-neutral-900 border-white/10 inline-flex px-3 py-1 md:py-2 items-center justify-center rounded-2xl text-sm ${
+                  loading || isRefreshing ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-70'
+                } ${refreshCooldown ? 'bg-gray-700' : ''}`}
+                onMouseEnter={() => refreshCooldown && setRefreshTooltip('Sync in progress')}
+                onMouseLeave={() => setRefreshTooltip('')}
+              >
+                {isRefreshing ? 'Syncing...' : refreshCooldown ? 'Syncing...' : 'Refresh'}
+                {syncProgress && syncProgress.state === SYNC_STATES.SYNCING && syncProgress.progress > 0 && (
+                  <span className="ml-1 text-xs">{syncProgress.progress}%</span>
+                )}
+              </button>
+
+              {/* Progress bar */}
+              {syncProgress && syncProgress.state === SYNC_STATES.SYNCING && (
+                <div className="sync-progress-container">
+                  <div
+                    className="sync-progress-bar"
+                    style={{ width: `${syncProgress.progress || 0}%` }}
+                  ></div>
+                </div>
+              )}
+            </div>
+            {refreshTooltip && (
+              <div className="absolute top-full mt-2 right-0 bg-black text-white text-xs rounded py-1 px-2 z-10">
+                {refreshTooltip}
+              </div>
+            )}
           </div>
         </div>
-        
+
         {/* Search Input */}
         <div className="sticky top-0 z-10 p-4 bg-white border-b border-gray-200">
           <div className="relative">
@@ -501,17 +813,17 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
               placeholder="Search contacts..."
               className="w-full bg-white text-black px-10 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-1 focus:ring-[#075e54] placeholder-gray-500"
             />
-            <svg 
-              className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" 
-              fill="none" 
-              stroke="currentColor" 
+            <svg
+              className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5"
+              fill="none"
+              stroke="currentColor"
               viewBox="0 0 24 24"
             >
-              <path 
-                strokeLinecap="round" 
-                strokeLinejoin="round" 
-                strokeWidth={2} 
-                d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" 
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
               />
             </svg>
             {searchQuery && (
@@ -520,11 +832,11 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
                 className="absolute bg-neutral-800 bg-opacity-40 rounded-lg right-3 top-1/2 transform -translate-y-1/2 text-gray-900 hover:text-green-900 w-auto"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path 
-                    strokeLinecap="round" 
-                    strokeLinejoin="round" 
-                    strokeWidth={2} 
-                    d="M6 18L18 6M6 6l12 12" 
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
                   />
                 </svg>
               </button>
@@ -539,7 +851,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
           ) : error ? (
             <div className="flex flex-col items-center justify-center p-4">
               <p className="text-red-500 mb-2">Failed to load contacts: {error}</p>
-              <button 
+              <button
                 onClick={() => loadContactsWithRetry()}
                 className="px-4 py-2 bg-[#075e54] text-white rounded hover:bg-[#064c44] transition-colors"
               >
@@ -549,10 +861,10 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
           ) : !searchedContacts?.length ? (
             <div className="flex flex-col items-center justify-center p-4">
               <p className="text-gray-500">
-                {searchQuery 
+                {searchQuery
                   ? `No contacts found matching "${searchQuery}"`
-                  : syncProgress 
-                    ? 'Syncing contacts...' 
+                  : syncProgress
+                    ? 'Syncing contacts...'
                     : 'Application syncs new contacts with new messages 🔃'
                 }
               </p>
@@ -605,4 +917,4 @@ WhatsAppContactList.propTypes = {
   selectedContactId: PropTypes.number
 };
 
-export default WhatsAppContactList; 
+export default WhatsAppContactList;

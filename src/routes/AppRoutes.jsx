@@ -7,6 +7,7 @@ import Dashboard from '../pages/Dashboard';
 import NewOnboarding from '../pages/NewOnboarding';
 import { ForgotPassword } from '../pages/Signup';
 import ResetPassword from '../pages/ResetPassword';
+import SimpleAuthCallback from '../components/SimpleAuthCallback';
 import logger from '../utils/logger';
 import { clearProblematicStorage } from '../utils/sessionRecovery';
 import { isWhatsAppConnected } from '../utils/connectionStorage';
@@ -18,9 +19,15 @@ const AppRoutes = () => {
 
   // Clear problematic localStorage items on mount
   useEffect(() => {
-    // Clear any problematic localStorage items that might be causing issues
-    clearProblematicStorage();
-    logger.info('[AppRoutes] Cleared problematic localStorage items');
+    // CRITICAL FIX: Don't clear localStorage during auth callback
+    const isAuthRoute = window.location.pathname.includes('/auth/callback');
+    if (!isAuthRoute) {
+      // Clear any problematic localStorage items that might be causing issues
+      clearProblematicStorage();
+      logger.info('[AppRoutes] Cleared problematic localStorage items');
+    } else {
+      logger.info('[AppRoutes] On auth route, skipping localStorage cleanup');
+    }
   }, []);
 
   // Recovery mechanism for WhatsApp connection state from localStorage
@@ -101,13 +108,10 @@ const AppRoutes = () => {
         path="/dashboard"
         element={
           !session ? (
-            // CRITICAL FIX: If we don't have a session, redirect to login
+            // If we don't have a session, redirect to login
             <Navigate to="/login" replace />
-          ) : !isComplete ? (
-            // If onboarding is not complete, redirect to the appropriate step
-            <Navigate to={getPostAuthRedirect()} replace />
           ) : (
-            // If we have a session and onboarding is complete, show the dashboard
+            // If we have a session, show the dashboard
             <Dashboard />
           )
         }
@@ -119,8 +123,6 @@ const AppRoutes = () => {
         element={
           !session ? (
             <Navigate to="/login" replace />
-          ) : isComplete ? (
-            <Navigate to="/dashboard" replace />
           ) : (
             <NewOnboarding />
           )
@@ -133,12 +135,20 @@ const AppRoutes = () => {
         element={
           !session ? (
             <Navigate to="/login" replace />
-          ) : isComplete ? (
-            <Navigate to="/dashboard" replace />
           ) : (
             <NewOnboarding />
           )
         }
+      />
+
+      {/* Google Auth Callback Route - Handle both our custom callback and Supabase's callback */}
+      <Route
+        path="/auth/google/callback"
+        element={<SimpleAuthCallback />}
+      />
+      <Route
+        path="/auth/callback"
+        element={<SimpleAuthCallback />}
       />
 
       {/* Default Route */}

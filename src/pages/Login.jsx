@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, Link } from 'react-router-dom';
-import { signIn } from '../store/slices/authSlice';
+import { signIn, signInWithGoogle } from '../store/slices/authSlice';
 import { toast } from 'react-hot-toast';
 import { FiEye, FiEyeOff } from 'react-icons/fi';
+import { FcGoogle } from 'react-icons/fc';
 import logger from '../utils/logger';
 import bgLeft from '../images/loginbg.png'
 import bgRight from '../images/loginbg2.png'
@@ -12,7 +13,7 @@ import '../styles/BorderStyles.css'
 const Login = () => {
   const dispatch = useDispatch();
   const navigate = useNavigate();
-  const { session, loading } = useSelector((state) => state.auth);
+  const { session, loading, googleAuthPending } = useSelector((state) => state.auth);
   const { isComplete } = useSelector((state) => state.onboarding);
 
   const [email, setEmail] = useState('');
@@ -80,6 +81,18 @@ const Login = () => {
   //   }
   // }, [dispatch]);
 
+  const handleGoogleSignIn = async () => {
+    try {
+      setFormError(null);
+      await dispatch(signInWithGoogle()).unwrap();
+      // The page will be redirected by the Google OAuth flow
+    } catch (error) {
+      logger.error('[Login] Google sign-in error:', error);
+      setFormError(error.message || 'Failed to sign in with Google');
+      toast.error(error.message || 'Failed to sign in with Google');
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (isSubmitting) return;
@@ -93,19 +106,19 @@ const Login = () => {
     try {
       setIsSubmitting(true);
       logger.info('[Login] Attempting sign in for:', email);
-      
+
       // Show loading toast
       // const loadingToast = toast.loading('Signing in...');
-      
+
       // Dispatch sign in action
       const result = await dispatch(signIn({ email, password })).unwrap();
-      
+
       logger.info('[Login] Sign in result:', {
         hasSession: !!result?.session,
         hasUser: !!result?.user
       });
       // toast.dismiss(loadingToast);
-      
+
       if (!result?.session) {
         throw new Error('Invalid login credentials');
         toast.dismiss(loadingToast);
@@ -117,11 +130,11 @@ const Login = () => {
       // toast.dismiss(loadingToast);
       setAttempts(prev => prev + 1);
       logger.error('[Login] Sign in failed:', error);
-      
+
       // Safely extract error message
       const errorMsg = error?.message || String(error);
       let errorMessage = 'Failed to sign in. Please try again.';
-      
+
       if (errorMsg.includes('Invalid login credentials') || errorMsg.includes('Invalid login')) {
         errorMessage = 'Invalid email or password. Please check your credentials.';
       } else if (errorMsg.includes('not found') || errorMsg.includes('does not exist')) {
@@ -133,10 +146,10 @@ const Login = () => {
       } else if (errorMsg.includes('not confirmed')) {
         errorMessage = 'Email not verified. Please check your inbox and verify your email.';
       }
-      
+
       setFormError(errorMessage);
       toast.error(errorMessage);
-      
+
       if (attempts >= 2) {
         toast.error('Having trouble? Try resetting your password or contact support.', {
           duration: 5000
@@ -235,7 +248,7 @@ const Login = () => {
         <form className="mt-8 space-y-6 bg-neutral-900 border border-white/10 p-6 rounded-3xl" onSubmit={handleSubmit}>
           <div className="rounded-md shadow-sm -space-y-px">
             <div>
-              
+
               <label htmlFor="email-address" className="sr-only text-gray-600">
                 Email address
               </label>
@@ -293,10 +306,10 @@ const Login = () => {
             </div>
           </div>
 
-          <div>
+          <div className="space-y-3">
             <button
               type="submit"
-              disabled={isSubmitting || loading}
+              disabled={isSubmitting || loading || googleAuthPending}
               className={`group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 ${
                 (isSubmitting || loading) ? 'opacity-50 cursor-not-allowed' : ''
               }`}
@@ -310,6 +323,34 @@ const Login = () => {
                 </span>
               ) : null}
               {isSubmitting || loading ? 'Signing in...' : 'Sign in'}
+            </button>
+
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-gray-600"></div>
+              </div>
+              <div className="relative flex justify-center text-sm">
+                <span className="px-2 bg-neutral-900 text-gray-400">Or continue with</span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleGoogleSignIn}
+              disabled={isSubmitting || loading || googleAuthPending}
+              className={`w-full flex items-center justify-center py-2 px-4 border border-gray-700 rounded-md shadow-sm text-sm font-medium text-gray-300 bg-neutral-800 hover:bg-neutral-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 ${
+                (isSubmitting || loading || googleAuthPending) ? 'opacity-50 cursor-not-allowed' : ''
+              }`}
+            >
+              {googleAuthPending ? (
+                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              ) : (
+                <FcGoogle className="h-5 w-5 mr-2" />
+              )}
+              {googleAuthPending ? 'Connecting...' : 'Sign in with Google'}
             </button>
           </div>
         </form>
