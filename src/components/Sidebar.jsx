@@ -18,6 +18,7 @@ import DFLogo from '../images/DF.png'
 import SettingsMenu from './SetttingsMenu';
 import whatsappIcon from '../images/whatsapp-icon.svg';
 import matrixIcon from '../images/matrix-icon.svg';
+import telegramIcon from '../images/telegram-icon.svg'; // You'll need to add this image
 import '../styles/platformSwitcher.css';
 
 const TutorialModal = ({ isOpen, onClose }) => {
@@ -101,7 +102,7 @@ const TutorialModal = ({ isOpen, onClose }) => {
   );
 };
 
-const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewToggle, isAnalyticsView, onConnectPlatform }) => {
+const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewToggle, isAnalyticsView, onConnectPlatform, isCollapsed = false }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const dispatch = useDispatch();
@@ -111,11 +112,37 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
   const [showPlatformMenu, setShowPlatformMenu] = useState(false);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
 
-  // Default platforms - can be filtered based on accounts
-  const availablePlatforms = [
-    { id: 'whatsapp', name: 'WhatsApp', icon: whatsappIcon },
-    // { id: 'matrix', name: 'Matrix', icon: matrixIcon }
-  ];
+  // Get connected and available platforms
+  const getConnectedPlatforms = () => {
+    return accounts
+      .filter(account =>
+        // Filter out matrix as it's a protocol, not a messaging platform
+        account.platform !== 'matrix' &&
+        (account.status === 'active' || account.status === 'pending')
+      )
+      .map(account => ({
+        id: account.platform,
+        name: account.name || (account.platform === 'whatsapp' ? 'WhatsApp' :
+                              account.platform === 'telegram' ? 'Telegram' : account.platform),
+        icon: account.platform === 'whatsapp' ? whatsappIcon :
+              account.platform === 'telegram' ? telegramIcon : null,
+        isConnected: true
+      }));
+  };
+
+  const getAvailablePlatforms = () => {
+    const connected = getConnectedPlatforms().map(p => p.id);
+    const available = [
+      { id: 'whatsapp', name: 'WhatsApp', icon: whatsappIcon },
+      { id: 'telegram', name: 'Telegram', icon: telegramIcon },
+      // { id: 'matrix', name: 'Matrix', icon: matrixIcon }
+    ];
+
+    return available.filter(p => !connected.includes(p.id));
+  };
+
+  const connectedPlatforms = getConnectedPlatforms();
+  const availablePlatforms = getAvailablePlatforms();
 
   const handlePlatformClick = (platform) => {
     onPlatformSelect(platform);
@@ -157,42 +184,57 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
   }, [showSettingsMenu, showPlatformMenu]);
 
   return (
-    <div className="relative w-[13rem] bg-dark-darker flex flex-col h-full bg-neutral-900">
-      <div className="p-6">
+    <div className={`relative flex flex-col h-full bg-neutral-900 transition-all duration-300 ease-in-out ${isCollapsed ? 'w-16' : 'w-[13rem]'}`}>
+      <div className={`p-6 ${isCollapsed ? 'flex justify-center' : ''}`}>
         <div className="flex items-center">
-          <img className="h-8 w-8 rounded-full mr-3" src={DFLogo} alt="DailyFix Logo" />
-          <span className="text-white text-xl font-semibold">Daily</span><span className="text-xl font-semibold ml-0 bg-gradient-to-r from-purple-400 to-pink-600 bg-clip-text text-transparent">Fix</span>
+          <img className={`h-8 w-8 rounded-full ${isCollapsed ? '' : 'mr-3'}`} src={DFLogo} alt="DailyFix Logo" />
+          {!isCollapsed && (
+            <>
+              <span className="text-white text-xl font-semibold">Daily</span>
+              <span className="text-xl font-semibold ml-0 bg-gradient-to-r from-purple-400 to-pink-600 bg-clip-text text-transparent">Fix</span>
+            </>
+          )}
         </div>
       </div>
 
       {/* Platform Switcher */}
-      <div className="px-6 mb-4">
-        {accounts.length > 0 && accounts.some(account =>
-          account.platform === 'whatsapp' && (account.status === 'active' || account.status === 'pending')
-        ) ? (
+      <div className={`${isCollapsed ? 'px-2' : 'px-6'} mb-4`}>
+        {connectedPlatforms.length > 0 ? (
           <div className="relative">
             <button
               data-platform-button
               onClick={togglePlatformMenu}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg transition-colors theme-transition ${isDarkTheme ? 'bg-neutral-800 text-white hover:bg-neutral-700' : 'bg-gray-100 text-gray-900 hover:bg-gray-200'}`}
+              className={`w-full flex items-center justify-between ${isCollapsed ? 'px-2' : 'px-3'} py-2 rounded-lg transition-colors theme-transition ${isDarkTheme ? 'bg-neutral-800 text-white hover:bg-neutral-700' : 'bg-gray-100 text-gray-900 hover:bg-gray-200'}`}
             >
               <div className="flex items-center">
-                <img
-                  src={selectedPlatform === 'matrix' ? matrixIcon : whatsappIcon}
-                  alt={selectedPlatform === 'matrix' ? 'Matrix' : 'WhatsApp'}
-                  className="w-5 h-5 mr-2"
-                />
-                <span className="text-sm font-medium">
-                  {selectedPlatform === 'matrix' ? 'Matrix' : 'WhatsApp'}
-                </span>
+                {/* Show icon for current platform */}
+                {connectedPlatforms.find(p => p.id === selectedPlatform)?.icon && (
+                  <img
+                    src={connectedPlatforms.find(p => p.id === selectedPlatform)?.icon}
+                    alt={connectedPlatforms.find(p => p.id === selectedPlatform)?.name}
+                    className={`w-5 h-5 ${isCollapsed ? '' : 'mr-2'}`}
+                  />
+                )}
+                {!isCollapsed && (
+                  <span className="text-sm font-medium">
+                    {connectedPlatforms.find(p => p.id === selectedPlatform)?.name || selectedPlatform}
+                  </span>
+                )}
               </div>
-              <FiChevronDown className="w-4 h-4" />
+              {!isCollapsed && <FiChevronDown className="w-4 h-4" />}
             </button>
 
             {/* Platform Menu */}
             {showPlatformMenu && (
               <div className={`absolute top-full left-0 w-full mt-1 rounded-lg shadow-lg overflow-hidden z-50 platform-menu theme-transition ${isDarkTheme ? 'bg-neutral-800' : 'bg-white border border-gray-200'}`}>
-                {availablePlatforms.map(platform => (
+                {/* Connected Platforms */}
+                {connectedPlatforms.length > 0 && (
+                  <div className={`px-3 py-1 text-xs theme-transition ${isDarkTheme ? 'text-gray-400' : 'text-gray-500'}`}>
+                    Connected
+                  </div>
+                )}
+
+                {connectedPlatforms.map(platform => (
                   <button
                     key={platform.id}
                     onClick={() => handlePlatformClick(platform.id)}
@@ -204,6 +246,28 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
                     <span>{platform.name}</span>
                   </button>
                 ))}
+
+                {/* Available Platforms */}
+                {availablePlatforms.length > 0 && (
+                  <>
+                    <div className={`px-3 py-1 text-xs theme-transition ${isDarkTheme ? 'text-gray-400' : 'text-gray-500'}`}>
+                      Add Platform
+                    </div>
+
+                    {availablePlatforms.map(platform => (
+                      <button
+                        key={platform.id}
+                        onClick={onConnectPlatform}
+                        className={`w-full flex items-center px-3 py-2 text-xs bg-neutral-800 theme-transition ${isDarkTheme ? 'text-gray-300 hover:bg-neutral-700 hover:text-white' : 'text-gray-700 hover:bg-gray-100'}`}
+                      >
+                        <div className="flex items-center bg-neutral-800">
+                          <img src={platform.icon} alt={platform.name} className="w-5 h-5 mr-2" />
+                          <span>+ Add {platform.name}</span>
+                        </div>
+                      </button>
+                    ))}
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -223,7 +287,7 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
         ) && (
           <button
             onClick={() => onViewToggle(!isAnalyticsView)}
-            className={`w-full flex items-center space-x-3 px-3 py-2 rounded-lg transition-colors theme-transition ${
+            className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'space-x-3'} ${isCollapsed ? 'px-2' : 'px-3'} py-2 rounded-lg transition-colors theme-transition ${
               isAnalyticsView
                 ? 'bg-purple-600 text-white'
                 : isDarkTheme
@@ -234,12 +298,12 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
             {isAnalyticsView ? (
               <>
                 <BsFillInboxesFill className="w-5 h-5" />
-                <span className="text-sm font-medium">Inbox</span>
+                {!isCollapsed && <span className="text-sm font-medium">Inbox</span>}
               </>
             ) : (
               <>
                 <FiBarChart2 className="w-5 h-5" />
-                <span className="text-sm font-medium">Analytics</span>
+                {!isCollapsed && <span className="text-sm font-medium">Analytics</span>}
               </>
             )}
           </button>
@@ -247,14 +311,14 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
 
         <button
           onClick={() => navigate('/explore')}
-          className={`w-full flex bg-neutral-800 items-center space-x-3 px-3 py-2 rounded-lg transition-colors ${
+          className={`w-full flex bg-neutral-800 items-center ${isCollapsed ? 'justify-center' : 'space-x-3'} ${isCollapsed ? 'px-2' : 'px-3'} py-2 rounded-lg transition-colors ${
             location.pathname === '/explore'
               ? 'bg-[#25D366] text-white'
               : 'text-gray-400 hover:bg-neutral-700 hover:text-white'
           }`}
         >
           <FiCompass className="w-5 h-5" />
-          <span className="text-sm font-medium">Explore</span>
+          {!isCollapsed && <span className="text-sm font-medium">Explore</span>}
         </button>
 
         {/* <button

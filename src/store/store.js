@@ -7,6 +7,7 @@ import { progressReducer } from './slices/progressSlice';
 import { contactReducer } from './slices/contactSlice';
 import { messageReducer } from './slices/messageSlice';
 import socketReducer from './slices/socketSlice';
+import matrixReducer from './slices/matrixSlice';
 import logger from '../utils/logger';
 import { tokenManager } from '../utils/tokenManager';
 
@@ -14,7 +15,7 @@ import { tokenManager } from '../utils/tokenManager';
 const authPersistConfig = {
   key: 'auth',
   storage,
-  whitelist: ['session', 'user', 'hasInitialized', 'matrixCredentials'] // Persist these fields
+  whitelist: ['session', 'user', 'hasInitialized'] // Persist these fields
 };
 
 // Configure persist for onboarding state
@@ -22,6 +23,13 @@ const onboardingPersistConfig = {
   key: 'onboarding',
   storage,
   whitelist: ['isComplete', 'currentStep', 'accounts', 'matrixConnected', 'whatsappConnected'] // Persist these fields
+};
+
+// Configure persist for matrix state
+const matrixPersistConfig = {
+  key: 'matrix',
+  storage,
+  whitelist: ['credentials'] // Only persist credentials
 };
 
 // Configure persist for contacts
@@ -34,6 +42,7 @@ const contactsPersistConfig = {
 const persistedAuthReducer = persistReducer(authPersistConfig, authReducer);
 const persistedOnboardingReducer = persistReducer(onboardingPersistConfig, onboardingReducer);
 const persistedContactReducer = persistReducer(contactsPersistConfig, contactReducer);
+const persistedMatrixReducer = persistReducer(matrixPersistConfig, matrixReducer);
 
 // Create auth state middleware
 const authMiddleware = (store) => (next) => (action) => {
@@ -109,7 +118,8 @@ const store = configureStore({
     progress: progressReducer,
     contacts: persistedContactReducer,
     messages: messageReducer,
-    socket: socketReducer
+    socket: socketReducer,
+    matrix: persistedMatrixReducer
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({

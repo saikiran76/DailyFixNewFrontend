@@ -1,17 +1,21 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FaTimes, FaWhatsapp, FaLock, FaCheck } from 'react-icons/fa';
+import { FaTelegram } from 'react-icons/fa6';
 import WhatsAppBridgeSetup from './WhatsAppBridgeSetup';
+import TelegramConnection from './TelegramConnection';
 import logger from '../utils/logger';
 import api from '../utils/api';
-import { useDispatch } from 'react-redux';
-import { setWhatsappConnected } from '../store/slices/onboardingSlice';
+import { useDispatch, useSelector } from 'react-redux';
+import { setWhatsappConnected, updateAccounts } from '../store/slices/onboardingSlice';
 import { fetchContacts } from '../store/slices/contactSlice';
-import { toast } from 'react-toastify';
+import { toast } from 'react-hot-toast';
+import '../styles/platformButtons.css';
 
 const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
   const dispatch = useDispatch();
-  const [step, setStep] = useState('intro'); // intro, matrix-setup, whatsapp-setup, success
+  const { accounts } = useSelector(state => state.onboarding);
+  const [step, setStep] = useState('intro'); // intro, matrix-setup, whatsapp-setup, telegram-setup, success
   const [loading, setLoading] = useState(false);
 
   // Handle matrix auto-initialization
@@ -75,37 +79,86 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
     // window.location.reload();
   };
 
+  // Handle Telegram connection completion
+  const handleTelegramComplete = (telegramAccount) => {
+    logger.info('[PlatformConnectionModal] Telegram connection completed');
+
+    // Update accounts in Redux store
+    dispatch(updateAccounts([...accounts, telegramAccount]));
+
+    setStep('success');
+  };
+
+  // Handle component mount and check for pre-selected platform
+  useEffect(() => {
+    if (isOpen) {
+      // Check if a platform was pre-selected
+      if (window.platformToConnect === 'telegram') {
+        setStep('telegram-setup');
+        // Clear the selection after using it
+        window.platformToConnect = null;
+      } else if (window.platformToConnect === 'whatsapp') {
+        // Start WhatsApp connection flow
+        initializeMatrix();
+        // Clear the selection after using it
+        window.platformToConnect = null;
+      } else {
+        setStep('intro');
+      }
+    }
+  }, [isOpen]);
+
   // Render different steps
   const renderStep = () => {
     switch (step) {
       case 'intro':
         return (
           <div className="text-center">
-            <FaWhatsapp className="text-green-500 text-5xl mx-auto mb-4" />
-            <h3 className="text-xl font-semibold mb-4">Connect WhatsApp</h3>
-            <div className="mb-6 text-left">
+            <h3 className="text-xl font-semibold mb-6">Connect a Messaging Platform</h3>
+            <p className="text-gray-300 mb-8">You need to connect a messaging platform to start using DailyFix.</p>
+
+            <div className="flex justify-center space-x-10 mb-8">
+              {/* WhatsApp Button */}
+              <div
+                className="platform-button group relative"
+                onClick={() => initializeMatrix()}
+              >
+                <div className="w-20 h-20 rounded-full bg-green-600 flex items-center justify-center transform transition-all duration-300 group-hover:scale-110 group-hover:shadow-lg">
+                  <FaWhatsapp className="text-white text-4xl" />
+                </div>
+                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                  <div className="bg-black bg-opacity-70 text-white text-sm py-1 px-3 rounded-lg mt-24">
+                    Connect WhatsApp
+                  </div>
+                </div>
+              </div>
+
+              {/* Telegram Button */}
+              <div
+                className="platform-button group relative"
+                onClick={() => setStep('telegram-setup')}
+              >
+                <div className="w-20 h-20 rounded-full bg-blue-500 flex items-center justify-center transform transition-all duration-300 group-hover:scale-110 group-hover:shadow-lg">
+                  <FaTelegram className="text-white text-4xl" />
+                </div>
+                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                  <div className="bg-black bg-opacity-70 text-white text-sm py-1 px-3 rounded-lg mt-24">
+                    Connect Telegram
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-8 border-t border-gray-700 pt-6 text-left">
               <div className="flex items-start mb-3">
                 <FaLock className="text-gray-500 mt-1 mr-2" />
                 <p className="text-gray-300">Your messages are end-to-end encrypted and secure.</p>
               </div>
-              <div className="flex items-start mb-3">
-                <FaCheck className="text-green-500 mt-1 mr-2" />
-                <p className="text-gray-300">Connect your WhatsApp to manage all your conversations in one place.</p>
-              </div>
               <div className="flex items-start">
                 <FaCheck className="text-green-500 mt-1 mr-2" />
-                <p className="text-gray-300">You'll need to scan a QR code with your phone to complete the connection.</p>
+                <p className="text-gray-300">Connect your messaging platforms to manage all your conversations in one place.</p>
               </div>
             </div>
-            <button
-              onClick={initializeMatrix}
-              disabled={loading}
-              className={`w-full py-3 rounded-lg ${
-                loading ? 'bg-purple-400' : 'bg-purple-600 hover:bg-purple-700'
-              } text-white font-medium`}
-            >
-              {loading ? 'Initializing...' : 'Connect WhatsApp'}
-            </button>
           </div>
         );
 
@@ -120,6 +173,17 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
           </div>
         );
 
+      case 'telegram-setup':
+        return (
+          <div>
+            <h3 className="text-xl font-semibold mb-4 text-center">Connect Telegram</h3>
+            <TelegramConnection
+              onComplete={handleTelegramComplete}
+              onCancel={() => setStep('intro')}
+            />
+          </div>
+        );
+
       case 'success':
         return (
           <div className="text-center">
@@ -128,7 +192,7 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
             </div>
             <h3 className="text-xl font-semibold mb-2">Connection Successful!</h3>
             <p className="text-gray-600 mb-6">
-              Your WhatsApp account has been successfully connected to DailyFix.
+              Your account has been successfully connected to DailyFix.
             </p>
             <button
               onClick={handleComplete}

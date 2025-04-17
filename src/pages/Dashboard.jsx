@@ -1,22 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import Sidebar from '../components/Sidebar';
 import WhatsAppContactList from '../components/WhatsAppContactList';
+import TelegramContactList from '../components/TelegramContactList';
 import ChatView from '../components/ChatView';
+import TelegramChatView from '../components/TelegramChatView';
 import AnalyticsDashboard from '../components/AnalyticsDashboard';
+import ResizablePanel from '../components/ResizablePanel';
 import AISuggestionFeedback from '../components/AISuggestionFeedback';
 import TourPopup from '../components/TourPopup';
 import PlatformConnectionModal from '../components/PlatformConnectionModal';
 import LogoutModal from '../components/LogoutModal';
 import api from '../utils/api';
 import { useDispatch, useSelector } from 'react-redux';
-import { fetchContacts, selectContactById } from '../store/slices/contactSlice';
+import { fetchContacts } from '../store/slices/contactSlice';
 import { connect as connectSocket } from '../store/slices/socketSlice';
 import { updateAccounts, setWhatsappConnected } from '../store/slices/onboardingSlice';
 import { isWhatsAppConnected } from '../utils/connectionStorage';
 import { isWhatsAppConnectedDB } from '../utils/connectionStorageDB';
 import logger from '../utils/logger';
+import '../styles/platformButtons.css';
 import { FiMenu, FiX } from 'react-icons/fi';
-import { IoArrowBack } from "react-icons/io5";
+import { IoArrowBack, IoChevronBackOutline, IoChevronForwardOutline } from "react-icons/io5";
+import { FaWhatsapp, FaTelegram } from 'react-icons/fa';
 
 const AcknowledgmentModal = ({ isOpen, onClose, whatsappConnected, userId }) => {
   const modalRef = React.useRef();
@@ -118,6 +123,7 @@ const Dashboard = () => {
   // Initialize showAcknowledgment based on WhatsApp connection status
   const [showAcknowledgment, setShowAcknowledgment] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   // Initialize showTourPopup based on WhatsApp connection status
   const [showTourPopup, setShowTourPopup] = useState(false);
   // Track if component is mounted to ensure proper rendering
@@ -138,8 +144,44 @@ const Dashboard = () => {
       setSelectedPlatform('whatsapp');
     }
 
+    // CRITICAL FIX: Check for Telegram connection in localStorage
+    try {
+      const connectionStatus = JSON.parse(localStorage.getItem('dailyfix_connection_status') || '{}');
+      const telegramConnected = connectionStatus.telegram === true;
+
+      if (telegramConnected) {
+        logger.info('[Dashboard] Found Telegram connection in localStorage (mount effect)');
+
+        // If we have no accounts or only WhatsApp, add Telegram
+        if (accounts.length === 0 || (accounts.length === 1 && accounts[0].platform === 'whatsapp')) {
+          const telegramAccount = {
+            id: 'telegram',
+            platform: 'telegram',
+            name: 'Telegram',
+            status: 'active'
+          };
+
+          const updatedAccounts = accounts.length === 0 ?
+            [telegramAccount] :
+            [...accounts, telegramAccount];
+
+          setAccounts(updatedAccounts);
+
+          // If no platform selected yet, select Telegram
+          if (!selectedPlatform) {
+            setSelectedPlatform('telegram');
+          }
+
+          // Also update Redux store
+          dispatch(updateAccounts(updatedAccounts));
+        }
+      }
+    } catch (error) {
+      logger.error('[Dashboard] Error checking Telegram connection status (mount effect):', error);
+    }
+
     return () => setIsMounted(false);
-  }, [whatsappConnected, accounts]);
+  }, [whatsappConnected, accounts, selectedPlatform, dispatch]);
   const [showConnectionModal, setShowConnectionModal] = useState(false);
   const [isContactListVisible, setIsContactListVisible] = useState(true);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
@@ -149,6 +191,22 @@ const Dashboard = () => {
   const [isAnalyticsView, setIsAnalyticsView] = useState(false);
   // State for controlling the feedback popup
   const [showFeedbackPopup, setShowFeedbackPopup] = useState(false);
+
+  // CRITICAL FIX: Log the selected platform and accounts for debugging
+  useEffect(() => {
+    if (selectedPlatform) {
+      logger.info(`[Dashboard] Selected platform: ${selectedPlatform}`);
+    }
+
+    logger.info(`[Dashboard] Current accounts: ${JSON.stringify(accounts)}`);
+
+    // CRITICAL FIX: If we have a Telegram account but selectedPlatform is not set to 'telegram',
+    // set it to 'telegram'
+    if (accounts.some(acc => acc.platform === 'telegram') && selectedPlatform !== 'telegram') {
+      logger.info('[Dashboard] Found Telegram account but platform not selected, selecting Telegram');
+      setSelectedPlatform('telegram');
+    }
+  }, [selectedPlatform, accounts]);
 
   // Show feedback popup when analytics view is enabled (with a delay)
   useEffect(() => {
@@ -164,10 +222,17 @@ const Dashboard = () => {
     return () => clearTimeout(timeoutId);
   }, [isAnalyticsView]);
 
-  // Get the latest contact data from Redux store
-  const selectedContact = useSelector(state =>
-    selectedContactId ? selectContactById(state, selectedContactId) : null
-  );
+  // Track the selected contact directly
+  const [selectedContact, setSelectedContact] = useState(null);
+
+  // CRITICAL FIX: Log the selected contact for debugging
+  useEffect(() => {
+    if (selectedContact) {
+      logger.info(`[Dashboard] Contact selected:`, selectedContact);
+    } else if (selectedContactId) {
+      logger.warn(`[Dashboard] Selected contact ID ${selectedContactId} not found in contacts`);
+    }
+  }, [selectedContact, selectedContactId]);
 
   // Initialize accounts from Redux store
   useEffect(() => {
@@ -225,6 +290,19 @@ const Dashboard = () => {
         }
       }
 
+      // Check for Telegram connection in localStorage
+      let telegramConnected = false;
+      try {
+        const connectionStatus = JSON.parse(localStorage.getItem('dailyfix_connection_status') || '{}');
+        telegramConnected = connectionStatus.telegram === true;
+
+        if (telegramConnected) {
+          logger.info('[Dashboard] Found Telegram connection in localStorage');
+        }
+      } catch (error) {
+        logger.error('[Dashboard] Error checking Telegram connection status:', error);
+      }
+
       // CRITICAL FIX: Always ensure we have a WhatsApp account if connected
       if (whatsappConnectedInCache && (!accounts.length || !accounts.some(acc => acc.platform === 'whatsapp'))) {
         logger.info('[Dashboard] Setting up WhatsApp account after connection detected');
@@ -235,11 +313,46 @@ const Dashboard = () => {
           status: 'active'
         };
 
-        setAccounts([whatsappAccount]);
+        const updatedAccounts = telegramConnected ?
+          [whatsappAccount, {
+            id: 'telegram',
+            platform: 'telegram',
+            name: 'Telegram',
+            status: 'active'
+          }] :
+          [whatsappAccount];
+
+        setAccounts(updatedAccounts);
         setSelectedPlatform('whatsapp');
 
         // Also update Redux store
-        dispatch(updateAccounts([whatsappAccount]));
+        dispatch(updateAccounts(updatedAccounts));
+      }
+
+      // CRITICAL FIX: Always ensure we have a Telegram account if connected
+      if (telegramConnected && (!accounts.length || !accounts.some(acc => acc.platform === 'telegram'))) {
+        logger.info('[Dashboard] Setting up Telegram account after connection detected');
+        const telegramAccount = {
+          id: 'telegram',
+          platform: 'telegram',
+          name: 'Telegram',
+          status: 'active'
+        };
+
+        const updatedAccounts = whatsappConnectedInCache ?
+          [{
+            id: 'whatsapp',
+            platform: 'whatsapp',
+            name: 'WhatsApp',
+            status: 'active'
+          }, telegramAccount] :
+          [telegramAccount];
+
+        setAccounts(updatedAccounts);
+        setSelectedPlatform('telegram');
+
+        // Also update Redux store
+        dispatch(updateAccounts(updatedAccounts));
       }
 
       // CRITICAL FIX: If whatsappConnected is true but no WhatsApp account in storeAccounts, add it
@@ -262,19 +375,42 @@ const Dashboard = () => {
         }
       }
 
+      // CRITICAL FIX: If telegramConnected is true but no Telegram account in storeAccounts, add it
+      if (telegramConnected && storeAccounts) {
+        const hasTelegramAccount = storeAccounts.some(acc =>
+          acc.platform === 'telegram' && (acc.status === 'active' || acc.status === 'pending'));
+
+        if (!hasTelegramAccount) {
+          logger.info('[Dashboard] Telegram is connected but missing from accounts, adding it');
+          const updatedAccounts = [...storeAccounts, {
+            id: 'telegram',
+            platform: 'telegram',
+            name: 'Telegram',
+            status: 'active'
+          }];
+          dispatch(updateAccounts(updatedAccounts));
+          setAccounts(updatedAccounts);
+          setSelectedPlatform('telegram');
+          return;
+        }
+      }
+
       // Determine if we should show the tour popup or acknowledgment modal
       // Only show tour popup if no WhatsApp account is connected
       const hasWhatsappAccount = storeAccounts && storeAccounts.some(acc =>
         acc.platform === 'whatsapp' && (acc.status === 'active' || acc.status === 'pending')
       );
 
-      const isWhatsappConnected = hasWhatsappAccount || whatsappConnected || whatsappConnectedInCache;
+      // Check if Telegram is connected - we'll use this later
+
+      // Update connection state variables
+      const whatsappIsConnected = hasWhatsappAccount || whatsappConnected || whatsappConnectedInCache;
 
       // Show tour popup only if WhatsApp is not connected
-      setShowTourPopup(!isWhatsappConnected);
+      setShowTourPopup(!whatsappIsConnected);
 
       // Show acknowledgment modal only if WhatsApp is connected
-      setShowAcknowledgment(isWhatsappConnected);
+      setShowAcknowledgment(whatsappIsConnected);
 
       if (storeAccounts && storeAccounts.length > 0) {
         logger.info('[Dashboard] Using accounts from Redux store:', storeAccounts);
@@ -416,6 +552,32 @@ const Dashboard = () => {
   //   initializeAccounts();
   // }, []);
 
+  // Initialize platform from localStorage if available
+  useEffect(() => {
+    // Filter out Matrix as it's a protocol, not a messaging platform
+    const messagingAccounts = accounts.filter(acc => acc.platform !== 'matrix');
+
+    if (messagingAccounts.length > 0) {
+      // Try to get selected platform from localStorage
+      const savedPlatform = localStorage.getItem('dailyfix_selected_platform');
+
+      if (savedPlatform && messagingAccounts.some(acc => acc.platform === savedPlatform)) {
+        // Use saved platform if it exists and is connected
+        logger.info(`[Dashboard] Restoring saved platform: ${savedPlatform}`);
+        setSelectedPlatform(savedPlatform);
+      } else {
+        // Default to WhatsApp if available
+        const whatsappAccount = messagingAccounts.find(acc => acc.platform === 'whatsapp');
+        if (whatsappAccount) {
+          setSelectedPlatform('whatsapp');
+        } else if (messagingAccounts.length > 0) {
+          // Otherwise use the first available platform
+          setSelectedPlatform(messagingAccounts[0].platform);
+        }
+      }
+    }
+  }, [accounts]);
+
   // Ensure socket connection is established after page refresh
   useEffect(() => {
     // If we have a WhatsApp account but no socket connection, initialize it
@@ -449,11 +611,19 @@ const Dashboard = () => {
     setSelectedPlatform(platform);
     // Reset selected contact when platform changes
     setSelectedContactId(null);
+
+    // Store selected platform in localStorage for persistence
+    try {
+      localStorage.setItem('dailyfix_selected_platform', platform);
+    } catch (error) {
+      logger.error('[Dashboard] Error saving selected platform to localStorage:', error);
+    }
   };
 
   const handleContactSelect = (contact) => {
     logger.info('[Dashboard] Contact selected:', contact);
     setSelectedContactId(contact.id);
+    setSelectedContact(contact);
     // Hide contact list on mobile when a contact is selected
     setIsContactListVisible(false);
   };
@@ -461,6 +631,7 @@ const Dashboard = () => {
   const handleBackToContacts = () => {
     setIsContactListVisible(true);
     setSelectedContactId(null);
+    setSelectedContact(null);
   };
 
   const handleViewToggle = (showAnalytics) => {
@@ -484,6 +655,28 @@ const Dashboard = () => {
     dispatch(fetchContacts());
   };
 
+  // Toggle sidebar collapsed state
+  const toggleSidebarCollapse = () => {
+    setIsSidebarCollapsed(!isSidebarCollapsed);
+    // Save preference to localStorage
+    try {
+      localStorage.setItem('sidebar-collapsed', (!isSidebarCollapsed).toString());
+    } catch (e) {
+      console.error('Failed to save sidebar collapsed state:', e);
+    }
+  };
+
+  // Load sidebar collapsed state from localStorage
+  useEffect(() => {
+    try {
+      const savedState = localStorage.getItem('sidebar-collapsed');
+      if (savedState !== null) {
+        setIsSidebarCollapsed(savedState === 'true');
+      }
+    } catch (e) {
+      console.error('Failed to load sidebar collapsed state:', e);
+    }
+  }, []);
 
 
   // Only render when component is mounted and initialized
@@ -542,22 +735,33 @@ const Dashboard = () => {
         </button>
 
         {/* Sidebar */}
-        <div className={`fixed lg:relative lg:w-[13rem] bg-neutral-900 h-full transition-transform duration-300 ease-in-out z-40 ${
+        <div className={`fixed lg:relative ${isSidebarCollapsed ? 'lg:w-16' : 'lg:w-[13rem]'} bg-neutral-900 h-full transition-all duration-300 ease-in-out z-40 ${
           isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
         }`}>
           <Sidebar
-            accounts={accounts}
+            accounts={accounts.filter(acc => acc.platform !== 'matrix')} /* Filter out Matrix as it's a protocol */
             selectedPlatform={selectedPlatform}
             onPlatformSelect={handlePlatformSelect}
             onViewToggle={handleViewToggle}
             isAnalyticsView={isAnalyticsView}
             onConnectPlatform={() => setShowConnectionModal(true)}
+            isCollapsed={isSidebarCollapsed}
           />
+
+          {/* Collapse Toggle Button (Desktop only) */}
+          <button
+            onClick={toggleSidebarCollapse}
+            className="hidden lg:flex absolute -right-3 top-1/2 transform -translate-y-1/2 w-6 h-12 bg-neutral-800 hover:bg-neutral-700 rounded-r-md items-center justify-center text-gray-400 hover:text-white transition-colors z-50"
+            title={isSidebarCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
+          >
+            {isSidebarCollapsed ? <IoChevronForwardOutline size={16} /> : <IoChevronBackOutline size={16} />}
+          </button>
         </div>
 
         {/* Main Content Area - Conditionally render based on connected platforms and view mode */}
-        {/* CRITICAL FIX: Simplified condition to ensure something always renders */}
-        {!whatsappConnected && !accounts.some(account => account.platform === 'whatsapp') ? (
+        {/* Check for any connected platform (WhatsApp or Telegram) */}
+        {/* CRITICAL FIX: Use accounts array to check for connected platforms */}
+        {accounts.length === 0 ? (
           // No platforms connected or no WhatsApp account - Show connect platform message
           <div className="flex-1 flex items-center justify-center bg-neutral-900">
             <div className="text-center p-8 max-w-md">
@@ -579,12 +783,46 @@ const Dashboard = () => {
                 <>
                   <h2 className="text-2xl font-bold text-white mb-4">Connect a Messaging Platform</h2>
                   <p className="text-gray-400 mb-6">You need to connect a messaging platform to start using DailyFix.</p>
-                  <button
-                    onClick={() => setShowConnectionModal(true)}
-                    className="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
-                  >
-                    Connect WhatsApp
-                  </button>
+
+                  <div className="flex justify-center space-x-10 mb-8">
+                    {/* WhatsApp Button */}
+                    <div
+                      className="platform-button group relative cursor-pointer"
+                      onClick={() => {
+                        setShowConnectionModal(true);
+                        // Pre-select WhatsApp in the modal
+                        window.platformToConnect = 'whatsapp';
+                      }}
+                    >
+                      <div className="w-20 h-20 rounded-full bg-green-600 flex items-center justify-center transform transition-all duration-300 group-hover:scale-110 group-hover:shadow-lg">
+                        <FaWhatsapp className="text-white text-4xl" />
+                      </div>
+                      <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                        <div className="bg-black bg-opacity-70 text-white text-sm py-1 px-3 rounded-lg mt-24">
+                          Connect WhatsApp
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Telegram Button */}
+                    <div
+                      className="platform-button group relative cursor-pointer"
+                      onClick={() => {
+                        setShowConnectionModal(true);
+                        // Pre-select Telegram in the modal
+                        window.platformToConnect = 'telegram';
+                      }}
+                    >
+                      <div className="w-20 h-20 rounded-full bg-blue-500 flex items-center justify-center transform transition-all duration-300 group-hover:scale-110 group-hover:shadow-lg">
+                        <FaTelegram className="text-white text-4xl" />
+                      </div>
+                      <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                        <div className="bg-black bg-opacity-70 text-white text-sm py-1 px-3 rounded-lg mt-24">
+                          Connect Telegram
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </>
               )}
             </div>
@@ -595,43 +833,91 @@ const Dashboard = () => {
             <AnalyticsDashboard />
           </div>
         ) : (
-          // WhatsApp Interface (Contact List + Chat View)
+          // Platform Interface (Contact List + Chat View)
           <>
-            {/* Contact List Panel */}
-            <div className={`fixed lg:relative lg:w-[23.5rem] bg-neutral-900 h-full transition-transform duration-300 ease-in-out z-30 w-full ${
-              !selectedContactId || isContactListVisible ? 'translate-x-0' : 'translate-x-[-100%] lg:translate-x-0'
-            } ${isSidebarOpen ? 'translate-x-[13rem] lg:translate-x-0' : 'translate-x-0'}`}>
-              <div className="h-full flex flex-col">
-                <div className="flex-1 overflow-y-auto w-full">
-                  <WhatsAppContactList
-                    onContactSelect={handleContactSelect}
-                    selectedContactId={selectedContactId}
-                  />
+            {/* Mobile View */}
+            <div className="lg:hidden w-full h-full">
+              {!selectedContactId || isContactListVisible ? (
+                // Contact List for Mobile
+                <div className={`w-full h-full bg-neutral-900 transition-transform duration-300 ease-in-out z-30 ${
+                  isSidebarOpen ? 'translate-x-[13rem]' : 'translate-x-0'
+                }`}>
+                  <div className="h-full flex flex-col">
+                    <div className="flex-1 overflow-y-auto w-full">
+                      {selectedPlatform === 'telegram' ? (
+                        <TelegramContactList
+                          onContactSelect={handleContactSelect}
+                          selectedContactId={selectedContactId}
+                        />
+                      ) : (
+                        <WhatsAppContactList
+                          onContactSelect={handleContactSelect}
+                          selectedContactId={selectedContactId}
+                        />
+                      )}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
+              ) : (
+                // Chat View for Mobile
+                <div className="w-full h-full bg-neutral-900 transition-transform duration-300 ease-in-out z-30">
+                  {/* Mobile Back Button */}
+                  <div className="sticky top-0 left-0 right-0 p-4 bg-neutral-900 border-b border-white/10 flex items-center">
+                    <button
+                      onClick={handleBackToContacts}
+                      className="p-2 bg-neutral-800 rounded-lg text-white flex items-center gap-3"
+                    >
+                      <IoArrowBack size={20} />
+                      <span className="text-sm font-medium">Back to contacts</span>
+                    </button>
+                  </div>
 
-            {/* Chat Content Area */}
-            <div className={`fixed lg:relative flex-1 flex flex-col bg-neutral-900 transition-transform duration-300 ease-in-out w-full lg:w-auto h-full z-30 ${
-              selectedContactId && !isContactListVisible ? 'translate-x-0' : 'translate-x-[100%] lg:translate-x-0'
-            }`}>
-              {/* Mobile Back Button */}
-              {selectedContactId && !isContactListVisible && (
-                <div className="lg:hidden sticky top-0 left-0 right-0 p-4 bg-neutral-900 border-b border-white/10 flex items-center">
-                  <button
-                    onClick={handleBackToContacts}
-                    className="p-2 bg-neutral-800 rounded-lg text-white flex items-center gap-3"
-                  >
-                    <IoArrowBack size={20} />
-                    <span className="text-sm font-medium">Back to contacts</span>
-                  </button>
+                  {/* Chat View */}
+                  <div className="flex-1 overflow-hidden h-[calc(100%-60px)]">
+                    {selectedPlatform === 'telegram' ? (
+                      <TelegramChatView selectedContact={selectedContact} />
+                    ) : (
+                      <ChatView selectedContact={selectedContact} />
+                    )}
+                  </div>
                 </div>
               )}
+            </div>
 
-              {/* Chat View */}
-              <div className="flex-1 overflow-hidden">
-                <ChatView selectedContact={selectedContact} />
-              </div>
+            {/* Desktop View with Resizable Panels */}
+            <div className="hidden lg:block w-full h-full">
+              <ResizablePanel
+                initialLeftWidth={376} // 23.5rem in pixels
+                minLeftWidth={250}
+                maxLeftWidth={500}
+                storageKey={`${selectedPlatform}-contact-list-width`}
+                left={
+                  <div className="h-full flex flex-col">
+                    <div className="flex-1 overflow-y-auto w-full">
+                      {selectedPlatform === 'telegram' ? (
+                        <TelegramContactList
+                          onContactSelect={handleContactSelect}
+                          selectedContactId={selectedContactId}
+                        />
+                      ) : (
+                        <WhatsAppContactList
+                          onContactSelect={handleContactSelect}
+                          selectedContactId={selectedContactId}
+                        />
+                      )}
+                    </div>
+                  </div>
+                }
+                right={
+                  <div className="flex-1 overflow-hidden h-full">
+                    {selectedPlatform === 'telegram' ? (
+                      <TelegramChatView selectedContact={selectedContact} />
+                    ) : (
+                      <ChatView selectedContact={selectedContact} />
+                    )}
+                  </div>
+                }
+              />
             </div>
           </>
         )}

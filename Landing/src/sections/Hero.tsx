@@ -1,9 +1,4 @@
 import Button from "@/components/Button";
-import designExampleImage from "@/assets/images/DailyFix-one.png";
-import designExampleImage2 from "@/assets/images/DailyFix-two.png";
-import Image from "next/image";
-import twitter from "@/assets/images/twitter.jpeg"
-
 import Pointer from "@/components/pointer";
 
 export default function Hero() {
@@ -22,7 +17,7 @@ export default function Hero() {
             </div>
 
             <div className="absolute right-40 -top-10 sm:hidden md:hidden lg:block">
-                <Pointer image={twitter} name="Gwen" color="blue" />
+                <Pointer name="Gwen" color="blue" />
             </div>
             <div className="flex justify-center">
                 <div className="inline-flex py-1 px-3 bg-gradient-to-r from-purple-400 to-pink-500 rounded-full text-sm font-medium text-black">

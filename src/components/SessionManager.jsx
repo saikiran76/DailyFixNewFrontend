@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { initializeAuth } from '../store/slices/authSlice';
+import { fetchMatrixCredentials } from '../store/slices/matrixSlice';
 import { supabase } from '../utils/supabase';
 import authService from '../services/authService';
 import logger from '../utils/logger';
@@ -18,6 +19,7 @@ const SessionManager = ({ children }) => {
   const store = useStore();
   const getState = store.getState;
   const { session, initializing, hasInitialized } = useSelector(state => state.auth);
+  const { credentials } = useSelector(state => state.matrix);
   const [isValidating, setIsValidating] = useState(false);
   const [validationError, setValidationError] = useState(null);
 
@@ -40,10 +42,10 @@ const SessionManager = ({ children }) => {
             const refreshToken = localStorage.getItem('refresh_token');
             const sessionExpiry = localStorage.getItem('session_expiry');
             const persistAuth = localStorage.getItem('persist:auth');
-            
+
             let normalizedAuthData = null;
             let userId = null;
-            
+
             logger.info('[SessionManager] Normalizing auth data sources:', {
               hasDailyfixAuth: !!dailyfixAuth,
               hasAccessToken: !!accessToken,
@@ -51,7 +53,7 @@ const SessionManager = ({ children }) => {
               hasSessionExpiry: !!sessionExpiry,
               hasPersistAuth: !!persistAuth
             });
-            
+
             // Try to build complete auth data from available sources
             if (dailyfixAuth) {
               try {
@@ -61,74 +63,74 @@ const SessionManager = ({ children }) => {
                 logger.error('[SessionManager] Error parsing dailyfix_auth:', e);
               }
             }
-            
+
             // If no dailyfix_auth but we have persist:auth, build from there
             if (!normalizedAuthData && persistAuth) {
               try {
                 const parsedPersistAuth = JSON.parse(persistAuth);
                 const sessionStr = parsedPersistAuth.session;
                 const userStr = parsedPersistAuth.user;
-                
+
                 if (sessionStr && sessionStr !== 'null' && userStr && userStr !== 'null') {
                   const session = JSON.parse(sessionStr);
                   const user = JSON.parse(userStr);
-                  
+
                   normalizedAuthData = {
                     session: session,
                     user: user
                   };
                   userId = user?.id;
-                  
+
                   logger.info('[SessionManager] Built normalized auth data from persist:auth');
                 }
               } catch (e) {
                 logger.error('[SessionManager] Error parsing persist:auth:', e);
               }
             }
-            
+
             // If we have access_token but no complete auth data, create minimal structure
             if (accessToken && (!normalizedAuthData || !normalizedAuthData.session?.access_token)) {
               if (!normalizedAuthData) {
                 normalizedAuthData = { session: {}, user: null };
               }
-              
+
               if (!normalizedAuthData.session) {
                 normalizedAuthData.session = {};
               }
-              
+
               normalizedAuthData.session.access_token = accessToken;
-              
+
               if (refreshToken) {
                 normalizedAuthData.session.refresh_token = refreshToken;
               }
-              
+
               if (sessionExpiry) {
                 normalizedAuthData.session.expires_at = sessionExpiry;
               } else {
                 // Default expiry 1 hour from now
                 normalizedAuthData.session.expires_at = new Date(Date.now() + 60 * 60 * 1000).toISOString();
               }
-              
+
               logger.info('[SessionManager] Created minimal auth data from access_token');
             }
-            
+
             // Store the normalized data
             if (normalizedAuthData?.session?.access_token) {
               localStorage.setItem('dailyfix_auth', JSON.stringify(normalizedAuthData));
               localStorage.setItem('access_token', normalizedAuthData.session.access_token);
-              
+
               if (normalizedAuthData.session.refresh_token) {
                 localStorage.setItem('refresh_token', normalizedAuthData.session.refresh_token);
               }
-              
+
               if (normalizedAuthData.session.expires_at) {
                 localStorage.setItem('session_expiry', normalizedAuthData.session.expires_at);
               }
-              
+
               logger.info('[SessionManager] Normalized auth data stored successfully');
               return normalizedAuthData;
             }
-            
+
             return null;
           } catch (e) {
             logger.error('[SessionManager] Error normalizing auth data:', e);
@@ -150,24 +152,37 @@ const SessionManager = ({ children }) => {
 
             // Update Redux store with session data
             await authService.storeSessionData(normalizedAuthData.session);
-            
+
             // Also update the access_token in localStorage for direct API access
             localStorage.setItem('access_token', normalizedAuthData.session.access_token);
-            
+
+            // Fetch Matrix credentials if not already available
+            if (user && !credentials) {
+              logger.info('[SessionManager] Fetching Matrix credentials for user:', user.id);
+              dispatch(fetchMatrixCredentials(user.id));
+            }
+
             logger.info('[SessionManager] Session data stored in Redux store');
             setIsValidating(false);
             return;
           } else if (validateError) {
             logger.warn('[SessionManager] Session validation failed:', validateError);
-            
+
             // Try to refresh the token if validation failed
             try {
               logger.info('[SessionManager] Attempting to refresh token');
               const { data, error: refreshError } = await supabase.auth.refreshSession();
-              
+
               if (!refreshError && data?.session) {
                 logger.info('[SessionManager] Token refresh successful');
                 await authService.storeSessionData(data.session);
+
+                // Fetch Matrix credentials if not already available
+                if (data.user && !credentials) {
+                  logger.info('[SessionManager] Fetching Matrix credentials for user:', data.user.id);
+                  dispatch(fetchMatrixCredentials(data.user.id));
+                }
+
                 setIsValidating(false);
                 return;
               } else {
@@ -195,7 +210,7 @@ const SessionManager = ({ children }) => {
     if (!hasInitialized && !initializing && !isValidating) {
       initAuth();
     }
-  }, [dispatch, hasInitialized, initializing, isValidating]);
+  }, [dispatch, hasInitialized, initializing, isValidating, credentials]);
 
   // Handle redirects based on session state
   useEffect(() => {

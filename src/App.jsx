@@ -8,6 +8,7 @@ import { Toaster } from 'react-hot-toast';
 import LoadingSpinner from './components/LoadingSpinner';
 import SessionManager from './components/SessionManager';
 import { ThemeProvider } from './context/ThemeContext';
+import MatrixInitializer from './components/MatrixInitializer';
 import DirectAuthCallback from './components/DirectAuthCallback';
 import './styles/theme.css';
 
@@ -23,7 +24,9 @@ const App = () => {
               <Route path="/auth/google/callback" element={<DirectAuthCallback />} />
               <Route path="*" element={
                 <SessionManager>
-                  <AppRoutes />
+                  <MatrixInitializer>
+                    <AppRoutes />
+                  </MatrixInitializer>
                 </SessionManager>
               } />
             </Routes>
