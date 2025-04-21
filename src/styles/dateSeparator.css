@@ -1,0 +1,47 @@
+/* Date Separator Styles */
+
+.date-separator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 1.5rem 0;
+  width: 100%;
+  user-select: none;
+}
+
+.date-separator-line {
+  flex-grow: 1;
+  height: 1px;
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.date-separator-text {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.6);
+  margin: 0 0.75rem;
+  padding: 0.25rem 0.75rem;
+  background-color: rgba(0, 0, 0, 0.2);
+  border-radius: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Hover effect */
+.date-separator:hover .date-separator-text {
+  color: rgba(255, 255, 255, 0.8);
+  background-color: rgba(0, 136, 204, 0.2);
+  transition: all 0.2s ease;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .date-separator {
+    margin: 1rem 0;
+  }
+  
+  .date-separator-text {
+    font-size: 0.7rem;
+    padding: 0.2rem 0.6rem;
+  }
+}

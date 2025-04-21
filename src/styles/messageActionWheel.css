@@ -1,273 +1,208 @@
-/* Message Action Wheel Styles */
+/* Message Action Wheel Styles - Simplified */
 
+/* Message container positioning */
 .message-container {
   position: relative;
 }
 
-/* Action wheel container positioning */
-.action-wheel-container {
+/* Action wheel wrapper - base styles */
+.message-action-wheel-wrapper {
   position: absolute;
-  z-index: 20;
-  width: 0; /* Ensure the container doesn't affect layout */
-  height: 0;
-  pointer-events: none; /* Allow clicks to pass through the container */
+  z-index: 100;
+  animation: fadeIn 0.2s ease;
+  pointer-events: auto; /* Ensure clicks are captured */
 }
 
-.action-wheel-sent {
-  right: 50%; /* Center horizontally */
-  top: -70px; /* Position above the message */
-}
-
-.action-wheel-received {
-  left: 50%; /* Center horizontally */
-  top: -70px; /* Position above the message */
-}
-
-.message-action-wheel {
-  position: absolute;
-  top: 0;
-  transform: scale(0) rotate(-90deg);
-  opacity: 0;
-  transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s ease;
-  z-index: 30;
-  pointer-events: auto; /* Enable pointer events on the wheel itself */
-  transform-origin: center;
-}
-
-.message-container:hover .action-wheel-container .message-action-wheel {
-  transform: scale(1) rotate(0);
-  opacity: 1;
-  pointer-events: auto;
-  animation: wheelAppear 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
-  will-change: transform, opacity;
-}
-
-.wheel-container {
-  position: relative;
-  width: 160px;
-  height: 160px; /* Make it a circle */
+/* Positioning for large messages (above the message) */
+.message-action-wheel-wrapper.large-message {
+  top: -45px; /* Move slightly higher to ensure visibility */
+  left: 0;
+  right: 0;
   display: flex;
   justify-content: center;
+}
+
+/* Positioning for small messages (to the left of the message) */
+.message-action-wheel-wrapper.small-message {
+  top: 50%; /* Center vertically */
+  left: -55px; /* Position further from the message to avoid cut-off */
+  transform: translateY(-50%); /* Center vertically */
+  display: flex;
   align-items: center;
-  border-radius: 50%;
-  /* Add a subtle background to make the wheel more visible */
-  background-color: rgba(0, 0, 0, 0.05);
-  backdrop-filter: blur(2px);
+  z-index: 200; /* Ensure it's above everything */
 }
 
-.action-wheel-sent .wheel-container {
-  transform: translateX(50%);
+/* Action buttons container - base styles */
+.action-buttons-container {
+  display: flex;
+  gap: 8px;
+  background-color: rgba(0, 0, 0, 0.7);
+  padding: 4px 8px;
+  border-radius: 20px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.1); /* Add subtle border for better visibility */
 }
 
-.action-wheel-received .wheel-container {
-  transform: translateX(-50%);
+/* Horizontal layout for large messages */
+.large-message .action-buttons-container {
+  flex-direction: row;
 }
 
-.wheel-action {
-  position: absolute;
-  width: 48px;
-  height: 48px;
+/* Vertical layout for small messages */
+.small-message .action-buttons-container {
+  flex-direction: column;
+  padding: 6px;
+  gap: 6px; /* Increase gap for better visibility */
+}
+
+/* Individual action buttons */
+.action-button {
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   color: white;
+  border: 1px solid rgba(255, 255, 255, 0.2); /* Add border for better visibility */
   cursor: pointer;
-  transform: translate(-50%, -50%) scale(0);
-  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease;
-  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.3);
-  animation: actionAppear 0.5s forwards;
-  animation-delay: calc(var(--index) * 0.08s);
-  opacity: 0;
-  z-index: 40;
-  will-change: transform, opacity;
-  /* Add a subtle border to make buttons more visible */
-  border: 2px solid rgba(255, 255, 255, 0.7);
+  position: relative;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
 }
 
-.wheel-action:hover {
-  transform: translate(-50%, -50%) scale(1.15);
-  box-shadow: 0 5px 10px rgba(0, 0, 0, 0.4);
-  border-color: rgba(255, 255, 255, 0.9);
+.action-button:hover {
+  transform: scale(1.15);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+  border-color: rgba(255, 255, 255, 0.5);
 }
 
-.wheel-action.hovered {
-  transform: translate(-50%, -50%) scale(1.25);
-  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.5);
-  border-color: white;
+.action-button:active {
+  transform: scale(0.95);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
-.wheel-action:active {
-  transform: translate(-50%, -50%) scale(0.95);
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
-  transition: transform 0.1s ease, box-shadow 0.1s ease;
-}
-
+/* Action icon */
 .action-icon {
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
+/* Tooltip - base styles */
 .action-tooltip {
   position: absolute;
-  bottom: -30px;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 5px 10px;
-  border-radius: 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
   color: white;
   font-size: 12px;
   font-weight: 500;
   white-space: nowrap;
-  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.3);
-  animation: tooltipAppear 0.2s forwards;
-  background-color: rgba(0, 0, 0, 0.85);
-  z-index: 50;
-  backdrop-filter: blur(4px);
-  /* Add a subtle border to make tooltips more visible */
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  z-index: 101;
+  animation: fadeIn 0.2s ease;
 }
 
-/* Add a subtle arrow pointing to the button */
+/* Tooltip positioning for large messages (below the button) */
+.large-message .action-tooltip {
+  bottom: -30px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+/* Tooltip positioning for small messages (to the right of the button) */
+.small-message .action-tooltip {
+  left: 36px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* Tooltip arrow - base styles */
 .action-tooltip::before {
   content: '';
   position: absolute;
-  top: -5px;
-  left: 50%;
-  transform: translateX(-50%);
   width: 0;
   height: 0;
-  border-left: 5px solid transparent;
-  border-right: 5px solid transparent;
-  border-bottom: 5px solid rgba(0, 0, 0, 0.85);
 }
 
-/* Fix tooltip text direction for received messages */
-.action-wheel-received .action-tooltip {
-  /* Double flip to make text readable again */
-  transform: translateX(-50%) scaleX(-1);
-  /* Adjust position to account for the flipped container */
+/* Arrow for large messages (pointing up) */
+.large-message .action-tooltip::before {
+  top: -4px;
   left: 50%;
+  transform: translateX(-50%);
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-bottom: 4px solid currentColor;
 }
 
-/* Animation for wheel actions appearing */
-@keyframes actionAppear {
-  0% {
+/* Arrow for small messages (pointing left) */
+.small-message .action-tooltip::before {
+  left: -4px;
+  top: 50%;
+  transform: translateY(-50%);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-right: 4px solid currentColor;
+}
+
+/* Simple fade-in animation */
+@keyframes fadeIn {
+  from {
     opacity: 0;
-    transform: translate(-50%, -50%) scale(0);
+    transform: translateY(-5px);
   }
-  60% {
+  to {
     opacity: 1;
-    transform: translate(-50%, -50%) scale(1.2);
+    transform: translateY(0);
   }
-  100% {
-    opacity: 1;
-    transform: translate(-50%, -50%) scale(1);
-  }
-}
-
-/* Animation for tooltips */
-@keyframes tooltipAppear {
-  0% {
-    opacity: 0;
-    transform: translateX(-50%) translateY(5px);
-  }
-  100% {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
-  }
-}
-
-/* Animation for the entire wheel appearing */
-@keyframes wheelAppear {
-  0% {
-    opacity: 0;
-    transform: scale(0.5) rotate(-45deg);
-  }
-  60% {
-    opacity: 1;
-    transform: scale(1.05) rotate(5deg);
-  }
-  100% {
-    opacity: 1;
-    transform: scale(1) rotate(0);
-  }
-}
-
-/* Adjust the wheel position for received messages */
-.action-wheel-received .message-action-wheel {
-  transform-origin: right center;
-}
-
-.action-wheel-sent .message-action-wheel {
-  transform-origin: left center;
-}
-
-/* Flip the wheel for received messages */
-.action-wheel-received .wheel-container {
-  transform: translateX(0) scaleX(-1);
-}
-
-/* Flip back the text and icons inside the wheel for received messages */
-.action-wheel-received .wheel-action {
-  transform: translate(-50%, -50%) scale(0) scaleX(-1);
-}
-
-.action-wheel-received .wheel-action:hover {
-  transform: translate(-50%, -50%) scale(1.15) scaleX(-1);
-}
-
-.action-wheel-received .wheel-action.hovered {
-  transform: translate(-50%, -50%) scale(1.25) scaleX(-1);
-}
-
-/* Fix icon display for received messages */
-.action-wheel-received .action-icon {
-  transform: scaleX(-1); /* Flip icons back to normal */
-}
-
-/* Apply different animation delays to each action */
-.wheel-action:nth-child(1) {
-  --index: 0;
-}
-
-.wheel-action:nth-child(2) {
-  --index: 1;
-}
-
-.wheel-action:nth-child(3) {
-  --index: 2;
-}
-
-.wheel-action:nth-child(4) {
-  --index: 3;
 }
 
 /* Responsive adjustments */
 @media (max-width: 768px) {
-  .wheel-container {
-    width: 120px;
-    height: 120px;
+  .action-button {
+    width: 28px;
+    height: 28px;
   }
 
-  .wheel-action {
-    width: 38px;
-    height: 38px;
-  }
-
-  .action-wheel-sent {
-    left: -15px;
-    top: 5px;
-  }
-
-  .action-wheel-received {
-    right: 5px;
-    top: 5px;
+  .action-buttons-container {
+    gap: 6px;
+    padding: 3px 6px;
   }
 
   .action-tooltip {
-    font-size: 11px;
-    padding: 4px 8px;
+    font-size: 10px;
+    padding: 3px 6px;
+  }
+
+  /* For all screen sizes, ensure the action bar is visible */
+  .message-action-wheel-wrapper.small-message {
+    left: -50px; /* Position to ensure visibility */
+    top: 50%; /* Center vertically */
+    transform: translateY(-50%); /* Center vertically */
+  }
+
+  /* For very small screens, always use the above-message positioning */
+  @media (max-width: 480px) {
+    .message-action-wheel-wrapper.small-message,
+    .message-action-wheel-wrapper.large-message {
+      top: -40px;
+      left: 0;
+      right: 0;
+      transform: none;
+      justify-content: center;
+    }
+
+    .small-message .action-buttons-container,
+    .large-message .action-buttons-container {
+      flex-direction: row;
+      padding: 4px 6px;
+    }
+
+    /* Make buttons slightly smaller on mobile */
+    .action-button {
+      width: 26px;
+      height: 26px;
+    }
   }
 }

@@ -4,7 +4,7 @@ import '../styles/messageActionWheel.css';
 import logger from '../utils/logger';
 
 /**
- * A semi-circular action wheel that appears when hovering over a message
+ * A horizontal action bar that appears when hovering over a message
  * Provides options to reply, delete, pin, and react to messages
  */
 const MessageActionWheel = ({ message, onReply, onDelete, onPin, onReact }) => {
@@ -14,7 +14,7 @@ const MessageActionWheel = ({ message, onReply, onDelete, onPin, onReact }) => {
   const actions = [
     {
       id: 'reply',
-      icon: <FiCornerUpLeft size={18} />,
+      icon: <FiCornerUpLeft size={16} />,
       tooltip: 'Reply',
       handler: () => {
         logger.info(`[MessageActionWheel] Reply to message: ${message.id}`);
@@ -23,18 +23,18 @@ const MessageActionWheel = ({ message, onReply, onDelete, onPin, onReact }) => {
       color: '#0088cc', // Telegram blue
     },
     {
-      id: 'delete',
-      icon: <FiTrash2 size={18} />,
-      tooltip: 'Delete',
+      id: 'react',
+      icon: <FiThumbsUp size={16} />,
+      tooltip: 'React',
       handler: () => {
-        logger.info(`[MessageActionWheel] Delete message: ${message.id}`);
-        onDelete?.(message);
+        logger.info(`[MessageActionWheel] React to message: ${message.id}`);
+        onReact?.(message);
       },
-      color: '#e74c3c', // Red
+      color: '#2ecc71', // Green
     },
     {
       id: 'pin',
-      icon: <FiBookmark size={18} />,
+      icon: <FiBookmark size={16} />,
       tooltip: 'Pin',
       handler: () => {
         logger.info(`[MessageActionWheel] Pin message: ${message.id}`);
@@ -43,62 +43,40 @@ const MessageActionWheel = ({ message, onReply, onDelete, onPin, onReact }) => {
       color: '#f39c12', // Orange
     },
     {
-      id: 'react',
-      icon: <FiThumbsUp size={18} />,
-      tooltip: 'React',
+      id: 'delete',
+      icon: <FiTrash2 size={16} />,
+      tooltip: 'Delete',
       handler: () => {
-        logger.info(`[MessageActionWheel] React to message: ${message.id}`);
-        onReact?.(message);
+        logger.info(`[MessageActionWheel] Delete message: ${message.id}`);
+        onDelete?.(message);
       },
-      color: '#2ecc71', // Green
+      color: '#e74c3c', // Red
     },
   ];
 
   return (
-    <div className="message-action-wheel">
-      <div className="wheel-container">
-        {actions.map((action, index) => {
-          // Calculate position in the semi-circle (180 degrees, starting from bottom)
-          // We want to distribute the actions evenly in a semicircle
-          // For 4 actions, we want angles at approximately: -45, -15, 15, 45 degrees
-          // This creates a nice arc above the avatar
-          const startAngle = -90; // Start from bottom
-          const arcAngle = 180; // Semicircle
-          const angle = startAngle + (index / (actions.length - 1)) * arcAngle;
-          const radian = (angle * Math.PI) / 180;
-
-          // Calculate x and y coordinates on the semi-circle
-          // Radius is set to 50 (will be scaled with CSS)
-          const x = 50 + Math.cos(radian) * 50;
-          const y = 50 + Math.sin(radian) * 50;
-
-          return (
-            <div
-              key={action.id}
-              className={`wheel-action ${hoveredAction === action.id ? 'hovered' : ''}`}
-              style={{
-                left: `${x}%`,
-                top: `${y}%`,
-                backgroundColor: action.color,
-                '--index': index,
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                action.handler();
-              }}
-              onMouseEnter={() => setHoveredAction(action.id)}
-              onMouseLeave={() => setHoveredAction(null)}
-            >
-              <div className="action-icon">{action.icon}</div>
-              {hoveredAction === action.id && (
-                <div className="action-tooltip" style={{ backgroundColor: action.color }}>
-                  {action.tooltip}
-                </div>
-              )}
+    <div className="action-buttons-container">
+      {actions.map((action, index) => (
+        <button
+          key={action.id}
+          className="action-button"
+          style={{ backgroundColor: action.color }}
+          onClick={(e) => {
+            e.stopPropagation();
+            action.handler();
+          }}
+          onMouseEnter={() => setHoveredAction(action.id)}
+          onMouseLeave={() => setHoveredAction(null)}
+          aria-label={action.tooltip}
+        >
+          <div className="action-icon">{action.icon}</div>
+          {hoveredAction === action.id && (
+            <div className="action-tooltip" style={{ backgroundColor: action.color }}>
+              {action.tooltip}
             </div>
-          );
-        })}
-      </div>
+          )}
+        </button>
+      ))}
     </div>
   );
 };

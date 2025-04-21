@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import MessageActionWheel from './MessageActionWheel';
 import MessageReply from './MessageReply';
 import { getParentEventId } from '../utils/replyUtils';
@@ -22,32 +22,89 @@ const MessageBubbleWithWheel = ({
   const parentEventId = message.rawEvent ? getParentEventId(message.rawEvent) : null;
   const parentEvent = parentEventId ? parentEvents[parentEventId] : null;
 
+  // State to track if this message is being hovered
+  const [isHovered, setIsHovered] = useState(false);
+  // State to track if this is a small message
+  const [isSmallMessage, setIsSmallMessage] = useState(false);
+  // Reference to the message bubble element
+  const messageBubbleRef = useRef(null);
+
+  // Detect message size and position when hovered
+  useEffect(() => {
+    // Only check size when hovered to improve performance
+    if (isHovered && messageBubbleRef.current) {
+      // Get the width and position of the message bubble
+      const { width, left } = messageBubbleRef.current.getBoundingClientRect();
+
+      // Consider messages less than 150px wide as "small"
+      const isSmall = width < 150;
+
+      // Check if message is near the left edge of the screen
+      const isNearLeftEdge = left < 70; // 70px from left edge
+
+      // If message is small or near the left edge, use small message styling
+      setIsSmallMessage(isSmall || isNearLeftEdge);
+
+      // Log for debugging
+      logger.debug(`[MessageBubbleWithWheel] Message size: ${width}px, position: ${left}px, isSmall: ${isSmall}, isNearLeftEdge: ${isNearLeftEdge}`);
+    }
+  }, [isHovered]);
+
+  // Fallback detection based on message content length
+  useEffect(() => {
+    // If the message content is very short, it's likely a small message
+    if (message.content) {
+      let contentLength = 0;
+
+      if (typeof message.content === 'string') {
+        contentLength = message.content.length;
+      } else if (message.content.body) {
+        contentLength = message.content.body.length;
+      }
+
+      // Short messages are likely small
+      if (contentLength > 0 && contentLength < 10) {
+        setIsSmallMessage(true);
+      }
+    }
+  }, [message.content]);
+
   return (
-    <div className="relative message-container">
-      {/* Message Action Wheel - positioned differently based on message direction */}
-      <div className={`action-wheel-container ${message.isFromMe ? 'action-wheel-sent' : 'action-wheel-received'}`}>
-        <MessageActionWheel
-          message={message}
-          onReply={() => {
-            logger.info(`[MessageBubbleWithWheel] Replying to message: ${message.id}`);
-            onReply(message);
-          }}
-          onDelete={() => {
-            logger.info(`[MessageBubbleWithWheel] Delete message: ${message.id}`);
-            onDelete?.(message);
-          }}
-          onPin={() => {
-            logger.info(`[MessageBubbleWithWheel] Pin message: ${message.id}`);
-            onPin?.(message);
-          }}
-          onReact={() => {
-            logger.info(`[MessageBubbleWithWheel] React to message: ${message.id}`);
-            onReact?.(message);
-          }}
-        />
-      </div>
+    <div
+      className="relative message-container"
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
+      {/* Only show action wheel when message is hovered */}
+      {isHovered && (
+        <div
+          className={`message-action-wheel-wrapper ${isSmallMessage ? 'small-message' : 'large-message'}`}
+          onClick={(e) => e.stopPropagation()} // Prevent clicks from closing the action bar
+        >
+          <MessageActionWheel
+            message={message}
+            onReply={() => {
+              logger.info(`[MessageBubbleWithWheel] Replying to message: ${message.id}`);
+              onReply(message);
+            }}
+            onDelete={() => {
+              logger.info(`[MessageBubbleWithWheel] Delete message: ${message.id}`);
+              onDelete?.(message);
+            }}
+            onPin={() => {
+              logger.info(`[MessageBubbleWithWheel] Pin message: ${message.id}`);
+              onPin?.(message);
+            }}
+            onReact={() => {
+              logger.info(`[MessageBubbleWithWheel] React to message: ${message.id}`);
+              onReact?.(message);
+            }}
+          />
+        </div>
+      )}
 
       <div
+        ref={messageBubbleRef}
         className={`message-bubble ${message.isFromMe ? 'message-bubble-sent' : 'message-bubble-received'} ${message.isOptimistic ? 'message-optimistic' : ''}`}
       >
         {/* Sender name for received messages */}

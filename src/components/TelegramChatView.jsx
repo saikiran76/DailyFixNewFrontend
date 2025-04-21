@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { FiSend, FiMessageCircle, FiUser, FiUsers, FiPaperclip, FiImage, FiSmile, FiMic } from 'react-icons/fi';
+import { FiSend, FiMessageCircle, FiUser, FiUsers, FiPaperclip, FiImage, FiSmile, FiMic, FiHelpCircle } from 'react-icons/fi';
+import AIAssistantButton from './AIAssistantButton';
+import AIFeatureTour from './AIFeatureTour';
 import '../styles/messageBubbles.css';
 import { useMatrixClient } from '../context/MatrixClientContext';
 import { toast } from 'react-hot-toast';
@@ -10,9 +12,11 @@ import RoomMemberList from './RoomMemberList';
 import ReplyPreview from './ReplyPreview';
 import MessageReply from './MessageReply';
 import MessageBubbleWithWheel from './MessageBubbleWithWheel';
+import DateSeparator from './DateSeparator';
 import { getParentEventId, addReplyToMessageContent } from '../utils/replyUtils';
 import { getMediaUrl, getFallbackAvatarUrl } from '../utils/mediaUtils';
 import '../styles/messageActionWheel.css';
+import '../styles/dateSeparator.css';
 
 const TelegramChatView = ({ selectedContact }) => {
   const { client, loading: clientLoading } = useMatrixClient() || {};
@@ -33,6 +37,9 @@ const TelegramChatView = ({ selectedContact }) => {
 
   // Room members panel state
   const [showMemberList, setShowMemberList] = useState(false);
+
+  // AI Feature Tour state
+  const [showAITour, setShowAITour] = useState(false);
 
   // Reply state
   const [replyToEvent, setReplyToEvent] = useState(null);
@@ -172,6 +179,65 @@ const TelegramChatView = ({ selectedContact }) => {
       }
     };
   }, []);
+
+  // Add keyboard shortcut for AI Assistant (Alt+A)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Alt+A to open AI Assistant
+      if (e.altKey && e.key === 'a') {
+        e.preventDefault();
+        // Find the AI Assistant button and click it
+        const aiButton = document.querySelector('.ai-assistant-button');
+        if (aiButton) {
+          aiButton.click();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // First-time user experience for AI button
+  useEffect(() => {
+    if (selectedContact) {
+      // Check if user has seen the AI button highlight
+      const aiButtonHighlighted = localStorage.getItem('ai_button_highlighted');
+
+      if (aiButtonHighlighted !== 'true') {
+        // Wait for the DOM to update
+        setTimeout(() => {
+          const aiButton = document.querySelector('.ai-assistant-button-composer');
+          const aiButtonContainer = document.querySelector('.ai-button-container');
+          if (aiButton && aiButtonContainer) {
+            // Add a pulsing animation to draw attention
+            aiButton.classList.add('animate-attention');
+
+            // Add a tooltip
+            const tooltip = document.createElement('div');
+            tooltip.className = 'absolute -top-16 left-1/2 transform -translate-x-1/2 bg-[#0088CC] text-white text-xs py-2 px-3 rounded shadow-lg whitespace-nowrap z-50';
+            tooltip.innerHTML = 'Try the AI Assistant! <span class="text-xs opacity-80">(Alt+A)</span>';
+
+            // Add arrow
+            const arrow = document.createElement('div');
+            arrow.className = 'absolute -bottom-1 left-1/2 transform -translate-x-1/2 w-2 h-2 bg-[#0088CC] rotate-45';
+            tooltip.appendChild(arrow);
+
+            aiButtonContainer.appendChild(tooltip);
+
+            // Remove after 5 seconds
+            setTimeout(() => {
+              aiButton.classList.remove('animate-attention');
+              if (tooltip.parentNode) {
+                tooltip.parentNode.removeChild(tooltip);
+              }
+              localStorage.setItem('ai_button_highlighted', 'true');
+            }, 5000);
+          }
+        }, 2000);
+      }
+    }
+  }, [selectedContact]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -1048,6 +1114,11 @@ const TelegramChatView = ({ selectedContact }) => {
           />
         </div>
       )}
+
+      {/* AI Feature Tour */}
+      {showAITour && (
+        <AIFeatureTour onClose={() => setShowAITour(false)} />
+      )}
       {/* Chat header */}
       <div className="py-3 px-4 border-b border-white/10 bg-neutral-900 flex items-center sticky top-0 z-10 shadow-sm">
         <div className="mr-3 relative">
@@ -1079,7 +1150,7 @@ const TelegramChatView = ({ selectedContact }) => {
           </p>
         </div>
 
-        <div className="flex space-x-2">
+        <div className="flex items-center gap-2" id="header-buttons">
           {/* Refresh button */}
           <button
             onClick={async () => {
@@ -1134,6 +1205,23 @@ const TelegramChatView = ({ selectedContact }) => {
             title="View room members"
           >
             <FiUsers className="w-4 h-4" />
+          </button>
+
+          {/* AI Assistant button */}
+          <AIAssistantButton
+            client={client}
+            selectedContact={selectedContact}
+            className="bg-[#0088CC] hover:bg-[#0077BB] ai-assistant-button"
+          />
+
+          {/* Help/Tour button */}
+          <button
+            onClick={() => setShowAITour(true)}
+            className="p-2 rounded-full bg-[#0088CC] text-white hover:bg-[#0077BB] transition-colors relative overflow-visible"
+            title="Take AI Assistant Tour"
+          >
+            <FiHelpCircle className="w-4 h-4" />
+            <span className="absolute inset-0 rounded-full bg-white/20 animate-ping"></span>
           </button>
 
           {/* Call button */}
@@ -1219,11 +1307,30 @@ const TelegramChatView = ({ selectedContact }) => {
               </div>
             )}
 
-            {messages.map((message, index) => (
-              <div
-                key={message.id || index}
-                className={`message-container ${message.isFromMe ? 'message-container-sent' : 'message-container-received'} group`}
-              >
+            {/* Group messages by date and add date separators */}
+            {(() => {
+              // Group messages by date
+              const messagesByDate = {};
+              messages.forEach(message => {
+                const date = new Date(message.timestamp);
+                const dateString = date.toDateString();
+                if (!messagesByDate[dateString]) {
+                  messagesByDate[dateString] = [];
+                }
+                messagesByDate[dateString].push(message);
+              });
+
+              // Render messages with date separators
+              return Object.entries(messagesByDate)
+                .sort(([dateA], [dateB]) => new Date(dateA) - new Date(dateB))
+                .map(([dateString, messagesForDate]) => (
+                  <React.Fragment key={dateString}>
+                    <DateSeparator date={new Date(dateString)} />
+                    {messagesForDate.map((message, index) => (
+                      <div
+                        key={message.id || `${dateString}-${index}`}
+                        className={`message-container ${message.isFromMe ? 'message-container-sent' : 'message-container-received'} group`}
+                      >
                 {/* Avatar for received messages */}
                 {!message.isFromMe && (
                   <div className="message-avatar message-avatar-received">
@@ -1642,7 +1749,10 @@ const TelegramChatView = ({ selectedContact }) => {
                   </div>
                 )}
               </div>
-            ))}
+                    ))}
+                  </React.Fragment>
+                ));
+            })()}
             <div ref={messagesEndRef} />
           </>
         )}
@@ -1659,8 +1769,8 @@ const TelegramChatView = ({ selectedContact }) => {
           />
         )}
         {/* Attachment options */}
-        <div className="flex items-center justify-between mb-2 px-1">
-          <div className="flex space-x-3">
+        <div className="flex items-center justify-between mb-4 px-1">
+          <div className="flex space-x-4">
             <button
               type="button"
               className="text-gray-400 bg-neutral-800 hover:text-[#0088cc] transition-colors p-1 rounded-full hover:bg-neutral-800"
@@ -1675,6 +1785,14 @@ const TelegramChatView = ({ selectedContact }) => {
             >
               <FiImage className="w-5 h-5" />
             </button>
+            {/* AI Assistant Button */}
+            <div className="ai-button-container relative">
+              <AIAssistantButton
+                client={client}
+                selectedContact={selectedContact}
+                className="bg-neutral-800 hover:bg-[#0088CC]/20 ai-assistant-button-composer"
+              />
+            </div>
           </div>
           <div>
             <button

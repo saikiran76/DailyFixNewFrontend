@@ -16,16 +16,17 @@
 
 /* Received message bubbles (left side) */
 .message-bubble-received {
-  background-color: #1f1f1f;
+  background-color: #2C3E50;
   color: white;
   border-top-left-radius: 0;
   text-align: left;
   margin-right: auto;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
 }
 
 /* Sent message bubbles (right side) */
 .message-bubble-sent {
-  background: linear-gradient(135deg, #0088cc, #0077b6);
+  background: linear-gradient(135deg, #8774E1, #6C5CE7);
   color: white;
   border-top-right-radius: 0;
   text-align: left;
@@ -33,6 +34,21 @@
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
   position: relative;
   z-index: 1;
+  /* Add a subtle shine effect */
+  position: relative;
+  overflow: hidden;
+}
+
+/* Add shine effect to sent messages */
+.message-bubble-sent::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(rgba(255, 255, 255, 0.1), transparent);
+  pointer-events: none;
 }
 
 /* Optimistic message styling (messages that are being sent) */

@@ -238,8 +238,8 @@ const Dashboard = () => {
 
     logger.info(`[Dashboard] Current accounts: ${JSON.stringify(accounts)}`);
 
-    // CRITICAL FIX: Only auto-select when no platform is selected
-    // Previously, this would force Telegram selection even if user manually selected WhatsApp
+    // CRITICAL FIX: If we have a Telegram account but selectedPlatform is not set to 'telegram',
+    // set it to 'telegram'
     if (!selectedPlatform && accounts.some(acc => acc.platform === 'telegram')) {
       logger.info('[Dashboard] No platform selected but found Telegram account, selecting Telegram');
       setSelectedPlatform('telegram');
@@ -466,7 +466,6 @@ const Dashboard = () => {
       setShowTourPopup(!whatsappIsConnected);
 
       // Show acknowledgment modal only if WhatsApp is connected
-      // setShowAcknowledgment(whatsappIsConnected);
 
       if (storeAccounts && storeAccounts.length > 0) {
         logger.info('[Dashboard] Using accounts from Redux store:', storeAccounts);
