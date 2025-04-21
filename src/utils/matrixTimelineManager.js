@@ -6,6 +6,7 @@
  */
 
 import logger from './logger';
+import cacheManager from './cacheManager';
 
 // Constants
 const DEFAULT_LIMIT = 100; // Increased from 50 to ensure we get more messages
@@ -13,6 +14,10 @@ const PAGINATION_DIRECTION = {
   BACKWARD: 'b',
   FORWARD: 'f'
 };
+
+// Cache settings
+const USE_CACHE = true; // Set to false to disable caching
+const CACHE_FIRST = true; // Try cache first, then network
 
 class MatrixTimelineManager {
   constructor() {
@@ -181,6 +186,24 @@ class MatrixTimelineManager {
     logger.info(`[MatrixTimelineManager] Loading messages for room ${roomId}`);
 
     try {
+      // Try to get messages from cache first if not forcing refresh
+      if (USE_CACHE && !forceRefresh && CACHE_FIRST) {
+        try {
+          const cachedMessages = await cacheManager.getCachedMessages(roomId, {
+            limit,
+            before: Date.now()
+          });
+
+          if (cachedMessages && cachedMessages.length > 0) {
+            logger.info(`[MatrixTimelineManager] Using ${cachedMessages.length} cached messages for room ${roomId}`);
+            return cachedMessages;
+          }
+        } catch (cacheError) {
+          logger.warn('[MatrixTimelineManager] Error retrieving cached messages:', cacheError);
+          // Continue with network loading if cache fails
+        }
+      }
+
       // Get the room
       const room = this.client.getRoom(roomId);
       if (!room) {
@@ -437,6 +460,25 @@ class MatrixTimelineManager {
       const sortedMessages = messages.sort((a, b) => a.timestamp - b.timestamp);
 
       logger.info(`[MatrixTimelineManager] Successfully loaded ${sortedMessages.length} messages using ${loadingMethod}`);
+
+      // Cache the messages for future use
+      if (USE_CACHE && sortedMessages.length > 0) {
+        try {
+          // Create a safe copy of the messages to avoid serialization issues
+          const messagesToCache = sortedMessages.map(msg => ({
+            ...msg,
+            // Remove any potential circular references or functions
+            _matrixEvent: undefined,
+            _room: undefined
+          }));
+
+          await cacheManager.cacheMessages(messagesToCache, roomId);
+          logger.info(`[MatrixTimelineManager] Cached ${messagesToCache.length} messages for room ${roomId}`);
+        } catch (cacheError) {
+          logger.warn('[MatrixTimelineManager] Error caching messages:', cacheError);
+          // Continue even if caching fails
+        }
+      }
 
       return sortedMessages;
     } catch (error) {
@@ -1069,7 +1111,14 @@ class MatrixTimelineManager {
               // Only process if we have valid data
               if (userId && content && content.membership) {
                 // Create or update the member in the room state
-                room.currentState.setMember(userId, event);
+                // Check if setMember function exists before calling it
+                if (room.currentState && typeof room.currentState.setMember === 'function') {
+                  room.currentState.setMember(userId, event);
+                } else {
+                  // If setMember is not available, we can't update the room state directly
+                  // This is a non-critical error, so we'll just log it and continue
+                  logger.debug(`[MatrixTimelineManager] Cannot update member ${userId} in room state: setMember not available`);
+                }
               }
             });
 
@@ -1225,6 +1274,22 @@ class MatrixTimelineManager {
     this.eventListeners.set(roomId, updatedListeners);
 
     logger.debug(`[MatrixTimelineManager] Removed listener ${listenerId} for room ${roomId}`);
+  }
+
+  /**
+   * Remove all event listeners for a room
+   * @param {string} roomId - Room ID
+   */
+  removeRoomListeners(roomId) {
+    if (!roomId) {
+      logger.error('[MatrixTimelineManager] Cannot remove room listeners: Invalid roomId');
+      return;
+    }
+
+    // Clear all listeners for this room
+    this.eventListeners.set(roomId, []);
+
+    logger.debug(`[MatrixTimelineManager] Removed all listeners for room ${roomId}`);
   }
 
   /**

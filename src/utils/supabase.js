@@ -9,25 +9,64 @@ export const getSupabaseClient = () => {
       import.meta.env.VITE_SUPABASE_ANON_KEY,
       {
         auth: {
+          // CRITICAL FIX: Improve token handling and session persistence
           persistSession: true,
           autoRefreshToken: true,
           detectSessionInUrl: true,
           storageKey: 'dailyfix_auth',
+          // Custom storage implementation to handle token updates properly
           storage: {
             getItem: (key) => {
-              const data = localStorage.getItem(key);
-              return data ? JSON.parse(data) : null;
+              try {
+                const data = localStorage.getItem(key);
+                return data ? JSON.parse(data) : null;
+              } catch (e) {
+                console.error('Error getting item from storage:', e);
+                return null;
+              }
             },
             setItem: (key, value) => {
-              localStorage.setItem(key, JSON.stringify(value));
+              try {
+                // Store the session data
+                localStorage.setItem(key, JSON.stringify(value));
+
+                // CRITICAL FIX: Also store individual tokens for easier access
+                if (value && value.session) {
+                  if (value.session.access_token) {
+                    localStorage.setItem('access_token', value.session.access_token);
+                  }
+                  if (value.session.refresh_token) {
+                    localStorage.setItem('refresh_token', value.session.refresh_token);
+                  }
+                  if (value.session.expires_at) {
+                    localStorage.setItem('session_expiry', value.session.expires_at);
+                  }
+                }
+              } catch (e) {
+                console.error('Error setting item in storage:', e);
+              }
             },
             removeItem: (key) => {
-              localStorage.removeItem(key);
+              try {
+                localStorage.removeItem(key);
+                // Also remove individual tokens
+                if (key === 'dailyfix_auth') {
+                  localStorage.removeItem('access_token');
+                  localStorage.removeItem('refresh_token');
+                  localStorage.removeItem('session_expiry');
+                }
+              } catch (e) {
+                console.error('Error removing item from storage:', e);
+              }
             }
           },
-          // Set longer session duration (5 hours)
+          // CRITICAL FIX: Set longer session duration (5 hours)
+          // This gives users plenty of time to work without interruption
           flowType: 'pkce',
-          sessionExpirySeconds: 5 * 60 * 60 // 5 hours
+          sessionExpirySeconds: 5 * 60 * 60, // 5 hours
+          // CRITICAL FIX: Configure token refresh behavior
+          autoRefreshToken: true,
+          persistSession: true
         }
       }
     );

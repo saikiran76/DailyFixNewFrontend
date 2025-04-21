@@ -1,0 +1,273 @@
+/* Message Action Wheel Styles */
+
+.message-container {
+  position: relative;
+}
+
+/* Action wheel container positioning */
+.action-wheel-container {
+  position: absolute;
+  z-index: 20;
+  width: 0; /* Ensure the container doesn't affect layout */
+  height: 0;
+  pointer-events: none; /* Allow clicks to pass through the container */
+}
+
+.action-wheel-sent {
+  right: 50%; /* Center horizontally */
+  top: -70px; /* Position above the message */
+}
+
+.action-wheel-received {
+  left: 50%; /* Center horizontally */
+  top: -70px; /* Position above the message */
+}
+
+.message-action-wheel {
+  position: absolute;
+  top: 0;
+  transform: scale(0) rotate(-90deg);
+  opacity: 0;
+  transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s ease;
+  z-index: 30;
+  pointer-events: auto; /* Enable pointer events on the wheel itself */
+  transform-origin: center;
+}
+
+.message-container:hover .action-wheel-container .message-action-wheel {
+  transform: scale(1) rotate(0);
+  opacity: 1;
+  pointer-events: auto;
+  animation: wheelAppear 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  will-change: transform, opacity;
+}
+
+.wheel-container {
+  position: relative;
+  width: 160px;
+  height: 160px; /* Make it a circle */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  border-radius: 50%;
+  /* Add a subtle background to make the wheel more visible */
+  background-color: rgba(0, 0, 0, 0.05);
+  backdrop-filter: blur(2px);
+}
+
+.action-wheel-sent .wheel-container {
+  transform: translateX(50%);
+}
+
+.action-wheel-received .wheel-container {
+  transform: translateX(-50%);
+}
+
+.wheel-action {
+  position: absolute;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  cursor: pointer;
+  transform: translate(-50%, -50%) scale(0);
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.3);
+  animation: actionAppear 0.5s forwards;
+  animation-delay: calc(var(--index) * 0.08s);
+  opacity: 0;
+  z-index: 40;
+  will-change: transform, opacity;
+  /* Add a subtle border to make buttons more visible */
+  border: 2px solid rgba(255, 255, 255, 0.7);
+}
+
+.wheel-action:hover {
+  transform: translate(-50%, -50%) scale(1.15);
+  box-shadow: 0 5px 10px rgba(0, 0, 0, 0.4);
+  border-color: rgba(255, 255, 255, 0.9);
+}
+
+.wheel-action.hovered {
+  transform: translate(-50%, -50%) scale(1.25);
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.5);
+  border-color: white;
+}
+
+.wheel-action:active {
+  transform: translate(-50%, -50%) scale(0.95);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+.action-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.action-tooltip {
+  position: absolute;
+  bottom: -30px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 5px 10px;
+  border-radius: 6px;
+  color: white;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.3);
+  animation: tooltipAppear 0.2s forwards;
+  background-color: rgba(0, 0, 0, 0.85);
+  z-index: 50;
+  backdrop-filter: blur(4px);
+  /* Add a subtle border to make tooltips more visible */
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* Add a subtle arrow pointing to the button */
+.action-tooltip::before {
+  content: '';
+  position: absolute;
+  top: -5px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 5px solid rgba(0, 0, 0, 0.85);
+}
+
+/* Fix tooltip text direction for received messages */
+.action-wheel-received .action-tooltip {
+  /* Double flip to make text readable again */
+  transform: translateX(-50%) scaleX(-1);
+  /* Adjust position to account for the flipped container */
+  left: 50%;
+}
+
+/* Animation for wheel actions appearing */
+@keyframes actionAppear {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0);
+  }
+  60% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.2);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+/* Animation for tooltips */
+@keyframes tooltipAppear {
+  0% {
+    opacity: 0;
+    transform: translateX(-50%) translateY(5px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+/* Animation for the entire wheel appearing */
+@keyframes wheelAppear {
+  0% {
+    opacity: 0;
+    transform: scale(0.5) rotate(-45deg);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.05) rotate(5deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0);
+  }
+}
+
+/* Adjust the wheel position for received messages */
+.action-wheel-received .message-action-wheel {
+  transform-origin: right center;
+}
+
+.action-wheel-sent .message-action-wheel {
+  transform-origin: left center;
+}
+
+/* Flip the wheel for received messages */
+.action-wheel-received .wheel-container {
+  transform: translateX(0) scaleX(-1);
+}
+
+/* Flip back the text and icons inside the wheel for received messages */
+.action-wheel-received .wheel-action {
+  transform: translate(-50%, -50%) scale(0) scaleX(-1);
+}
+
+.action-wheel-received .wheel-action:hover {
+  transform: translate(-50%, -50%) scale(1.15) scaleX(-1);
+}
+
+.action-wheel-received .wheel-action.hovered {
+  transform: translate(-50%, -50%) scale(1.25) scaleX(-1);
+}
+
+/* Fix icon display for received messages */
+.action-wheel-received .action-icon {
+  transform: scaleX(-1); /* Flip icons back to normal */
+}
+
+/* Apply different animation delays to each action */
+.wheel-action:nth-child(1) {
+  --index: 0;
+}
+
+.wheel-action:nth-child(2) {
+  --index: 1;
+}
+
+.wheel-action:nth-child(3) {
+  --index: 2;
+}
+
+.wheel-action:nth-child(4) {
+  --index: 3;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .wheel-container {
+    width: 120px;
+    height: 120px;
+  }
+
+  .wheel-action {
+    width: 38px;
+    height: 38px;
+  }
+
+  .action-wheel-sent {
+    left: -15px;
+    top: 5px;
+  }
+
+  .action-wheel-received {
+    right: 5px;
+    top: 5px;
+  }
+
+  .action-tooltip {
+    font-size: 11px;
+    padding: 4px 8px;
+  }
+}

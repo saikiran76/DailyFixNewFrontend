@@ -51,7 +51,7 @@ const MessageItem = ({ message, currentUser }) => {
     : 'text-xs text-gray-600';
 
   return (
-    <div className={`flex ${isMatrixUser ? 'justify-end' : 'justify-start'} mb-4`}>
+    <div className={`message-container flex ${isMatrixUser ? 'justify-end' : 'justify-start'} mb-4`}>
       <div className={`max-w-[70%] px-4 py-2 ${bubbleClass}`}>
         <div className="flex flex-col">
           <div className={senderNameClass}>
@@ -82,4 +82,4 @@ MessageItem.propTypes = {
   currentUser: PropTypes.object.isRequired
 };
 
-export default MessageItem; 
+export default MessageItem;

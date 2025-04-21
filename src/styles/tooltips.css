@@ -1,0 +1,95 @@
+/* Tooltip Styles */
+
+/* Highlight effect for targeted elements */
+.tooltip-highlight {
+  position: relative;
+  z-index: 1000;
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.5);
+  border-radius: 4px;
+  transition: all 0.3s ease;
+  animation: pulse 2s infinite;
+}
+
+/* Tour highlight effect - more prominent */
+.tour-highlight {
+  position: relative;
+  z-index: 1000;
+  box-shadow: 0 0 0 4px rgba(147, 51, 234, 0.7); /* Purple glow */
+  border-radius: 4px;
+  transition: all 0.3s ease;
+  animation: tour-pulse 2s infinite;
+}
+
+/* Pulse animation for tour highlights */
+@keyframes tour-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(147, 51, 234, 0.9);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(147, 51, 234, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(147, 51, 234, 0);
+  }
+}
+
+/* Pulse animation for highlighted elements */
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(59, 130, 246, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+  }
+}
+
+/* Tooltip overlay */
+.tooltip-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  z-index: 900;
+  pointer-events: none;
+}
+
+/* Ensure tooltip is above overlay */
+#onboarding-tooltip {
+  z-index: 1000;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+/* Tooltip arrow styles */
+.tooltip-arrow {
+  position: absolute;
+  width: 0;
+  height: 0;
+  border-style: solid;
+}
+
+/* Tooltip content styles */
+.tooltip-content {
+  max-width: 300px;
+  line-height: 1.5;
+}
+
+/* Tooltip navigation buttons */
+.tooltip-nav-button {
+  transition: all 0.2s ease;
+}
+
+.tooltip-nav-button:hover {
+  transform: scale(1.05);
+}
+
+/* Responsive adjustments */
+@media (max-width: 640px) {
+  #onboarding-tooltip {
+    max-width: 85vw;
+  }
+}

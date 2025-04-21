@@ -1,0 +1,176 @@
+/* Message Bubbles Styling */
+
+/* Common styles for all message bubbles */
+.message-bubble {
+  max-width: 65%;
+  border-radius: 1rem;
+  padding: 0.75rem;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  transition: all 0.2s ease;
+  position: relative;
+  z-index: 10;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* Received message bubbles (left side) */
+.message-bubble-received {
+  background-color: #1f1f1f;
+  color: white;
+  border-top-left-radius: 0;
+  text-align: left;
+  margin-right: auto;
+}
+
+/* Sent message bubbles (right side) */
+.message-bubble-sent {
+  background: linear-gradient(135deg, #0088cc, #0077b6);
+  color: white;
+  border-top-right-radius: 0;
+  text-align: left;
+  margin-left: auto;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  position: relative;
+  z-index: 1;
+}
+
+/* Optimistic message styling (messages that are being sent) */
+.message-optimistic {
+  opacity: 0.8;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  position: relative;
+}
+
+/* Add a subtle animation to optimistic messages */
+.message-optimistic::after {
+  content: '';
+  position: absolute;
+  bottom: -3px;
+  right: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: rgba(255, 255, 255, 0.7);
+  animation: pulse 1.5s infinite;
+}
+
+/* Message container */
+.message-container {
+  display: flex;
+  margin-bottom: 1rem;
+  position: relative;
+  align-items: flex-end;
+  width: 100%;
+}
+
+/* Sent message container */
+.message-container-sent {
+  justify-content: flex-end;
+}
+
+/* Received message container */
+.message-container-received {
+  justify-content: flex-start;
+}
+
+/* Avatar styling */
+.message-avatar {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  overflow: hidden;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 500;
+  color: white;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+/* Received message avatar */
+.message-avatar-received {
+  margin-right: 0.5rem;
+  background-color: #0088cc;
+}
+
+/* Sent message avatar */
+.message-avatar-sent {
+  margin-left: 0.5rem;
+  background-color: #0088cc;
+}
+
+/* Sender name */
+.message-sender {
+  font-size: 0.75rem;
+  font-weight: 500;
+  margin-bottom: 0.25rem;
+  color: #4dabf7;
+}
+
+/* Message content */
+.message-content {
+  font-size: 0.875rem;
+  line-height: 1.4;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
+}
+
+/* Message timestamp */
+.message-timestamp {
+  font-size: 0.625rem;
+  margin-top: 0.25rem;
+  text-align: right;
+  opacity: 0.8;
+}
+
+.message-timestamp-sent {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.message-timestamp-received {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* Reply container */
+.message-reply {
+  background-color: rgba(0, 0, 0, 0.1);
+  border-left: 3px solid #0088cc;
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+}
+
+/* Hover effect */
+.message-bubble:hover {
+  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.15);
+}
+
+/* Media content */
+.message-media {
+  max-width: 100%;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  margin-top: 0.5rem;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .message-bubble {
+    max-width: 75%;
+  }
+}
+
+@media (max-width: 480px) {
+  .message-bubble {
+    max-width: 85%;
+  }
+
+  .message-avatar {
+    width: 1.75rem;
+    height: 1.75rem;
+  }
+}

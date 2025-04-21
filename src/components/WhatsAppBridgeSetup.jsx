@@ -19,7 +19,7 @@ import {
   setWhatsappConnected
 } from '../store/slices/onboardingSlice';
 
-const WhatsAppBridgeSetup = ({ onComplete }) => {
+const WhatsAppBridgeSetup = ({ onComplete, onCancel }) => {
   const dispatch = useDispatch();
   const { socket, isConnected } = useSocketConnection('matrix');
   const { session } = useSelector(state => state.auth);
@@ -36,22 +36,22 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
   const [isInitializing, setIsInitializing] = useState(true);
   const [showRetryButton, setShowRetryButton] = useState(false);
   const [isPolling, setIsPolling] = useState(false);
-  const [pollInterval, setPollInterval] = useState(null);
   const [retryCount, setRetryCount] = useState(0);
   const maxRetries = 3;
 
-  // Use a ref to track if a QR code has been received
+  // Use refs to track component state
   const qrReceivedRef = useRef(false);
+  const pollIntervalRef = useRef(null);
 
   // Stop polling function - defined first to avoid circular dependency
   const stopPolling = useCallback(() => {
-    if (pollInterval) {
+    if (pollIntervalRef.current) {
       logger.info('[WhatsAppBridgeSetup] Stopping polling for WhatsApp login status');
-      clearInterval(pollInterval);
-      setPollInterval(null);
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
       setIsPolling(false);
     }
-  }, [pollInterval]);
+  }, []);
 
   // Function to poll the WhatsApp login status
   const checkLoginStatus = useCallback(async () => {
@@ -100,43 +100,67 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
 
   // Start polling
   const startPolling = useCallback(() => {
-    if (!isPolling && !pollInterval) {
+    if (!isPolling && !pollIntervalRef.current) {
       logger.info('[WhatsAppBridgeSetup] Starting polling for WhatsApp login status');
       setIsPolling(true);
       // Run once immediately
       checkLoginStatus();
       // Then set up interval
       const interval = setInterval(checkLoginStatus, 2000); // Poll every 2 seconds
-      setPollInterval(interval);
+      pollIntervalRef.current = interval;
 
       // Set a timeout to stop polling after 5 minutes (300 seconds) to prevent infinite polling
       setTimeout(() => {
-        if (interval) {
+        if (pollIntervalRef.current === interval) {
           logger.info('[WhatsAppBridgeSetup] Stopping polling after timeout');
           clearInterval(interval);
-          setPollInterval(currentInterval => currentInterval === interval ? null : currentInterval);
+          pollIntervalRef.current = null;
           setIsPolling(false);
         }
       }, 300000); // 5 minutes
     }
-  }, [isPolling, pollInterval, checkLoginStatus]);
+  }, [isPolling, checkLoginStatus]);
+
+  // Track if component is mounted
+  const isMountedRef = useRef(true);
 
   // Initialize connection to WhatsApp with retry logic
   const initializeConnection = useCallback(() => {
     logger.info('[WhatsAppBridgeSetup] Initializing WhatsApp connection, attempt:', retryCount + 1);
     setIsInitializing(true);
 
+    // Set a flag in sessionStorage to track initialization
+    sessionStorage.setItem('whatsapp_initializing', 'true');
+
     // Calculate backoff delay (exponential: 1s, 2s, 4s, etc.)
     const backoffDelay = retryCount > 0 ? Math.pow(2, retryCount - 1) * 1000 : 0;
 
     // If this is a retry, wait before making the request
     setTimeout(() => {
+      // Ensure we have a valid token
+      const token = localStorage.getItem('access_token');
+      if (token) {
+        api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        logger.info('[WhatsAppBridgeSetup] Authorization header set with token');
+      } else {
+        logger.warn('[WhatsAppBridgeSetup] No access token found in localStorage');
+      }
+
       // Make API call to initialize WhatsApp connection
-      api.post('/api/v1/matrix/whatsapp/connect')
+      logger.info('[WhatsAppBridgeSetup] Making API call to /api/v1/matrix/whatsapp/connect');
+      api.post('/api/v1/matrix/whatsapp/connect', {}, {
+        timeout: 15000 // 15 second timeout to prevent hanging
+      })
         .then(response => {
           logger.info('[WhatsAppBridgeSetup] WhatsApp setup initialized successfully:', response.data);
-          setIsInitializing(false);
-          setRetryCount(0); // Reset retry count on success
+          // Only update state if component is still mounted
+          if (isMountedRef.current) {
+            setIsInitializing(false);
+            setRetryCount(0); // Reset retry count on success
+          }
+
+          // Clear the initialization flag
+          sessionStorage.removeItem('whatsapp_initializing');
 
           // *** ADDED FIX: Process QR code directly from API response if available ***
           if (response.data && response.data.status === 'qr_ready' && response.data.qrCode) {
@@ -166,6 +190,12 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
         })
         .catch(error => {
           logger.error('[WhatsAppBridgeSetup] Error initializing WhatsApp setup:', error);
+          logger.error('[WhatsAppBridgeSetup] Error details:', {
+            message: error.message,
+            status: error.response?.status,
+            statusText: error.response?.statusText,
+            data: error.response?.data
+          });
 
           // Check if we should retry
           if (retryCount < maxRetries &&
@@ -178,10 +208,14 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
             const retryDelay = baseDelay + jitter;
 
             logger.info(`[WhatsAppBridgeSetup] Retrying (${retryCount + 1}/${maxRetries}) after ${Math.round(retryDelay/1000)}s delay...`);
-            setRetryCount(prevCount => prevCount + 1);
 
-            // Don't show error toast for retries
-            setIsInitializing(false);
+            // Only update state if component is still mounted
+            if (isMountedRef.current) {
+              setRetryCount(prevCount => prevCount + 1);
+
+              // Don't show error toast for retries
+              setIsInitializing(false);
+            }
 
             // CRITICAL FIX: Use a more reasonable delay with exponential backoff
             setTimeout(() => {
@@ -197,9 +231,15 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
           }
 
           // If we've exhausted retries or it's not a retryable error
-          setIsInitializing(false);
-          setShowRetryButton(true);
-          setRetryCount(0); // Reset retry count
+          // Only update state if component is still mounted
+          if (isMountedRef.current) {
+            setIsInitializing(false);
+            setShowRetryButton(true);
+            setRetryCount(0); // Reset retry count
+          }
+
+          // Clear the initialization flag
+          sessionStorage.removeItem('whatsapp_initializing');
 
           // CRITICAL FIX: Check if the error is due to an invalid session
           if (error.response && error.response.status === 401) {
@@ -359,17 +399,31 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
     return () => {
       sessionStorage.removeItem('whatsapp_initializing');
     };
-  }, [dispatch]); // CRITICAL FIX: Remove initializeConnection from dependencies
+  }, [dispatch, initializeConnection]); // Add initializeConnection to dependencies
 
-  // Refined unmount cleanup: only reset if a QR code has not been received
+  // Set mounted flag and handle cleanup
   useEffect(() => {
+    isMountedRef.current = true;
+
     return () => {
+      isMountedRef.current = false;
       if (!qrReceivedRef.current) {
         dispatch(resetWhatsappSetup());
       }
-      stopPolling();
+
+      // Force stop polling on unmount
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+
+      // Clear initialization flag on unmount
+      sessionStorage.removeItem('whatsapp_initializing');
+
+      // Log cleanup
+      logger.info('[WhatsAppBridgeSetup] Component unmounted, polling stopped');
     };
-  }, [dispatch, stopPolling]);
+  }, [dispatch]);
 
   // Helper function to format time
   const formatTime = (seconds) => {
@@ -389,7 +443,23 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
           <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-green-500 mb-4"></div>
           <p className="text-gray-300">Initializing WhatsApp connection...</p>
           <p className="text-gray-400 text-sm mt-2">This may take a few moments</p>
+
+          <div className="mt-6">
+            <button
+              className="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-md"
+              onClick={() => {
+                // Stop polling
+                stopPolling();
+                // Clear initialization flag
+                sessionStorage.removeItem('whatsapp_initializing');
+                // Call onCancel
+                onCancel();
+              }}
+            >
+              Cancel
+            </button>
           </div>
+        </div>
       </div>
     );
   } else if (qrCode) {
@@ -428,6 +498,22 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
             QR code expires in {formatTime(timeLeft)}
           </p>
         )}
+
+        <div className="mt-4">
+          <button
+            className="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-md"
+            onClick={() => {
+              // Stop polling
+              stopPolling();
+              // Clear initialization flag
+              sessionStorage.removeItem('whatsapp_initializing');
+              // Call onCancel
+              onCancel();
+            }}
+          >
+            Cancel
+          </button>
+        </div>
       </div>
     );
   } else if (setupState === 'error') {
@@ -442,14 +528,29 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
             {is500Error ? 'The WhatsApp service is currently unavailable. Please try again later.' : 'The connection to WhatsApp timed out. This could be due to network issues or high server load.'}
           </p>
         </div>
-        {showRetryButton && (
+        <div className="flex justify-center space-x-4">
+          {showRetryButton && (
+            <button
+              className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-md"
+              onClick={handleRetry}
+            >
+              Try Again
+            </button>
+          )}
           <button
-            className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-md"
-            onClick={handleRetry}
+            className="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-md"
+            onClick={() => {
+              // Stop polling
+              stopPolling();
+              // Clear initialization flag
+              sessionStorage.removeItem('whatsapp_initializing');
+              // Call onCancel
+              onCancel();
+            }}
           >
-            Try Again
+            Cancel
           </button>
-        )}
+        </div>
       </div>
     );
   } else {
@@ -460,6 +561,22 @@ const WhatsAppBridgeSetup = ({ onComplete }) => {
           <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-green-500 mb-4"></div>
           <p className="text-gray-300">Waiting for QR code...</p>
           <p className="text-gray-400 text-sm mt-2">This may take a few moments</p>
+
+          <div className="mt-6">
+            <button
+              className="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-md"
+              onClick={() => {
+                // Stop polling
+                stopPolling();
+                // Clear initialization flag
+                sessionStorage.removeItem('whatsapp_initializing');
+                // Call onCancel
+                onCancel();
+              }}
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       </div>
     );

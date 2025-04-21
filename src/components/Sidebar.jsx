@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { FiMessageSquare, FiCompass, FiSettings, FiLogOut, FiX, FiBarChart2, FiUser, FiChevronDown } from 'react-icons/fi';
+import { FiMessageSquare, FiCompass, FiSettings, FiLogOut, FiX, FiBarChart2, FiUser, FiChevronDown, FiHelpCircle } from 'react-icons/fi';
 import { BsFillInboxesFill } from 'react-icons/bs';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useDispatch } from 'react-redux';
@@ -8,11 +8,14 @@ import { initiateWhatsAppRelogin } from '../store/slices/onboardingSlice';
 import { toast } from 'react-hot-toast';
 import ReloginConfirmationModal from './ReloginConfirmationModal';
 import LogoutModal from './LogoutModal';
+import ConnectionStatusIndicator from './ConnectionStatusIndicator';
+import OnboardingTooltipManager from './OnboardingTooltipManager';
 import summaryImage from '../images/summary.png'
 import dropImage from '../images/Drop.png'
 import priorityImage from '../images/priority.png'
 // import { BsFillInboxesFill } from "react-icons/bs";
 import { TbHelpSquare } from "react-icons/tb";
+import logger from '../utils/logger';
 import { IoMdLogIn } from "react-icons/io";
 import DFLogo from '../images/DF.png'
 import SettingsMenu from './SetttingsMenu';
@@ -20,6 +23,8 @@ import whatsappIcon from '../images/whatsapp-icon.svg';
 import matrixIcon from '../images/matrix-icon.svg';
 import telegramIcon from '../images/telegram-icon.svg'; // You'll need to add this image
 import '../styles/platformSwitcher.css';
+import platformManager from '../services/PlatformManager';
+// import logger from '../utils/logger';
 
 const TutorialModal = ({ isOpen, onClose }) => {
   const modalRef = useRef();
@@ -144,12 +149,75 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
   const connectedPlatforms = getConnectedPlatforms();
   const availablePlatforms = getAvailablePlatforms();
 
-  const handlePlatformClick = (platform) => {
-    onPlatformSelect(platform);
-    setShowPlatformMenu(false);
-    // if (platform === 'discord') {
-    //   navigate('/discord');
-    // }
+  // Enhanced platform switching with proper isolation
+  const handlePlatformClick = async (platform) => {
+    if (platform === selectedPlatform) {
+      setShowPlatformMenu(false);
+      return;
+    }
+
+    logger.info(`[Sidebar] Switching from ${selectedPlatform} to ${platform}`);
+
+    // Show loading toast
+    const toastId = toast.loading(`Switching to ${platform.charAt(0).toUpperCase() + platform.slice(1)}...`);
+
+    try {
+      // For Telegram, make sure Matrix is initialized first
+      if (platform === 'telegram' && !window.matrixClient) {
+        logger.info('[Sidebar] Telegram selected but Matrix client not available, initializing Matrix first');
+
+        // Dispatch an event to trigger Matrix initialization
+        const event = new CustomEvent('dailyfix-initialize-matrix', {
+          detail: {
+            forTelegram: true,
+            source: 'Sidebar.handlePlatformClick',
+            timestamp: new Date().toISOString()
+          }
+        });
+        window.dispatchEvent(event);
+        logger.info('[Sidebar] Dispatched dailyfix-initialize-matrix event');
+
+        // Wait for Matrix client to be initialized (max 10 seconds)
+        let attempts = 0;
+        const MAX_ATTEMPTS = 20; // Increased to 20 attempts (10 seconds)
+        const DELAY = 500; // 500ms
+
+        while (!window.matrixClient && attempts < MAX_ATTEMPTS) {
+          logger.info(`[Sidebar] Waiting for Matrix client (attempt ${attempts + 1}/${MAX_ATTEMPTS})`);
+          await new Promise(resolve => setTimeout(resolve, DELAY));
+          attempts++;
+        }
+
+        if (!window.matrixClient) {
+          logger.error('[Sidebar] Matrix client not available after waiting, cannot switch to Telegram');
+          toast.error('Could not connect to Telegram. Please try refreshing the page and connecting to Telegram first.', { id: toastId });
+          return;
+        }
+      }
+
+      // Use platform manager to handle the switch
+      const success = await platformManager.switchPlatform(platform);
+
+      if (success) {
+        // Call the parent component's handler
+        onPlatformSelect(platform);
+        setShowPlatformMenu(false);
+
+        // Store selected platform in localStorage for persistence
+        try {
+          localStorage.setItem('dailyfix_selected_platform', platform);
+        } catch (storageError) {
+          logger.error('[Sidebar] Error saving selected platform to localStorage:', storageError);
+        }
+
+        toast.success(`Switched to ${platform.charAt(0).toUpperCase() + platform.slice(1)}`, { id: toastId });
+      } else {
+        toast.error(`Failed to switch to ${platform}`, { id: toastId });
+      }
+    } catch (error) {
+      logger.error(`[Sidebar] Error switching to platform ${platform}:`, error);
+      toast.error(`Error switching to ${platform}`, { id: toastId });
+    }
   };
 
   const toggleSettingsMenu = (event) => {
@@ -184,12 +252,16 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
   }, [showSettingsMenu, showPlatformMenu]);
 
   return (
-    <div className={`relative flex flex-col h-full bg-neutral-900 transition-all duration-300 ease-in-out ${isCollapsed ? 'w-16' : 'w-[13rem]'}`}>
+    <div className={`relative flex flex-col h-full bg-neutral-900 transition-all duration-300 ease-in-out ${isCollapsed ? 'w-[4.5rem] collapsed-sidebar' : 'w-[13rem]'}`}>
       <div className={`p-6 ${isCollapsed ? 'flex justify-center' : ''}`}>
         <div className="flex items-center">
-          <img className={`h-8 w-8 rounded-full ${isCollapsed ? '' : 'mr-3'}`} src={DFLogo} alt="DailyFix Logo" />
-          {!isCollapsed && (
+          {isCollapsed ? (
+            <div className="flex justify-center items-center min-w-[2rem]">
+              <img className="h-8 w-8 rounded-full" src={DFLogo} alt="DailyFix Logo" />
+            </div>
+          ) : (
             <>
+              <img className="h-8 w-8 rounded-full mr-3" src={DFLogo} alt="DailyFix Logo" />
               <span className="text-white text-xl font-semibold">Daily</span>
               <span className="text-xl font-semibold ml-0 bg-gradient-to-r from-purple-400 to-pink-600 bg-clip-text text-transparent">Fix</span>
             </>
@@ -204,9 +276,9 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
             <button
               data-platform-button
               onClick={togglePlatformMenu}
-              className={`w-full flex items-center justify-between ${isCollapsed ? 'px-2' : 'px-3'} py-2 rounded-lg transition-colors theme-transition ${isDarkTheme ? 'bg-neutral-800 text-white hover:bg-neutral-700' : 'bg-gray-100 text-gray-900 hover:bg-gray-200'}`}
+              className={`platform-switcher bg-zinc-700 w-full flex items-center ${isCollapsed ? 'justify-center' : 'justify-between'} ${isCollapsed ? 'px-2' : 'px-3'} py-2 rounded-lg transition-colors theme-transition ${isDarkTheme ? 'bg-neutral-800 text-white hover:bg-neutral-700' : 'bg-gray-100 text-gray-900 hover:bg-gray-200'}`}
             >
-              <div className="flex items-center">
+              <div className={`flex items-center bg-zinc-700 ${isCollapsed ? 'justify-center' : ''}`}>
                 {/* Show icon for current platform */}
                 {connectedPlatforms.find(p => p.id === selectedPlatform)?.icon && (
                   <img
@@ -216,9 +288,12 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
                   />
                 )}
                 {!isCollapsed && (
-                  <span className="text-sm font-medium">
-                    {connectedPlatforms.find(p => p.id === selectedPlatform)?.name || selectedPlatform}
-                  </span>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-sm font-medium">
+                      {connectedPlatforms.find(p => p.id === selectedPlatform)?.name || selectedPlatform}
+                    </span>
+                    <ConnectionStatusIndicator platform={selectedPlatform} size="sm" />
+                  </div>
                 )}
               </div>
               {!isCollapsed && <FiChevronDown className="w-4 h-4" />}
@@ -243,7 +318,8 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
                       (isDarkTheme ? 'text-gray-300 hover:bg-neutral-700 hover:text-white' : 'text-gray-700 hover:bg-gray-100')}`}
                   >
                     <img src={platform.icon} alt={platform.name} className="w-5 h-5 mr-2" />
-                    <span>{platform.name}</span>
+                    <span className="flex-1">{platform.name}</span>
+                    <ConnectionStatusIndicator platform={platform.id} size="sm" />
                   </button>
                 ))}
 
@@ -287,7 +363,7 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
         ) && (
           <button
             onClick={() => onViewToggle(!isAnalyticsView)}
-            className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'space-x-3'} ${isCollapsed ? 'px-2' : 'px-3'} py-2 rounded-lg transition-colors theme-transition ${
+            className={`analytics-button w-full flex items-center ${isCollapsed ? 'justify-center' : 'space-x-3'} ${isCollapsed ? 'px-2' : 'px-3'} py-2 rounded-lg transition-colors theme-transition ${
               isAnalyticsView
                 ? 'bg-purple-600 text-white'
                 : isDarkTheme
@@ -298,18 +374,18 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
             {isAnalyticsView ? (
               <>
                 <BsFillInboxesFill className="w-5 h-5" />
-                {!isCollapsed && <span className="text-sm font-medium">Inbox</span>}
+                {!isCollapsed && <span className="text-sm font-medium ml-3">Inbox</span>}
               </>
             ) : (
               <>
                 <FiBarChart2 className="w-5 h-5" />
-                {!isCollapsed && <span className="text-sm font-medium">Analytics</span>}
+                {!isCollapsed && <span className="text-sm font-medium ml-3">Analytics</span>}
               </>
             )}
           </button>
         )}
 
-        <button
+        {/* <button
           onClick={() => navigate('/explore')}
           className={`w-full flex bg-neutral-800 items-center ${isCollapsed ? 'justify-center' : 'space-x-3'} ${isCollapsed ? 'px-2' : 'px-3'} py-2 rounded-lg transition-colors ${
             location.pathname === '/explore'
@@ -318,8 +394,8 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
           }`}
         >
           <FiCompass className="w-5 h-5" />
-          {!isCollapsed && <span className="text-sm font-medium">Explore</span>}
-        </button>
+          {!isCollapsed && <span className="text-sm font-medium ml-3">Explore</span>}
+        </button> */}
 
         {/* <button
           onClick={() => navigate('/inbox')}
@@ -349,23 +425,32 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
         <button
           data-settings-button
           onClick={toggleSettingsMenu}
-          className={`w-full flex items-center space-x-3 px-3 py-2 rounded-lg transition-colors ${
+          className={`settings-button w-full flex items-center ${isCollapsed ? 'justify-center' : 'space-x-3'} ${isCollapsed ? 'px-2' : 'px-3'} py-2 rounded-lg transition-colors ${
               showSettingsMenu
                 ? 'bg-neutral-700 text-white'
                 : 'text-gray-400 bg-neutral-800 hover:bg-neutral-700 hover:text-white'
           }`}
         >
           <FiUser className="w-5 h-5" />
-          <span className="text-sm font-medium">Settings</span>
+          {!isCollapsed && <span className="text-sm font-medium ml-3">Settings</span>}
+        </button>
+
+        {/* Tour Guide Button */}
+        <button
+          onClick={() => setShowTutorial(true)}
+          className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'space-x-3'} ${isCollapsed ? 'px-2' : 'px-3'} py-2 rounded-lg text-gray-400 bg-neutral-800 hover:bg-neutral-700 hover:text-white transition-colors`}
+        >
+          <FiHelpCircle className="w-5 h-5" />
+          {!isCollapsed && <span className="text-sm font-medium ml-3">Tour Guide</span>}
         </button>
 
         {/* Logout Button */}
         <button
           onClick={() => setShowLogoutModal(true)}
-          className="w-full flex items-center bg-neutral-800 space-x-3 px-3 py-2 rounded-lg text-gray-400 hover:bg-neutral-700 hover:text-white transition-colors"
+          className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'space-x-3'} ${isCollapsed ? 'px-2' : 'px-3'} py-2 rounded-lg text-gray-400 bg-neutral-800 hover:bg-neutral-700 hover:text-white transition-colors`}
         >
           <FiLogOut className="w-5 h-5" />
-          <span className="text-sm font-medium">Logout</span>
+          {!isCollapsed && <span className="text-sm font-medium ml-3">Logout</span>}
         </button>
       </div>
 
@@ -375,9 +460,13 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
         onClose={() => setShowSettingsMenu(false)}
       />
 
-      {/* Tutorial Modal */}
-      {showTutorial && (
-        <TutorialModal isOpen={showTutorial} onClose={() => setShowTutorial(false)} />
+      {/* Tour Guide */}
+      {showTutorial && selectedPlatform && (
+        <OnboardingTooltipManager
+          platform={selectedPlatform}
+          forceTour={true}
+          onClose={() => setShowTutorial(false)}
+        />
       )}
 
       {/* Logout Modal */}

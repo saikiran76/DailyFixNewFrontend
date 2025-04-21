@@ -5,6 +5,7 @@ import { supabase } from '../utils/supabase';
 import logger from '../utils/logger';
 import { saveToIndexedDB, getFromIndexedDB } from '../utils/indexedDBHelper';
 import { setClientInitialized, setSyncState } from '../store/slices/matrixSlice';
+import matrixRegistration from '../utils/matrixRegistration';
 
 // Constants
 const MATRIX_CREDENTIALS_KEY = 'matrix_credentials';
@@ -12,17 +13,57 @@ const MATRIX_CLIENT_KEY = 'matrix_client';
 
 /**
  * MatrixInitializer component
- * Directly initializes the Matrix client following Element's approach
+ * Only initializes the Matrix client when needed for Telegram connection
+ * This prevents unnecessary Matrix initialization for users who don't use Telegram
  */
-const MatrixInitializer = ({ children }) => {
+const MatrixInitializer = ({ children, forceInitialize: initialForceInitialize = false }) => {
   const dispatch = useDispatch();
   const { session } = useSelector(state => state.auth);
-  const [initializing, setInitializing] = useState(true);
+  const [initializing, setInitializing] = useState(false); // Start as false by default
   const [error, setError] = useState(null);
   const [matrixClient, setMatrixClient] = useState(null);
+  const [forceInitialize, setForceInitialize] = useState(initialForceInitialize);
 
-  // Initialize Matrix client
+
+
+  // Listen for custom initialization events
   useEffect(() => {
+    const handleInitializeEvent = (event) => {
+      logger.info('[MatrixInitializer] Received custom initialization event', event.detail);
+      setForceInitialize(true);
+
+      // Log that we're setting forceInitialize to true
+      logger.info('[MatrixInitializer] Setting forceInitialize to true');
+
+      // Immediately start initialization
+      logger.info('[MatrixInitializer] Starting immediate initialization');
+      setInitializing(true);
+    };
+
+    // Add event listener
+    window.addEventListener('dailyfix-initialize-matrix', handleInitializeEvent);
+    logger.info('[MatrixInitializer] Added event listener for dailyfix-initialize-matrix');
+
+    // Clean up
+    return () => {
+      window.removeEventListener('dailyfix-initialize-matrix', handleInitializeEvent);
+      logger.info('[MatrixInitializer] Removed event listener for dailyfix-initialize-matrix');
+    };
+  }, []);
+
+  // Initialize Matrix client only when needed
+  useEffect(() => {
+    // Skip if not needed
+    if (!forceInitialize && !sessionStorage.getItem('connecting_to_telegram')) {
+      logger.info('[MatrixInitializer] Matrix initialization not needed, skipping');
+      setInitializing(false);
+      return;
+    }
+
+    logger.info('[MatrixInitializer] Starting Matrix initialization');
+    setInitializing(true);
+
+    // Define the Matrix initialization function
     const initializeMatrixClient = async () => {
       if (!session?.user?.id) {
         logger.info('[MatrixInitializer] No user session, skipping Matrix initialization');
@@ -91,13 +132,15 @@ const MatrixInitializer = ({ children }) => {
           logger.info('[MatrixInitializer] No cached credentials, fetching from Supabase');
 
           try {
+            // CRITICAL FIX: Use maybeSingle() instead of single() to prevent 406 errors
+            // when no records are found
             const { data, error } = await supabase
               .from('accounts')
               .select('*')
               .eq('user_id', session.user.id)
               .eq('platform', 'matrix')
               .eq('status', 'active')
-              .single();
+              .maybeSingle();
 
             if (error) {
               throw new Error(`Supabase error: ${error.message}`);
@@ -133,10 +176,19 @@ const MatrixInitializer = ({ children }) => {
 
         // Final check to ensure we have valid credentials
         if (!credentials || !credentials.accessToken) {
-          logger.error('[MatrixInitializer] Could not find valid Matrix credentials in any storage');
-          setError('No valid Matrix credentials found');
-          setInitializing(false);
-          return;
+          logger.info('[MatrixInitializer] No valid Matrix credentials found, attempting to register new account');
+
+          try {
+            // Register a new Matrix account using the imported utility
+            credentials = await matrixRegistration.registerMatrixAccount(session.user.id);
+
+            logger.info('[MatrixInitializer] Successfully registered new Matrix account');
+          } catch (registrationError) {
+            logger.error('[MatrixInitializer] Error registering Matrix account:', registrationError);
+            setError('Could not register Matrix account: ' + registrationError.message);
+            setInitializing(false);
+            return;
+          }
         }
 
         logger.info('[MatrixInitializer] Successfully retrieved Matrix credentials');
@@ -331,15 +383,41 @@ const MatrixInitializer = ({ children }) => {
 
     // Cleanup on unmount
     return () => {
-      if (matrixClient) {
-        logger.info('[MatrixInitializer] Stopping Matrix client');
-        matrixClient.removeAllListeners();
-        matrixClient.stopClient();
-        setMatrixClient(null);
-        window.matrixClient = null;
-      }
+      // Properly clean up Matrix client
+      const cleanupMatrixClient = () => {
+        if (matrixClient) {
+          logger.info('[MatrixInitializer] Stopping Matrix client');
+          try {
+            // Remove all listeners first to prevent callback errors during cleanup
+            matrixClient.removeAllListeners();
+
+            // Stop the client
+            if (matrixClient.clientRunning) {
+              matrixClient.stopClient();
+            }
+
+            // Clear state
+            setMatrixClient(null);
+
+            // Clear global reference
+            if (window.matrixClient === matrixClient) {
+              window.matrixClient = null;
+            }
+
+            // Clear any session flags
+            sessionStorage.removeItem('connecting_to_telegram');
+
+            logger.info('[MatrixInitializer] Matrix client stopped successfully');
+          } catch (e) {
+            logger.error('[MatrixInitializer] Error stopping Matrix client:', e);
+          }
+        }
+      };
+
+      // Execute cleanup
+      cleanupMatrixClient();
     };
-  }, [session, dispatch]);
+  }, [session, dispatch, forceInitialize]);
 
   // Make client available to components that need it
   useEffect(() => {
@@ -382,7 +460,7 @@ const MatrixInitializer = ({ children }) => {
                   </div>
                 </div>
               </div>
-              <div className="flex border-l border-gray-700">
+              {/* <div className="flex border-l border-gray-700">
                 <button
                   onClick={() => {
                     toast.dismiss(t.id);
@@ -392,10 +470,10 @@ const MatrixInitializer = ({ children }) => {
                 >
                   Refresh
                 </button>
-              </div>
+              </div> */}
             </div>
           ),
-          { duration: 10000, position: 'bottom-right' }
+          { duration: 1000, position: 'bottom-right' }
         );
       });
     }

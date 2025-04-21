@@ -2,6 +2,7 @@ import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import { supabase } from '../../supabaseClient';
 import logger from '../../utils/logger';
 import { saveToIndexedDB, getFromIndexedDB } from '../../utils/indexedDBHelper';
+import matrixRegistration from '../../utils/matrixRegistration';
 
 // Constants
 const MATRIX_CREDENTIALS_KEY = 'matrix_credentials';
@@ -13,16 +14,16 @@ export const fetchMatrixCredentials = createAsyncThunk(
   async (userId, { rejectWithValue }) => {
     try {
       logger.info('[matrixSlice] Fetching Matrix credentials for user:', userId);
-      
+
       // First try to get credentials from IndexedDB
       const cachedCredentials = await getFromIndexedDB(userId, MATRIX_CREDENTIALS_KEY);
       if (cachedCredentials) {
         logger.info('[matrixSlice] Found cached Matrix credentials');
-        
+
         // Check if token needs refresh
         const now = Date.now();
         const expiresAt = cachedCredentials.expires_at;
-        
+
         if (expiresAt && expiresAt - now < TOKEN_REFRESH_THRESHOLD) {
           logger.info('[matrixSlice] Cached credentials need refresh');
           // Will continue to fetch from Supabase
@@ -30,7 +31,7 @@ export const fetchMatrixCredentials = createAsyncThunk(
           return cachedCredentials;
         }
       }
-      
+
       // If no valid cached credentials, fetch from Supabase
       const { data, error } = await supabase
         .from('accounts')
@@ -39,24 +40,24 @@ export const fetchMatrixCredentials = createAsyncThunk(
         .eq('platform', 'matrix')
         .eq('status', 'active')
         .single();
-      
+
       if (error) {
         logger.error('[matrixSlice] Error fetching Matrix credentials:', error);
         return rejectWithValue(error.message);
       }
-      
+
       if (!data || !data.credentials) {
         logger.warn('[matrixSlice] No Matrix credentials found for user:', userId);
         return rejectWithValue('No Matrix credentials found');
       }
-      
+
       logger.info('[matrixSlice] Matrix credentials fetched successfully');
-      
+
       // Save credentials to IndexedDB
-      await saveToIndexedDB(userId, { 
-        [MATRIX_CREDENTIALS_KEY]: data.credentials 
+      await saveToIndexedDB(userId, {
+        [MATRIX_CREDENTIALS_KEY]: data.credentials
       });
-      
+
       return data.credentials;
     } catch (error) {
       logger.error('[matrixSlice] Error in fetchMatrixCredentials:', error);
@@ -70,46 +71,13 @@ export const registerMatrixAccount = createAsyncThunk(
   async (userId, { rejectWithValue }) => {
     try {
       logger.info('[matrixSlice] Registering new Matrix account for user:', userId);
-      
-      // Generate a secure password
-      const generatePassword = () => {
-        const array = new Uint8Array(24);
-        window.crypto.getRandomValues(array);
-        return btoa(String.fromCharCode.apply(null, array));
-      };
-      
-      // Create Matrix username based on user ID
-      const username = `user${userId.replace(/-/g, '')}matrixttestkoraca`;
-      const password = generatePassword();
-      
-      // Call the auth service to register a new Matrix account
-      const response = await fetch('/api/v1/auth/register-matrix', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          username,
-          password,
-          userId
-        }),
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        logger.error('[matrixSlice] Error registering Matrix account:', errorData);
-        return rejectWithValue(errorData.message || 'Failed to register Matrix account');
-      }
-      
-      const data = await response.json();
+
+      // Use the client-side Matrix registration utility
+      // This follows Element-Web's architecture for Matrix registration
+      const credentials = await matrixRegistration.registerMatrixAccount(userId);
+
       logger.info('[matrixSlice] Matrix account registered successfully');
-      
-      // Save credentials to IndexedDB
-      await saveToIndexedDB(userId, { 
-        [MATRIX_CREDENTIALS_KEY]: data.credentials 
-      });
-      
-      return data.credentials;
+      return credentials;
     } catch (error) {
       logger.error('[matrixSlice] Error in registerMatrixAccount:', error);
       return rejectWithValue(error.message);
@@ -122,7 +90,7 @@ export const refreshMatrixToken = createAsyncThunk(
   async (credentials, { rejectWithValue }) => {
     try {
       logger.info('[matrixSlice] Refreshing Matrix token');
-      
+
       // Call the auth service to refresh the token
       const response = await fetch('/api/v1/auth/refresh-matrix-token', {
         method: 'POST',
@@ -135,26 +103,26 @@ export const refreshMatrixToken = createAsyncThunk(
           deviceId: credentials.deviceId
         }),
       });
-      
+
       if (!response.ok) {
         const errorData = await response.json();
         logger.error('[matrixSlice] Error refreshing Matrix token:', errorData);
         return rejectWithValue(errorData.message || 'Failed to refresh Matrix token');
       }
-      
+
       const data = await response.json();
       logger.info('[matrixSlice] Matrix token refreshed successfully');
-      
+
       // Update credentials in IndexedDB
       const userId = credentials.userId.split(':')[0].substring(1);
-      await saveToIndexedDB(userId, { 
+      await saveToIndexedDB(userId, {
         [MATRIX_CREDENTIALS_KEY]: {
           ...credentials,
           accessToken: data.accessToken,
           expires_at: data.expires_at
-        } 
+        }
       });
-      
+
       return {
         ...credentials,
         accessToken: data.accessToken,
@@ -193,7 +161,9 @@ const matrixSlice = createSlice({
       state.syncState = 'INITIAL';
       state.loading = false;
       state.error = null;
-    }
+    },
+    // CRITICAL FIX: Add reset action for global cleanup
+    reset: () => initialState
   },
   extraReducers: (builder) => {
     // fetchMatrixCredentials
@@ -209,7 +179,7 @@ const matrixSlice = createSlice({
       state.loading = false;
       state.error = action.payload;
     });
-    
+
     // registerMatrixAccount
     builder.addCase(registerMatrixAccount.pending, (state) => {
       state.loading = true;
@@ -223,7 +193,7 @@ const matrixSlice = createSlice({
       state.loading = false;
       state.error = action.payload;
     });
-    
+
     // refreshMatrixToken
     builder.addCase(refreshMatrixToken.fulfilled, (state, action) => {
       state.credentials = action.payload;
@@ -232,5 +202,5 @@ const matrixSlice = createSlice({
 });
 
 // Export actions and reducer
-export const { setClientInitialized, setSyncState, clearMatrixState } = matrixSlice.actions;
+export const { setClientInitialized, setSyncState, clearMatrixState, reset } = matrixSlice.actions;
 export default matrixSlice.reducer;

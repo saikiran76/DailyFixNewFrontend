@@ -1,4 +1,4 @@
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import { createSlice, createAsyncThunk, createSelector } from '@reduxjs/toolkit';
 import { messageService } from '../../services/messageService';
 import logger from '../../utils/logger';
 
@@ -118,7 +118,7 @@ const messageSlice = createSlice({
     messageReceived: (state, action) => {
       const { contactId, message } = action.payload;
       const normalized = messageService.normalizeMessage(message);
-      
+
       if (!state.items[contactId]) {
         state.items[contactId] = [];
       }
@@ -126,9 +126,9 @@ const messageSlice = createSlice({
       // Check for duplicates based on message_id only
       const exists = state.items[contactId].some(existingMsg => {
         // Check if it's the same message by ID (either message_id or id)
-        return (existingMsg.message_id && normalized.message_id && 
+        return (existingMsg.message_id && normalized.message_id &&
                 existingMsg.message_id === normalized.message_id) ||
-               (existingMsg.id && normalized.id && 
+               (existingMsg.id && normalized.id &&
                 existingMsg.id === normalized.id);
       });
 
@@ -160,14 +160,16 @@ const messageSlice = createSlice({
         m.content === newMessage.content &&
         m.timestamp === newMessage.timestamp
       );
-      
+
       if (!exists) {
         state.messageQueue.push({
           ...newMessage,
           tempId: uuidv4()
         });
       }
-    }
+    },
+    // CRITICAL FIX: Add reset action for global cleanup
+    reset: () => initialState
   },
   extraReducers: (builder) => {
     builder
@@ -186,10 +188,10 @@ const messageSlice = createSlice({
 
         // Check for duplicates using message_id only
         const uniqueMessages = normalized.filter(newMsg => {
-          return !state.items[contactId]?.some(existingMsg => 
-            (existingMsg.message_id && newMsg.message_id && 
+          return !state.items[contactId]?.some(existingMsg =>
+            (existingMsg.message_id && newMsg.message_id &&
              existingMsg.message_id === newMsg.message_id) ||
-            (existingMsg.id && newMsg.id && 
+            (existingMsg.id && newMsg.id &&
              existingMsg.id === newMsg.id)
           );
         });
@@ -232,7 +234,7 @@ const messageSlice = createSlice({
       .addCase(fetchNewMessages.fulfilled, (state, action) => {
         const { messages } = action.payload;
         const contactId = action.meta.arg.contactId;
-        
+
         if (!messages || messages.length === 0) {
           state.newMessagesFetching = false;
           return;
@@ -269,7 +271,7 @@ const messageSlice = createSlice({
             }))
           });
         }
-        
+
         state.newMessagesFetching = false;
       })
       .addCase(fetchNewMessages.rejected, (state, action) => {
@@ -284,15 +286,15 @@ const messageSlice = createSlice({
       .addCase(refreshMessages.fulfilled, (state, action) => {
         const { contactId, messages } = action.payload;
         state.refreshing = false;
-        
+
         if (!messages || !Array.isArray(messages)) return;
-        
+
         // Use existing message normalization
         const normalized = messages.map(msg => messageService.normalizeMessage(msg))
-          .filter(newMsg => !state.items[contactId]?.some(existingMsg => 
-            (existingMsg.message_id && newMsg.message_id && 
+          .filter(newMsg => !state.items[contactId]?.some(existingMsg =>
+            (existingMsg.message_id && newMsg.message_id &&
              existingMsg.message_id === newMsg.message_id) ||
-            (existingMsg.id && newMsg.id && 
+            (existingMsg.id && newMsg.id &&
              existingMsg.id === newMsg.id)
           ));
 
@@ -316,22 +318,75 @@ export const {
   addToMessageQueue,
   removeFromMessageQueue,
   updateMessageStatus,
-  messageReceived
+  messageReceived,
+  reset
 } = messageSlice.actions;
 
 // Export reducer
 export const messageReducer = messageSlice.reducer;
 
-// Selectors
-export const selectMessages = (state, contactId) => state.messages.items[contactId] || [];
-export const selectMessageLoading = (state) => state.messages.loading;
-export const selectMessageError = (state) => state.messages.error;
-export const selectHasMoreMessages = (state) => state.messages.hasMore;
-export const selectCurrentPage = (state) => state.messages.currentPage;
-export const selectMessageQueue = (state) => state.messages.messageQueue;
-export const selectUnreadMessageIds = (state) => state.messages.unreadMessageIds;
-export const selectLastKnownMessageId = (state, contactId) => state.messages.lastKnownMessageIds[contactId];
-export const selectNewMessagesFetching = (state) => state.messages.newMessagesFetching;
-export const selectNewMessagesError = (state) => state.messages.newMessagesError;
-export const selectRefreshing = (state) => state.messages.refreshing;
-export const selectRefreshError = (state) => state.messages.refreshError; 
+// Base selectors
+const selectMessagesState = (state) => state.messages;
+const selectMessagesItems = (state) => state.messages.items;
+const selectContactId = (_, contactId) => contactId;
+
+// Memoized selectors
+export const selectMessages = createSelector(
+  [selectMessagesItems, selectContactId],
+  (items, contactId) => items[contactId] || []
+);
+
+export const selectMessageLoading = createSelector(
+  [selectMessagesState],
+  (messages) => messages.loading
+);
+
+export const selectMessageError = createSelector(
+  [selectMessagesState],
+  (messages) => messages.error
+);
+
+export const selectHasMoreMessages = createSelector(
+  [selectMessagesState],
+  (messages) => messages.hasMore
+);
+
+export const selectCurrentPage = createSelector(
+  [selectMessagesState],
+  (messages) => messages.currentPage
+);
+
+export const selectMessageQueue = createSelector(
+  [selectMessagesState],
+  (messages) => messages.messageQueue
+);
+
+export const selectUnreadMessageIds = createSelector(
+  [selectMessagesState],
+  (messages) => messages.unreadMessageIds
+);
+
+export const selectLastKnownMessageId = createSelector(
+  [selectMessagesState, selectContactId],
+  (messages, contactId) => messages.lastKnownMessageIds[contactId]
+);
+
+export const selectNewMessagesFetching = createSelector(
+  [selectMessagesState],
+  (messages) => messages.newMessagesFetching
+);
+
+export const selectNewMessagesError = createSelector(
+  [selectMessagesState],
+  (messages) => messages.newMessagesError
+);
+
+export const selectRefreshing = createSelector(
+  [selectMessagesState],
+  (messages) => messages.refreshing
+);
+
+export const selectRefreshError = createSelector(
+  [selectMessagesState],
+  (messages) => messages.refreshError
+);

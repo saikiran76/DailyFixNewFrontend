@@ -7,7 +7,7 @@ import logger from '../utils/logger';
 const MessageReply = ({ replyToEvent, client }) => {
   if (!replyToEvent) return null;
 
-  // Get sender information
+  // Get sender information with improved reliability
   const getSenderName = () => {
     try {
       // Check if replyToEvent is already in the processed format (from matrixTimelineManager)
@@ -31,83 +31,101 @@ const MessageReply = ({ replyToEvent, client }) => {
         senderId = replyToEvent.sender;
       }
 
-      if (roomId && senderId && client) {
+      if (!senderId) {
+        return 'Unknown User';
+      }
+
+      // For Telegram users, try to extract a better name
+      if (senderId.includes('telegram_')) {
+        // Extract the Telegram user ID
+        const telegramId = senderId.match(/telegram_(\d+)/);
+        if (telegramId && telegramId[1]) {
+          // First check if we have sender_name in the content
+          if (replyToEvent.content && replyToEvent.content.sender_name) {
+            return replyToEvent.content.sender_name;
+          }
+
+          // Try to get a better name from the room state if available
+          if (roomId && client) {
+            const room = client.getRoom(roomId);
+            if (room) {
+              // First try to get from room member
+              try {
+                const member = room.getMember(senderId);
+                if (member && member.name) {
+                  return member.name;
+                }
+              } catch (memberError) {
+                logger.warn('[MessageReply] Error getting member:', memberError);
+              }
+
+              // If that fails, try to get from room state
+              if (room.currentState) {
+                try {
+                  // Try direct state access first (more efficient)
+                  const memberEvent = room.currentState.getStateEvents('m.room.member', senderId);
+                  if (memberEvent && typeof memberEvent.getContent === 'function') {
+                    const memberContent = memberEvent.getContent();
+                    if (memberContent.displayname) {
+                      return memberContent.displayname;
+                    }
+                  }
+                } catch (directStateError) {
+                  logger.warn('[MessageReply] Error getting direct state:', directStateError);
+                }
+
+                try {
+                  // Try iterating through all state events as a fallback
+                  const stateEvents = room.currentState.getStateEvents('m.room.member');
+                  for (const event of stateEvents) {
+                    try {
+                      const content = event.getContent();
+                      const userId = event.getStateKey();
+                      if (userId === senderId && content.displayname) {
+                        return content.displayname;
+                      }
+                    } catch (eventError) {
+                      // Continue to next event if there's an error
+                      continue;
+                    }
+                  }
+                } catch (stateError) {
+                  logger.warn('[MessageReply] Error getting state events:', stateError);
+                }
+              }
+            }
+          }
+
+          // If we still don't have a name, use a friendly format with the Telegram ID
+          return `Telegram User ${telegramId[1]}`;
+        }
+        return 'Telegram User';
+      }
+
+      // For Matrix users, try to get a proper display name
+      if (roomId && client) {
         const room = client.getRoom(roomId);
         if (room) {
-          // First try to get from room member
-          const member = room.getMember(senderId);
-          if (member && member.name) {
-            return member.name;
-          }
-
-          // If that fails, try to get from room state
-          if (room.currentState) {
-            const stateEvents = room.currentState.getStateEvents('m.room.member');
-            for (const event of stateEvents) {
-              const content = event.getContent();
-              const userId = event.getStateKey();
-              if (userId === senderId && content.displayname) {
-                return content.displayname;
-              }
+          try {
+            const member = room.getMember(senderId);
+            if (member && member.name) {
+              return member.name;
             }
+          } catch (error) {
+            logger.warn('[MessageReply] Error getting Matrix member:', error);
           }
         }
       }
 
-      // Fallback: Extract username from Matrix ID
-      if (senderId) {
-        // For Telegram users, the format is usually @telegram_123456789:server.org
-        if (senderId.includes('telegram_')) {
-          // Extract the Telegram user ID
-          const telegramId = senderId.match(/telegram_(\d+)/);
-          if (telegramId && telegramId[1]) {
-            // Try to get a better name from the room state if available
-            if (roomId && client) {
-              const room = client.getRoom(roomId);
-              if (room && room.currentState) {
-                // Look for any state events that might have the user's name
-                const stateEvents = room.currentState.getStateEvents('m.room.member');
-                for (const event of stateEvents) {
-                  if (typeof event.getStateKey === 'function' &&
-                      event.getStateKey() === senderId &&
-                      typeof event.getContent === 'function' &&
-                      event.getContent().displayname) {
-                    return event.getContent().displayname;
-                  }
-                }
-
-                // Try another approach with direct state access
-                const memberEvent = room.currentState.getStateEvents('m.room.member', senderId);
-                if (memberEvent && typeof memberEvent.getContent === 'function') {
-                  const memberContent = memberEvent.getContent();
-                  if (memberContent.displayname) {
-                    return memberContent.displayname;
-                  }
-                }
-              }
-            }
-
-            // Try to get name from the event content if available
-            if (replyToEvent.content && replyToEvent.content.sender_name) {
-              return replyToEvent.content.sender_name;
-            }
-
-            return `Telegram User ${telegramId[1]}`;
-          }
-          return 'Telegram User';
-        }
-
-        // For other users, just use the first part of the Matrix ID
-        return senderId.split(':')[0].replace('@', '');
-      }
+      // For other users, just use the first part of the Matrix ID
+      return senderId.split(':')[0].replace('@', '');
     } catch (error) {
       logger.warn('[MessageReply] Error getting sender name:', error);
+      return 'Unknown User';
     }
-
-    return 'Unknown User';
   };
 
-  // Get message content
+  // Get message content with improved error handling
   const getMessageContent = () => {
     try {
       // Check if replyToEvent is already in the processed format (from matrixTimelineManager)
@@ -118,10 +136,21 @@ const MessageReply = ({ replyToEvent, client }) => {
       // Original Matrix event format
       let content;
       if (typeof replyToEvent.getContent === 'function') {
-        content = replyToEvent.getContent();
-      } else if (replyToEvent.content) {
+        try {
+          content = replyToEvent.getContent();
+        } catch (contentError) {
+          logger.warn('[MessageReply] Error getting content with getContent():', contentError);
+          content = null;
+        }
+      }
+
+      // Fallback to content property if getContent() failed or doesn't exist
+      if (!content && replyToEvent.content) {
         content = replyToEvent.content;
-      } else {
+      }
+
+      // If we still don't have content, return a fallback message
+      if (!content) {
         return 'Message content unavailable';
       }
 
@@ -140,15 +169,32 @@ const MessageReply = ({ replyToEvent, client }) => {
         return '[File] ' + (content.body || 'File');
       }
 
+      // Handle video messages
+      if (content.msgtype === 'm.video') {
+        return '[Video] ' + (content.body || 'Video');
+      }
+
+      // Handle audio messages
+      if (content.msgtype === 'm.audio') {
+        return '[Audio] ' + (content.body || 'Audio');
+      }
+
+      // Handle stickers
+      if (content.msgtype === 'm.sticker' || replyToEvent.getType?.() === 'm.sticker') {
+        return '[Sticker]';
+      }
+
       // Handle other message types
       if (content.body) {
         return content.body;
       }
+
+      // Last resort fallback
+      return 'Message';
     } catch (error) {
       logger.warn('[MessageReply] Error getting message content:', error);
+      return 'Message content unavailable';
     }
-
-    return 'Unknown message';
   };
 
   // Get a color for the sender name based on the sender ID
@@ -187,16 +233,16 @@ const MessageReply = ({ replyToEvent, client }) => {
   };
 
   return (
-    <div className="border-l-2 pl-2 mb-2 text-xs bg-neutral-700/50 p-2 rounded-md" style={{ borderColor: getSenderColor() }}>
-      <div className="font-medium flex items-center" style={{ color: getSenderColor() }}>
-        <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 mr-1 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <div className="border-l-2 pl-2 mb-2 text-xs bg-neutral-700/40 p-2 rounded-lg shadow-sm" style={{ borderColor: getSenderColor() }}>
+      <div className="font-medium flex items-center gap-1" style={{ color: getSenderColor() }}>
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
         </svg>
         <div className="flex items-center overflow-hidden">
           <span className="font-bold truncate">{getSenderName()}</span>
         </div>
       </div>
-      <div className="text-gray-300 line-clamp-1 break-words pl-4 mt-1 bg-neutral-800/50 p-1 rounded">
+      <div className="text-gray-200 line-clamp-2 break-words pl-4 mt-1 bg-neutral-800/60 p-2 rounded-md">
         {getMessageContent()}
       </div>
     </div>
