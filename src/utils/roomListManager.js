@@ -1,5 +1,7 @@
 import logger from './logger';
 import { saveToIndexedDB, getFromIndexedDB } from './indexedDBHelper';
+import telegramEntityUtils, { TelegramEntityTypes } from './telegramEntityUtils';
+import slidingSyncManager from './SlidingSyncManager';
 
 /**
  * Manages room lists and syncing for Matrix clients
@@ -142,6 +144,87 @@ class RoomListManager {
    * @returns {Promise<Array>} - The synced rooms
    */
   async syncRooms(userId, force = false) {
+    // Try to use sliding sync first if available
+    try {
+      const roomList = this.roomLists.get(userId);
+      if (roomList && roomList.client) {
+        const client = roomList.client;
+
+        // Check if sliding sync is supported and initialize if needed
+        if (!slidingSyncManager.initialized) {
+          const initialized = slidingSyncManager.initialize(client);
+          if (initialized) {
+            logger.info('[RoomListManager] Initialized sliding sync manager');
+          }
+        }
+
+        // If sliding sync is initialized, use it to sync rooms
+        if (slidingSyncManager.initialized) {
+          logger.info('[RoomListManager] Using sliding sync to sync rooms');
+
+          try {
+            // Create a list for all rooms
+            await slidingSyncManager.setList('all_rooms', {
+              ranges: [[0, 100]],  // Get first 100 rooms
+              sort: ['by_recency'],
+              timeline_limit: 10     // Get 10 most recent messages per room
+            });
+
+            // Start the sync loop if not already running
+            if (!slidingSyncManager.syncInProgress) {
+              slidingSyncManager.startSyncLoop();
+            }
+
+            // Wait for the sync to complete
+            const syncPromise = new Promise((resolve) => {
+              const onSyncComplete = () => {
+                slidingSyncManager.removeListener('syncComplete', onSyncComplete);
+                resolve();
+              };
+              slidingSyncManager.on('syncComplete', onSyncComplete);
+
+              // Set a timeout in case sync takes too long
+              setTimeout(() => {
+                slidingSyncManager.removeListener('syncComplete', onSyncComplete);
+                resolve();
+              }, 10000); // 10 second timeout
+            });
+
+            await syncPromise;
+
+            // Get all rooms from the client (sliding sync should have updated them)
+            const allRooms = client.getRooms() || [];
+            logger.info(`[RoomListManager] Sliding sync found ${allRooms.length} rooms`);
+
+            // Continue with normal processing using the updated rooms
+            const filteredRooms = this.filterRoomsByPlatform(allRooms, roomList.filters.platform || 'all');
+            const transformedRooms = this.transformRooms(userId, filteredRooms, client);
+            const sortedRooms = this.sortRooms(transformedRooms, roomList.sortBy);
+
+            // Update room list
+            roomList.rooms = sortedRooms;
+            roomList.lastSync = new Date();
+
+            // Cache rooms
+            this.cacheRooms(userId, sortedRooms);
+
+            // Notify event handlers
+            this.notifyRoomsUpdated(userId);
+
+            logger.info('[RoomListManager] Rooms synced using sliding sync for user:', userId, 'count:', sortedRooms.length);
+            return sortedRooms;
+          } catch (slidingSyncError) {
+            logger.warn('[RoomListManager] Error using sliding sync, falling back to traditional sync:', slidingSyncError);
+            // Fall through to traditional sync
+          }
+        }
+      }
+    } catch (slidingSyncSetupError) {
+      logger.warn('[RoomListManager] Error setting up sliding sync, falling back to traditional sync:', slidingSyncSetupError);
+      // Fall through to traditional sync
+    }
+
+    // Traditional sync method as fallback
     // Check if sync is already in progress
     if (this.syncInProgress.get(userId) && !force) {
       logger.info('[RoomListManager] Sync already in progress for user:', userId);
@@ -363,7 +446,7 @@ class RoomListManager {
       }
 
       // Transform rooms to our format
-      const transformedRooms = this.transformRooms(userId, filteredRooms);
+      const transformedRooms = this.transformRooms(userId, filteredRooms, client);
 
       // Sort rooms
       const sortedRooms = this.sortRooms(transformedRooms, roomList.sortBy);
@@ -663,9 +746,12 @@ class RoomListManager {
    * Transform Matrix rooms to our format
    * @param {string} userId - User ID
    * @param {Array} rooms - List of Matrix rooms
+   * @param {Object} matrixClient - Optional Matrix client instance
    * @returns {Array} Transformed rooms
    */
-  transformRooms(userId, rooms) {
+  transformRooms(userId, rooms, matrixClient = null) {
+    // Get the client from the parameters or try to get it from the room list
+    const client = matrixClient || this.getClientForUser(userId);
     return rooms.map(room => {
       // Get room membership state
       let roomState = 'unknown';
@@ -867,6 +953,9 @@ class RoomListManager {
                      room.name?.includes('group') ||
                      room.name?.includes('channel');
 
+      // Identify Telegram entity type
+      const entityInfo = telegramEntityUtils.identifyTelegramEntityType(room, client);
+
       // Get the latest event timestamp
       let events = [];
       let timestamp = Date.now();
@@ -952,23 +1041,91 @@ class RoomListManager {
                    `https://ui-avatars.com/api/?name=${encodeURIComponent(telegramContact.firstName)}&background=0088cc&color=fff`;
       }
 
-      // Get last message
+      // Get last message with improved formatting
       let lastMessage = '';
       try {
-        const latestEvent = events.length > 0 ? events[events.length - 1] : null;
-        if (latestEvent && latestEvent.getType && latestEvent.getType() === 'm.room.message') {
-          const content = latestEvent.getContent && latestEvent.getContent();
-          lastMessage = content && content.body || '';
+        // Find the latest message event (not state event)
+        let latestMessageEvent = null;
+        for (let i = events.length - 1; i >= 0; i--) {
+          const event = events[i];
+          if (event.getType && event.getType() === 'm.room.message') {
+            latestMessageEvent = event;
+            break;
+          }
+        }
+
+        if (latestMessageEvent) {
+          const content = latestMessageEvent.getContent && latestMessageEvent.getContent();
+          if (content) {
+            // Format based on message type
+            if (content.msgtype === 'm.image') {
+              lastMessage = '📷 Image';
+            } else if (content.msgtype === 'm.video') {
+              lastMessage = '🎥 Video';
+            } else if (content.msgtype === 'm.audio') {
+              lastMessage = '🔊 Audio message';
+            } else if (content.msgtype === 'm.file') {
+              lastMessage = '📎 File';
+            } else if (content.msgtype === 'm.sticker') {
+              lastMessage = '🏷️ Sticker';
+            } else {
+              // For text messages, use the body
+              lastMessage = content.body || '';
+            }
+
+            // For group chats, add sender name
+            if (isGroup && latestMessageEvent.getSender && latestMessageEvent.getSender() !== userId) {
+              try {
+                // Get sender name
+                let senderName = '';
+                const senderId = latestMessageEvent.getSender();
+                const member = room.getMember && room.getMember(senderId);
+
+                if (member && member.name) {
+                  // For member names, check if it's a Telegram ID format
+                  if (member.name.includes('@telegram_')) {
+                    // Extract just the name part without the ID
+                    senderName = 'User';
+                  } else {
+                    senderName = member.name.split(' ')[0]; // Just use first name
+                  }
+                } else if (senderId.includes('telegram_')) {
+                  // For Telegram users, just use a generic name
+                  senderName = 'User';
+                } else {
+                  // Use first part of Matrix ID without the @ symbol
+                  senderName = senderId.split(':')[0].replace('@', '');
+                }
+
+                if (senderName) {
+                  lastMessage = `${senderName}: ${lastMessage}`;
+                }
+              } catch (senderError) {
+                // Ignore errors getting sender name
+              }
+            }
+          }
         }
       } catch (messageError) {
-        // Ignore errors getting last message
+        logger.warn(`[RoomListManager] Error getting last message for room ${room.roomId}:`, messageError);
+        // Provide a fallback message
+        lastMessage = isGroup ? `${(room.getJoinedMembers && room.getJoinedMembers() || []).length} members` : 'Tap to view conversation';
       }
 
-      // Determine the display name
-      let displayName = room.name;
+      // Determine the display name with improved accuracy
+      let displayName = '';
+
+      // NEVER use raw Matrix IDs as display names
+      if (room.name && room.name.includes('@telegram_')) {
+        // This is a raw Matrix ID - don't use it
+        displayName = '';
+      } else {
+        displayName = room.name;
+      }
 
       // If it's a Telegram room with contact info, use the contact name
       if (isTelegramRoom && telegramContact) {
+        // Use the proper contact name from Telegram
         displayName = telegramContact.firstName;
         if (telegramContact.lastName) {
           displayName += ' ' + telegramContact.lastName;
@@ -976,11 +1133,40 @@ class RoomListManager {
       }
       // If no room name, use the first other member's name
       else if (!displayName && otherMembers.length > 0) {
-        displayName = otherMembers[0].name;
+        // Make sure we're not using a raw Matrix ID
+        if (otherMembers[0].name && !otherMembers[0].name.includes('@telegram_')) {
+          displayName = otherMembers[0].name;
+        } else {
+          // Try to extract a better name from the user ID
+          const userId = otherMembers[0].userId;
+          if (userId.includes('@telegram_')) {
+            // For Telegram users, use 'Telegram User' instead of the raw ID
+            displayName = 'Telegram User';
+          } else {
+            // Use first part of Matrix ID without the @ symbol
+            displayName = userId.split(':')[0].replace('@', '');
+          }
+        }
       }
-      // If still no name, use the room ID
+      // If still no name, use a generic name based on entity type
       else if (!displayName) {
-        displayName = room.roomId.split(':')[0].substring(1);
+        if (entityInfo.type === TelegramEntityTypes.DIRECT_MESSAGE) {
+          displayName = 'Telegram User';
+        } else if (entityInfo.type === TelegramEntityTypes.CHANNEL) {
+          displayName = 'Telegram Channel';
+        } else if (entityInfo.type === TelegramEntityTypes.PUBLIC_GROUP ||
+                  entityInfo.type === TelegramEntityTypes.PRIVATE_GROUP) {
+          displayName = 'Telegram Group';
+        } else if (entityInfo.type === TelegramEntityTypes.BOT) {
+          displayName = 'Telegram Bot';
+        } else {
+          // Last resort - use a cleaned room ID
+          displayName = room.roomId.split(':')[0].substring(1);
+          // If it's a Telegram ID, just use 'Telegram Chat'
+          if (displayName.includes('telegram_')) {
+            displayName = 'Telegram Chat';
+          }
+        }
       }
 
       return {
@@ -994,6 +1180,12 @@ class RoomListManager {
         isTelegram: isTelegramRoom,
         telegramContact: telegramContact,
         members: (room.getJoinedMembers && room.getJoinedMembers() || []).length,
+        // Add entity type information
+        entityType: entityInfo.type,
+        canSendMessages: entityInfo.canSendMessages,
+        isChannel: entityInfo.isChannel,
+        isPrivate: entityInfo.isPrivate,
+        isBot: entityInfo.isBot,
         room: room // Store reference to original room
       };
     });
@@ -1038,7 +1230,7 @@ class RoomListManager {
 
     if (index >= 0) {
       // Update existing room
-      const transformedRoom = this.transformRooms(userId, [room])[0];
+      const transformedRoom = this.transformRooms(userId, [room], roomList.client)[0];
       roomList.rooms[index] = transformedRoom;
     } else {
       // Add new room if it passes filters
@@ -1051,7 +1243,7 @@ class RoomListManager {
       }
 
       if (shouldAdd) {
-        const transformedRoom = this.transformRooms(userId, [room])[0];
+        const transformedRoom = this.transformRooms(userId, [room], roomList.client)[0];
         roomList.rooms.push(transformedRoom);
       }
     }
@@ -1147,13 +1339,13 @@ class RoomListManager {
   }
 
   /**
-   * Cache rooms for a user
+   * Cache rooms for a user with improved reliability
    * @param {string} userId - User ID
    * @param {Array} rooms - List of rooms
    */
   async cacheRooms(userId, rooms) {
     try {
-      // Store in IndexedDB
+      // Prepare rooms for caching
       const roomsToCache = rooms.map(room => ({
         id: room.id,
         name: room.name,
@@ -1162,30 +1354,83 @@ class RoomListManager {
         timestamp: room.timestamp,
         unreadCount: room.unreadCount,
         isGroup: room.isGroup,
-        members: room.members
+        isTelegram: room.isTelegram || false,
+        members: room.members,
+        isPlaceholder: room.isPlaceholder || false,
+        telegramContact: room.telegramContact || null
       }));
 
+      // Store in localStorage for faster access
+      try {
+        localStorage.setItem(`matrix_rooms_${userId}`, JSON.stringify(roomsToCache));
+        localStorage.setItem(`matrix_rooms_timestamp_${userId}`, Date.now().toString());
+        logger.info(`[RoomListManager] Cached ${roomsToCache.length} rooms in localStorage for user: ${userId}`);
+      } catch (storageError) {
+        logger.warn('[RoomListManager] Error caching rooms in localStorage:', storageError);
+      }
+
+      // Also store in IndexedDB for persistence
       await saveToIndexedDB(userId, {
         cachedRooms: roomsToCache,
         roomsCachedAt: new Date().toISOString()
       });
 
-      logger.info('[RoomListManager] Rooms cached for user:', userId);
+      logger.info(`[RoomListManager] Cached ${roomsToCache.length} rooms in IndexedDB for user: ${userId}`);
     } catch (error) {
       logger.error('[RoomListManager] Error caching rooms:', error);
     }
   }
 
   /**
-   * Load cached rooms for a user
+   * Load cached rooms for a user with improved reliability
    * @param {string} userId - User ID
    * @returns {Array} Cached rooms
    */
   async loadCachedRooms(userId) {
     try {
+      // Try to get from localStorage first (faster)
+      const cachedRoomsJson = localStorage.getItem(`matrix_rooms_${userId}`);
+      if (cachedRoomsJson) {
+        try {
+          const cachedRooms = JSON.parse(cachedRoomsJson);
+          if (Array.isArray(cachedRooms) && cachedRooms.length > 0) {
+            logger.info(`[RoomListManager] Loaded ${cachedRooms.length} cached rooms from localStorage`);
+
+            // Check if the cached rooms are recent enough (less than 1 hour old)
+            const cacheTimestamp = localStorage.getItem(`matrix_rooms_timestamp_${userId}`);
+            if (cacheTimestamp) {
+              const cacheTime = parseInt(cacheTimestamp, 10);
+              const now = Date.now();
+              const cacheAge = now - cacheTime;
+
+              if (cacheAge < 3600000) { // 1 hour in milliseconds
+                logger.info(`[RoomListManager] Using recent cache (${Math.round(cacheAge / 60000)} minutes old)`);
+              } else {
+                logger.info(`[RoomListManager] Cache is ${Math.round(cacheAge / 60000)} minutes old, but still usable`);
+              }
+            }
+
+            return cachedRooms;
+          }
+        } catch (parseError) {
+          logger.warn('[RoomListManager] Error parsing cached rooms from localStorage:', parseError);
+          // Continue to try IndexedDB
+        }
+      }
+
+      // Try to get from IndexedDB
       const data = await getFromIndexedDB(userId);
       if (data && data.cachedRooms) {
-        logger.info('[RoomListManager] Loaded cached rooms for user:', userId);
+        logger.info(`[RoomListManager] Loaded ${data.cachedRooms.length} cached rooms from IndexedDB`);
+
+        // Also cache in localStorage for faster access next time
+        try {
+          localStorage.setItem(`matrix_rooms_${userId}`, JSON.stringify(data.cachedRooms));
+          localStorage.setItem(`matrix_rooms_timestamp_${userId}`, Date.now().toString());
+        } catch (storageError) {
+          logger.warn('[RoomListManager] Error caching rooms in localStorage:', storageError);
+        }
+
         return data.cachedRooms;
       }
     } catch (error) {
@@ -1193,6 +1438,42 @@ class RoomListManager {
     }
 
     return [];
+  }
+
+  /**
+   * Check if there are cached rooms for a user
+   * @param {string} userId - User ID
+   * @returns {boolean} True if there are cached rooms
+   */
+  hasCachedRooms(userId) {
+    if (!userId) return false;
+
+    try {
+      // Check localStorage first
+      const cachedRoomsJson = localStorage.getItem(`matrix_rooms_${userId}`);
+      if (cachedRoomsJson) {
+        const cachedRooms = JSON.parse(cachedRoomsJson);
+        if (Array.isArray(cachedRooms) && cachedRooms.length > 0) {
+          return true;
+        }
+      }
+
+      // We can't synchronously check IndexedDB, so just return false
+      // The caller should use getCachedRooms instead which is async
+      return false;
+    } catch (error) {
+      logger.error('[RoomListManager] Error checking for cached rooms:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Get cached rooms for a user
+   * @param {string} userId - User ID
+   * @returns {Promise<Array>} Cached rooms
+   */
+  async getCachedRooms(userId) {
+    return this.loadCachedRooms(userId);
   }
 
   /**
@@ -1233,6 +1514,16 @@ class RoomListManager {
   }
 
   /**
+   * Get Matrix client for a user
+   * @param {string} userId - User ID
+   * @returns {Object|null} Matrix client or null
+   */
+  getClientForUser(userId) {
+    const roomList = this.roomLists.get(userId);
+    return roomList ? roomList.client : null;
+  }
+
+  /**
    * Get messages for a room
    * @param {string} roomId - Room ID
    * @param {number} limit - Maximum number of messages to return
@@ -1258,6 +1549,58 @@ class RoomListManager {
     if (!roomList || !roomList.client) {
       logger.error('[RoomListManager] Cannot load messages, room list not initialized for user:', userId);
       return [];
+    }
+
+    // Try to use sliding sync first if available
+    try {
+      const client = roomList.client;
+
+      // Check if sliding sync is supported and initialize if needed
+      if (!slidingSyncManager.initialized) {
+        const initialized = slidingSyncManager.initialize(client);
+        if (initialized) {
+          logger.info('[RoomListManager] Initialized sliding sync manager for message loading');
+        }
+      }
+
+      // If sliding sync is initialized, use it to load messages
+      if (slidingSyncManager.initialized) {
+        logger.info(`[RoomListManager] Using sliding sync to load messages for room ${roomId}`);
+
+        try {
+          // Subscribe to the room
+          await slidingSyncManager.subscribeToRoom(roomId, {
+            timelineLimit: limit
+          });
+
+          // Load messages using sliding sync
+          const messages = await slidingSyncManager.loadMessages(roomId, limit);
+
+          if (messages && messages.length > 0) {
+            logger.info(`[RoomListManager] Loaded ${messages.length} messages using sliding sync for room ${roomId}`);
+
+            // Cache the messages
+            this.messageCache.set(roomId, {
+              messages,
+              lastUpdated: new Date()
+            });
+
+            // Notify message update handlers
+            this.notifyMessagesUpdated(userId, roomId, messages);
+
+            return messages;
+          } else {
+            logger.warn(`[RoomListManager] No messages returned from sliding sync for room ${roomId}, falling back to traditional method`);
+            // Fall through to traditional method
+          }
+        } catch (slidingSyncError) {
+          logger.warn(`[RoomListManager] Error using sliding sync for messages, falling back to traditional method:`, slidingSyncError);
+          // Fall through to traditional method
+        }
+      }
+    } catch (slidingSyncSetupError) {
+      logger.warn('[RoomListManager] Error setting up sliding sync for messages, falling back to traditional method:', slidingSyncSetupError);
+      // Fall through to traditional method
     }
 
     try {
@@ -1350,4 +1693,10 @@ class RoomListManager {
 
 // Export singleton instance
 const roomListManager = new RoomListManager();
+
+// Make roomListManager accessible from window for cross-component communication
+if (typeof window !== 'undefined') {
+  window.roomListManager = roomListManager;
+}
+
 export default roomListManager;

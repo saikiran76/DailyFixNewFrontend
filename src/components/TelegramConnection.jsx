@@ -1,13 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { toast } from 'react-hot-toast';
-import { FiLoader, FiAlertTriangle, FiCheck, FiClock } from 'react-icons/fi';
+import { FiLoader, FiAlertTriangle, FiCheck, FiClock, FiRefreshCw } from 'react-icons/fi';
 import { FaTelegram } from 'react-icons/fa';
-// Matrix client is accessed via window.matrixClient
+// Import MatrixInitializer for Telegram connection
+import MatrixInitializer from './MatrixInitializer';
 import { updateAccounts } from '../store/slices/onboardingSlice';
+import { setSyncState } from '../store/slices/matrixSlice';
 import logger from '../utils/logger';
 import roomListManager from '../utils/roomListManager';
 import { saveToIndexedDB } from '../utils/indexedDBHelper';
+import matrixTokenRefresher from '../utils/matrixTokenRefresher';
 
 // Telegram bot Matrix user ID for the specific homeserver
 const TELEGRAM_BOT_USER_ID = '@telegrambot:dfix-hsbridge.duckdns.org';
@@ -54,50 +57,141 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
   const { syncState: matrixSyncState } = useSelector(state => state.matrix);
   const [globalClient, setGlobalClient] = useState(null);
 
-  // Check if Matrix client is ready from global window object
+  // Check for Matrix client on component mount and ensure it's valid
   useEffect(() => {
-    // Check for global Matrix client
-    if (window.matrixClient) {
-      logger.info('[TelegramConnection] Using global Matrix client');
-      setGlobalClient(window.matrixClient);
+    let checkInterval;
+    let attempts = 0;
+    const maxAttempts = 30; // 15 seconds total
 
-      // Check if client is properly initialized
-      try {
-        const syncState = window.matrixClient.getSyncState();
-        logger.info(`[TelegramConnection] Global Matrix client sync state: ${syncState}`);
+    const checkForMatrixClient = async () => {
+      attempts++;
 
-        // Both PREPARED and SYNCING states are valid for operations
-        if (syncState === 'PREPARED' || syncState === 'SYNCING') {
-          logger.info('[TelegramConnection] Global Matrix client is ready for use');
+      // Check for global Matrix client
+      if (window.matrixClient) {
+        logger.info('[TelegramConnection] Using global Matrix client');
+
+        try {
+          // Ensure the client is valid and refresh if needed
+          const validClient = await matrixTokenRefresher.ensureValidClient(window.matrixClient, session.user.id);
+
+          // Set up token refresh listeners
+          matrixTokenRefresher.setupRefreshListeners(validClient, session.user.id);
+
+          // Update the global client reference
+          setGlobalClient(validClient);
+          window.matrixClient = validClient; // Ensure global reference is updated
+
+          // Check client state
+          const syncState = validClient.getSyncState();
+          logger.info(`[TelegramConnection] Global Matrix client sync state: ${syncState}`);
+
+          // Both PREPARED and SYNCING states are valid for operations
+          if (syncState === 'PREPARED' || syncState === 'SYNCING') {
+            logger.info('[TelegramConnection] Global Matrix client is ready for use');
+            dispatch(setSyncState(syncState));
+
+            // Store sync state in localStorage for persistence
+            localStorage.setItem('matrix_sync_state', syncState);
+
+            // Clear the interval once we have a valid client in a valid state
+            if (checkInterval) {
+              clearInterval(checkInterval);
+            }
+
+            // Automatically start the Telegram connection process
+            if (step === 'initial') {
+              logger.info('[TelegramConnection] Matrix client ready, starting Telegram connection process');
+              startTelegramConnection();
+            }
+          } else {
+            // If client is not in a valid state, force a refresh
+            logger.warn(`[TelegramConnection] Matrix client in invalid state: ${syncState}, refreshing`);
+            const refreshedClient = await matrixTokenRefresher.refreshClient(session.user.id);
+            setGlobalClient(refreshedClient);
+            window.matrixClient = refreshedClient;
+
+            // Check the state of the refreshed client
+            const refreshedSyncState = refreshedClient.getSyncState();
+            logger.info(`[TelegramConnection] Refreshed Matrix client sync state: ${refreshedSyncState}`);
+            dispatch(setSyncState(refreshedSyncState));
+
+            // Store sync state in localStorage for persistence
+            localStorage.setItem('matrix_sync_state', refreshedSyncState);
+          }
+        } catch (error) {
+          logger.error('[TelegramConnection] Error ensuring valid Matrix client:', error);
+
+          // If we've reached the maximum number of attempts, try one last refresh
+          if (attempts >= maxAttempts) {
+            try {
+              logger.warn('[TelegramConnection] Maximum attempts reached, trying one last refresh');
+              const lastChanceClient = await matrixTokenRefresher.refreshClient(session.user.id);
+              setGlobalClient(lastChanceClient);
+              window.matrixClient = lastChanceClient;
+
+              // Check the state of the refreshed client
+              const lastChanceSyncState = lastChanceClient.getSyncState();
+              logger.info(`[TelegramConnection] Last chance Matrix client sync state: ${lastChanceSyncState}`);
+              dispatch(setSyncState(lastChanceSyncState));
+
+              // Store sync state in localStorage for persistence
+              localStorage.setItem('matrix_sync_state', lastChanceSyncState);
+
+              // Clear the interval
+              clearInterval(checkInterval);
+            } catch (lastError) {
+              logger.error('[TelegramConnection] Last chance refresh failed:', lastError);
+              toast.error('Could not establish a stable connection. Please refresh and try again.', { id: 'matrix-init' });
+              clearInterval(checkInterval);
+            }
+          }
         }
-      } catch (error) {
-        logger.error('[TelegramConnection] Error checking global Matrix client state:', error);
-      }
-    } else {
-      logger.warn('[TelegramConnection] Global Matrix client not initialized');
-
-      // First check if we have initialization info in localStorage
-      const isInitialized = localStorage.getItem('matrix_client_initialized') === 'true';
-      const syncState = localStorage.getItem('matrix_sync_state');
-
-      if (isInitialized && (syncState === 'PREPARED' || syncState === 'SYNCING')) {
-        logger.info('[TelegramConnection] Matrix client was previously initialized according to localStorage');
-        // Wait a bit longer for the client to be available
-      }
-
-      // Check every 500ms for the global client
-      const checkInterval = setInterval(() => {
-        if (window.matrixClient) {
-          logger.info('[TelegramConnection] Global Matrix client now available');
-          setGlobalClient(window.matrixClient);
-          clearInterval(checkInterval);
+      } else {
+        // Log warning every 4 attempts (2 seconds)
+        if (attempts === 1 || attempts % 4 === 0) {
+          logger.warn(`[TelegramConnection] Waiting for Matrix client to initialize (attempt ${attempts}/${maxAttempts})`);
         }
-      }, 500);
 
-      // Clean up interval
-      return () => clearInterval(checkInterval);
-    }
-  }, []);
+        // If we've reached the maximum number of attempts, try to create a new client
+        if (attempts >= maxAttempts) {
+          try {
+            logger.warn('[TelegramConnection] Maximum attempts reached, creating new Matrix client');
+            const newClient = await matrixTokenRefresher.refreshClient(session.user.id);
+            setGlobalClient(newClient);
+            window.matrixClient = newClient;
+
+            // Check the state of the new client
+            const newSyncState = newClient.getSyncState();
+            logger.info(`[TelegramConnection] New Matrix client sync state: ${newSyncState}`);
+            dispatch(setSyncState(newSyncState));
+
+            // Store sync state in localStorage for persistence
+            localStorage.setItem('matrix_sync_state', newSyncState);
+
+            // Clear the interval
+            clearInterval(checkInterval);
+          } catch (createError) {
+            logger.error('[TelegramConnection] Error creating new Matrix client:', createError);
+            toast.error('Matrix client not available. Please refresh and try again.', { id: 'matrix-init' });
+            clearInterval(checkInterval);
+          }
+        }
+      }
+    };
+
+    // Check immediately
+    checkForMatrixClient();
+
+    // Set up interval to check every 500ms
+    checkInterval = setInterval(checkForMatrixClient, 500);
+
+    // Clean up interval on component unmount
+    return () => {
+      if (checkInterval) {
+        clearInterval(checkInterval);
+      }
+    };
+  }, [session.user.id]);
 
   // Calculate exponential backoff with jitter
   const calculateBackoff = (retry) => {
@@ -143,8 +237,75 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
           // Continue anyway
         }
 
-        // Check the room timeline
+        // Check for messages in the room
         const room = matrixClient.getRoom(roomId);
+        if (room) {
+          const timeline = room.getLiveTimeline();
+          const events = timeline.getEvents();
+
+          // Log all messages for debugging
+          for (const event of events) {
+            if (event.getType() === 'm.room.message' && event.getSender() === TELEGRAM_BOT_USER_ID) {
+              logger.info('[TelegramConnection] Timeout check found message:', event.getContent());
+
+              // Process the message content
+              const content = event.getContent();
+              if (content && content.body) {
+                // Check for verification code message - be very specific
+                if (content.body.includes('Login code sent to') && step === 'phone_input') {
+                  // Extract phone number
+                  const phoneMatch = content.body.match(/Login code sent to ([+\d]+)/);
+                  if (phoneMatch && phoneMatch[1]) {
+                    // Store the formatted phone number
+                    setPhoneNumber(phoneMatch[1]);
+
+                    // Start verification code timer
+                    startVerificationCodeTimer();
+
+                    // Update toast
+                    toast.success(`Verification code sent to ${phoneMatch[1]}`, { id: 'telegram-phone' });
+
+                    // Force state update
+                    setTimeout(() => {
+                      setStep('code_input');
+                      setLoading(false);
+                      setWaitingForBotResponse(false);
+
+                      // Log the state change
+                      logger.info('[TelegramConnection] State updated by timeout handler: step=code_input, loading=false');
+                    }, 100);
+
+                    return;
+                  }
+                }
+
+                // Check for error messages
+                if (content.body && (
+                  content.body.includes('Invalid phone') ||
+                  content.body.includes('phone number is invalid') ||
+                  content.body.includes('Invalid phone code')
+                )) {
+                  logger.error(`[TelegramConnection] Phone number error from timeout check: ${content.body}`);
+
+                  // Update toast
+                  toast.error('Invalid phone number format', { id: 'telegram-phone' });
+
+                  // Update error message
+                  setPhoneError('Invalid phone number format. Please include country code (e.g., +1 for US).');
+
+                  // Reset state
+                  setStep('phone_input');
+                  setLoading(false);
+                  setWaitingForBotResponse(false);
+
+                  return;
+                }
+              }
+            }
+          }
+        }
+
+        // Check the room timeline again for additional messages
         if (room) {
           const timeline = room.getLiveTimeline();
           if (timeline) {
@@ -231,154 +392,33 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
     setError(null);
     setRetryCount(0);
 
-    // Use the global Matrix client
-    let matrixClient = globalClient || window.matrixClient;
+    // Show a loading message to the user
+    // toast.loading('Initializing Telegram connection...', { id: 'telegram-connect' });
 
     // First check if we already have a Telegram account connected
     const existingTelegramAccount = accounts.find(account => account.platform === 'telegram' && account.status === 'active');
     if (existingTelegramAccount) {
       logger.info('[TelegramConnection] Telegram account already connected:', existingTelegramAccount);
-      toast.success('Telegram is already connected!');
+      toast.success('Telegram is already connected!', { id: 'telegram-connect' });
       setStep('complete');
       setLoading(false);
       return;
     }
 
+    // Use the global Matrix client
+    let matrixClient = globalClient || window.matrixClient;
+
     // Check if Matrix client is initialized
     if (!matrixClient) {
-      // Check multiple sources for credentials
-      let credentials = null;
-
-      // Try our custom localStorage key first
-      try {
-        const localStorageKey = `dailyfix_connection_${session.user.id}`;
-        const localStorageData = localStorage.getItem(localStorageKey);
-
-        if (localStorageData) {
-          const parsedData = JSON.parse(localStorageData);
-          if (parsedData.matrix_credentials && parsedData.matrix_credentials.accessToken) {
-            credentials = parsedData.matrix_credentials;
-            logger.info('[TelegramConnection] Found credentials in localStorage (custom key)');
-          }
-        }
-      } catch (localStorageError) {
-        logger.warn('[TelegramConnection] Error getting credentials from localStorage:', localStorageError);
-      }
-
-      // If not found, try Element-style localStorage keys
-      if (!credentials) {
-        const mx_access_token = localStorage.getItem('mx_access_token');
-        const mx_user_id = localStorage.getItem('mx_user_id');
-
-        if (mx_access_token && mx_user_id) {
-          credentials = {
-            accessToken: mx_access_token,
-            userId: mx_user_id,
-            deviceId: localStorage.getItem('mx_device_id'),
-            homeserver: localStorage.getItem('mx_hs_url') || 'https://dfix-hsbridge.duckdns.org'
-          };
-          logger.info('[TelegramConnection] Found credentials in localStorage (Element-style)');
-        }
-      }
-
-      // Check if we have initialization info
-      const isInitialized = localStorage.getItem('matrix_client_initialized') === 'true';
-      const syncState = localStorage.getItem('matrix_sync_state');
-
-      if (credentials && (isInitialized || syncState === 'PREPARED' || syncState === 'SYNCING')) {
-        logger.warn('[TelegramConnection] Matrix client not available but localStorage has credentials');
-        logger.info('[TelegramConnection] Attempting to create a new Matrix client with stored credentials');
-
-        try {
-          // Import Matrix SDK
-          const matrixSdk = await import('matrix-js-sdk');
-
-          // Double-check that we have a valid access token
-          if (!credentials.accessToken) {
-            throw new Error('Access token is missing or invalid');
-          }
-
-          // Log the credentials (without showing the full access token)
-          const accessTokenPreview = credentials.accessToken ?
-            `${credentials.accessToken.substring(0, 5)}...${credentials.accessToken.substring(credentials.accessToken.length - 5)}` :
-            'missing';
-
-          logger.info('[TelegramConnection] Creating client with credentials:', {
-            userId: credentials.userId,
-            deviceId: credentials.deviceId,
-            accessToken: accessTokenPreview,
-            homeserver: credentials.homeserver
-          });
-
-          // Create a new Matrix client with the stored credentials
-          const clientOpts = {
-            baseUrl: credentials.homeserver || 'https://dfix-hsbridge.duckdns.org',
-            userId: credentials.userId,
-            deviceId: credentials.deviceId || 'DFIX_WEB_' + Date.now(),
-            accessToken: credentials.accessToken,
-            timelineSupport: true,
-            store: new matrixSdk.MemoryStore({ localStorage: window.localStorage }),
-            useAuthorizationHeader: true
-          };
-
-          const newClient = matrixSdk.createClient(clientOpts);
-
-          // Verify the access token is set
-          if (!newClient.getAccessToken()) {
-            logger.error('[TelegramConnection] Access token not set in new client, setting it manually');
-            newClient.setAccessToken(credentials.accessToken);
-
-            // Verify again
-            if (!newClient.getAccessToken()) {
-              throw new Error('Failed to set access token in Matrix client');
-            }
-          }
-
-          // Start the client
-          await newClient.startClient();
-
-          // Set the client
-          matrixClient = newClient;
-          setGlobalClient(newClient);
-          window.matrixClient = newClient;
-
-          logger.info('[TelegramConnection] Successfully created new Matrix client with stored credentials');
-        } catch (error) {
-          logger.error('[TelegramConnection] Failed to create new Matrix client:', error);
-
-          // Try waiting for the global client as a fallback
-          logger.info('[TelegramConnection] Waiting for Matrix client to be available...');
-
-          // Wait a bit longer for the client to be available (max 5 seconds)
-          let attempts = 0;
-          const maxAttempts = 10; // 10 attempts * 500ms = 5 seconds
-
-          while (!window.matrixClient && attempts < maxAttempts) {
-            await new Promise(resolve => setTimeout(resolve, 500));
-            attempts++;
-          }
-
-          // Check again after waiting
-          if (window.matrixClient) {
-            logger.info('[TelegramConnection] Matrix client now available after waiting');
-            matrixClient = window.matrixClient;
-            setGlobalClient(window.matrixClient);
-          } else {
-            logger.error('[TelegramConnection] Matrix client still not available after waiting');
-            setError('Matrix client not available. Please refresh the page and try again.');
-            setStep('initial');
-            setLoading(false);
-            return;
-          }
-        }
-      } else {
-        logger.warn('[TelegramConnection] Matrix client not initialized');
-        setError('Matrix client not initialized. Please try again or refresh the page.');
-        setStep('initial');
-        setLoading(false);
-        return;
-      }
+      logger.error('[TelegramConnection] Matrix client not available after initialization attempt');
+      toast.error('Matrix client not available. Please refresh and try again.', { id: 'telegram-connect' });
+      setError('Matrix client not available. Please refresh the page and try again.');
+      setStep('initial');
+      setLoading(false);
+      return;
     }
+
+    logger.info('[TelegramConnection] Using Matrix client for Telegram connection');
 
     // Ensure client is ready
     try {
@@ -448,6 +488,9 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
 
     setStep('creating_room');
 
+    // Show a loading toast for room creation
+    toast.loading('Creating secure chat room...', { id: 'telegram-room-creation' });
+
     try {
       // Use the global Matrix client
       const matrixClient = globalClient || window.matrixClient;
@@ -461,11 +504,51 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
         logger.warn(`[TelegramConnection] Matrix client sync state is ${matrixClient.getSyncState()}, but proceeding anyway`);
       }
 
-      // Create a room for Telegram integration
-      logger.info('[TelegramConnection] Creating room for Telegram integration');
+      // Check if there's an existing Telegram room we can reuse
+      logger.info('[TelegramConnection] Checking for existing Telegram rooms');
 
-      // Create room directly using the Matrix client
-      const room = await matrixClient.createRoom({
+      let existingRoomId = null;
+
+      // Get all rooms the user is in
+      const rooms = matrixClient.getRooms();
+
+      // Look for a room with the Telegram bot that we can reuse
+      for (const room of rooms) {
+        // Check if room has the Telegram bot
+        const members = room.getJoinedMembers();
+        const hasTelegramBot = members.some(member => member.userId === TELEGRAM_BOT_USER_ID);
+
+        // Check if room has our custom state event
+        let hasTelegramState = false;
+        try {
+          const stateEvent = room.currentState.getStateEvents('io.dailyfix.telegram', '');
+          hasTelegramState = stateEvent && stateEvent.getContent().enabled === true;
+        } catch (e) {
+          // State event not found
+        }
+
+        if (hasTelegramBot && hasTelegramState) {
+          existingRoomId = room.roomId;
+          logger.info(`[TelegramConnection] Found existing Telegram room: ${existingRoomId}`);
+          break;
+        }
+      }
+
+      let createdRoomId;
+
+      if (existingRoomId) {
+        // Reuse existing room
+        createdRoomId = existingRoomId;
+        setRoomId(createdRoomId);
+
+        logger.info('[TelegramConnection] Reusing existing Telegram room');
+        toast.success('Reusing existing Telegram connection', { id: 'telegram-room-creation' });
+      } else {
+        // Create a new room for Telegram integration
+        logger.info('[TelegramConnection] No existing room found, creating new room for Telegram integration');
+
+        // Create room directly using the Matrix client
+        const room = await matrixClient.createRoom({
         name: 'Telegram Login',
         topic: 'Telegram integration room',
         preset: 'private_chat',
@@ -486,17 +569,25 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
         ]
       });
 
-      setRoomId(room.room_id);
+        // Get the room ID from the newly created room
+        createdRoomId = room.room_id;
+        setRoomId(createdRoomId);
+
+        logger.info('[TelegramConnection] Created room with ID:', createdRoomId);
+
+        // Invite Telegram bot to the room
+        logger.info('[TelegramConnection] Inviting Telegram bot to room');
+        await matrixClient.invite(createdRoomId, TELEGRAM_BOT_USER_ID);
+
+        // Update the toast to show success
+        toast.success('Room created successfully!', { id: 'telegram-room-creation' });
+      }
 
       logger.info('[TelegramConnection] Using Telegram bridge on https://dfix-hsbridge.duckdns.org');
 
-      // Invite Telegram bot to the room
-      logger.info('[TelegramConnection] Inviting Telegram bot to room');
-      await matrixClient.invite(room.room_id, TELEGRAM_BOT_USER_ID);
-
       // Set up room listener for bot responses
       const onRoomEvent = (event, eventRoom) => {
-        if (eventRoom.roomId === room.room_id) {
+        if (eventRoom.roomId === createdRoomId) {
           handleRoomEvent(event, eventRoom);
         }
       };
@@ -508,10 +599,17 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
         matrixClient.removeListener('Room.timeline', onRoomEvent);
       });
 
-      // Send login command
-      await sendLoginCommand(matrixClient, roomId);
+      // Wait a moment for the room ID to be properly set in state
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Send login command using the created room ID directly
+      await sendLoginCommand(matrixClient, createdRoomId);
     } catch (error) {
       logger.error('[TelegramConnection] Error connecting to Telegram:', error);
+
+      // Update the toast to show error
+      toast.error('Failed to create room. Please try again.', { id: 'telegram-room-creation' });
+
       setError(error.message || 'Failed to connect to Telegram. Please try again.');
       setStep('initial');
       setLoading(false);
@@ -520,8 +618,14 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
 
   // Send the login command to the bot
   const sendLoginCommand = async (matrixClient, roomId) => {
+    // Show a loading toast for login command
+    toast.loading('Connecting to Telegram bot...', { id: 'telegram-login-command' });
     if (!roomId) {
       logger.error('[TelegramConnection] Room ID not provided to sendLoginCommand');
+
+      // Update the toast to show error
+      toast.error('Room not created. Please try again.', { id: 'telegram-login-command' });
+
       setError('Room not created. Please try again.');
       setStep('initial');
       setLoading(false);
@@ -530,6 +634,10 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
 
     if (!matrixClient) {
       logger.error('[TelegramConnection] Matrix client not available in sendLoginCommand');
+
+      // Update the toast to show error
+      toast.error('Matrix client not available. Please refresh and try again.', { id: 'telegram-login-command' });
+
       setError('Matrix client not available. Please refresh the page and try again.');
       setStep('initial');
       setLoading(false);
@@ -541,6 +649,10 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
       const room = matrixClient.getRoom(roomId);
       if (!room) {
         logger.error(`[TelegramConnection] Room ${roomId} not found in client`);
+
+        // Update the toast to show error
+        toast.error('Room not found. Please try again.', { id: 'telegram-login-command' });
+
         setError('Room not found. Please try again.');
         setStep('initial');
         setLoading(false);
@@ -548,6 +660,10 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
       }
     } catch (roomCheckError) {
       logger.error('[TelegramConnection] Error checking room:', roomCheckError);
+
+      // Update the toast to show error
+      toast.error('Error checking room. Please try again.', { id: 'telegram-login-command' });
+
       setError('Error checking room. Please try again.');
       setStep('initial');
       setLoading(false);
@@ -754,6 +870,9 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
         body: command
       });
 
+      // Update the toast to show success
+      toast.success('Connected to Telegram bot!', { id: 'telegram-login-command' });
+
       // Wait a moment for the bot to respond
       await new Promise(resolve => setTimeout(resolve, 500));
 
@@ -777,6 +896,7 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
                 const content = event.getContent();
                 logger.info('[TelegramConnection] Post-send check found bot message:', JSON.stringify(content, null, 2));
 
+                // Check for already logged in message
                 if (content && (
                   (content.body && content.body.includes('You are already logged in as')) ||
                   (content.formatted_body && content.formatted_body.includes('You are already logged in as'))
@@ -793,6 +913,25 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
 
                   logger.info(`[TelegramConnection] Post-send check: User already logged in as @${username || 'unknown'}`);
                   handleLoginSuccess(roomId, username);
+                  return;
+                }
+
+                // Check for phone number request
+                if (content && content.body && content.body.includes('Please send your phone number')) {
+                  logger.info('[TelegramConnection] Post-send check found phone number request - transitioning to phone input step');
+
+                  // Update toast
+                  toast.success('Ready for phone number input', { id: 'telegram-login-command' });
+
+                  // Force state update
+                  setTimeout(() => {
+                    setStep('phone_input');
+                    setLoading(false);
+
+                    // Log the state change
+                    logger.info('[TelegramConnection] State updated by post-send check: step=phone_input, loading=false');
+                  }, 100);
+
                   return;
                 }
               }
@@ -830,6 +969,7 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
                 const content = event.getContent();
                 logger.info('[TelegramConnection] Immediate check found bot message:', JSON.stringify(content, null, 2));
 
+                // Check for already logged in message
                 if (content.body && content.body.includes('You are already logged in as')) {
                   // Extract username if available
                   const usernameMatch = content.body.match(/logged in as @([\w\d_]+)/);
@@ -837,6 +977,25 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
 
                   logger.info(`[TelegramConnection] Immediate check: User already logged in as @${username || 'unknown'}`);
                   handleLoginSuccess(roomId, username);
+                  return;
+                }
+
+                // Check for phone number request
+                if (content && content.body && content.body.includes('Please send your phone number')) {
+                  logger.info('[TelegramConnection] Immediate check found phone number request - transitioning to phone input step');
+
+                  // Update toast
+                  toast.success('Ready for phone number input', { id: 'telegram-login-command' });
+
+                  // Force state update
+                  setTimeout(() => {
+                    setStep('phone_input');
+                    setLoading(false);
+
+                    // Log the state change
+                    logger.info('[TelegramConnection] State updated by immediate check: step=phone_input, loading=false');
+                  }, 100);
+
                   return;
                 }
               }
@@ -878,23 +1037,62 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
                   if (event.type === 'm.room.message' && event.sender === TELEGRAM_BOT_USER_ID) {
                     logger.info('[TelegramConnection] Found bot message via direct API:', JSON.stringify(event, null, 2));
 
-                    if (event.content && (
-                      (event.content.body && event.content.body.includes('You are already logged in as')) ||
-                      (event.content.formatted_body && event.content.formatted_body.includes('You are already logged in as'))
-                    )) {
-                      // Extract username if available - check both body and formatted_body
-                      let usernameMatch = null;
-                      if (event.content.body) {
-                        usernameMatch = event.content.body.match(/logged in as @([\w\d_]+)/);
-                      }
-                      if (!usernameMatch && event.content.formatted_body) {
-                        usernameMatch = event.content.formatted_body.match(/logged in as @([\w\d_]+)/);
-                      }
-                      const username = usernameMatch ? usernameMatch[1] : null;
+                    // Check for various message types
+                    if (event.content && event.content.body) {
+                      const messageBody = event.content.body;
 
-                      logger.info(`[TelegramConnection] Direct API check: User already logged in as @${username || 'unknown'}`);
-                      handleLoginSuccess(roomId, username);
-                      return;
+                      // Check for already logged in message
+                      if (messageBody.includes('You are already logged in as')) {
+                        // Extract username if available
+                        const usernameMatch = messageBody.match(/logged in as @([\w\d_]+)/);
+                        const username = usernameMatch ? usernameMatch[1] : null;
+
+                        logger.info(`[TelegramConnection] Timeout check: User already logged in as @${username || 'unknown'}`);
+                        handleLoginSuccess(roomId, username);
+                        return;
+                      }
+
+                      // Check for phone number request
+                      if (messageBody.includes('Please send your phone number') && step !== 'phone_input') {
+                        logger.info('[TelegramConnection] Timeout check found phone number request');
+
+                        // Update toast
+                        toast.success('Ready for phone number input', { id: 'telegram-login-command' });
+
+                        // Force state update
+                        setStep('phone_input');
+                        setLoading(false);
+
+                        // Log the state change
+                        logger.info('[TelegramConnection] State updated by timeout check: step=phone_input, loading=false');
+                        return;
+                      }
+
+                      // Check for verification code request
+                      if (messageBody.includes('Login code sent to') && step !== 'code_input') {
+                        logger.info('[TelegramConnection] Timeout check found verification code request');
+
+                        // Extract phone number from message for display
+                        const phoneMatch = messageBody.match(/Login code sent to ([+\d]+)/);
+                        if (phoneMatch && phoneMatch[1]) {
+                          // Store the phone number for reference
+                          setPhoneNumber(phoneMatch[1]);
+                        }
+
+                        // Start the verification code timer
+                        startVerificationCodeTimer();
+
+                        // Update toast
+                        toast.success(`Verification code sent to ${phoneMatch && phoneMatch[1] ? phoneMatch[1] : 'your device'}`, { id: 'telegram-login-command' });
+
+                        // Force state update
+                        setStep('code_input');
+                        setLoading(false);
+
+                        // Log the state change
+                        logger.info('[TelegramConnection] State updated by timeout check: step=code_input, loading=false');
+                        return;
+                      }
                     }
                   }
                 }
@@ -971,11 +1169,74 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
               }
             }, 1000); // Poll every second
 
-            // If we still haven't found the message, assume the user is already logged in
-            // This is a fallback in case all other methods fail
-            logger.info('[TelegramConnection] Safety timeout: Assuming user is already logged in');
-            toast.success('Connecting to Telegram...');
-            handleLoginSuccess(roomId);
+            // Check for all messages in the room
+            logger.info('[TelegramConnection] Timeout: Checking for missed messages');
+            const room = matrixClient.getRoom(roomId);
+            if (room) {
+              const timeline = room.getLiveTimeline();
+              if (timeline) {
+                const events = timeline.getEvents();
+
+                // Log all messages for debugging
+                for (const event of events) {
+                  if (event.getType() === 'm.room.message' && event.getSender() === TELEGRAM_BOT_USER_ID) {
+                    logger.info('[TelegramConnection] Timeout check found message:', event.getContent());
+
+                    // Process the message content
+                    const content = event.getContent();
+                    if (content && content.body) {
+                      // Check for login code message
+                      if (content.body.includes('Login code sent to') && step !== 'code_input') {
+                        // Extract phone number
+                        const phoneMatch = content.body.match(/Login code sent to ([+\d]+)/);
+                        if (phoneMatch && phoneMatch[1]) {
+                          setPhoneNumber(phoneMatch[1]);
+                        }
+
+                        // Start verification code timer
+                        startVerificationCodeTimer();
+
+                        // Update UI
+                        setStep('code_input');
+                        setLoading(false);
+
+                        logger.info('[TelegramConnection] Timeout check: Transitioning to code input step');
+                        return;
+                      }
+
+                      // Check for success message
+                      if ((content.body.includes('Successfully logged in as') || content.body.includes('authentication successful'))) {
+                        // Extract username if available
+                        const usernameMatch = content.body.match(/logged in as @([\w\d_]+)/);
+                        const username = usernameMatch ? usernameMatch[1] : null;
+
+                        logger.info(`[TelegramConnection] Timeout check: Login successful as @${username || 'unknown'}`);
+                        handleLoginSuccess(roomId, username);
+                        return;
+                      }
+                    }
+                  }
+                }
+              }
+            }
+
+            // If we still haven't found any relevant messages, provide a fallback
+            logger.info('[TelegramConnection] Safety timeout: No relevant messages found');
+
+            // If we're in the connecting state, assume success as a last resort
+            if (step === 'connecting') {
+              logger.info('[TelegramConnection] Safety timeout: Assuming login success');
+              toast.success('Connecting to Telegram...');
+              handleLoginSuccess(roomId);
+            } else {
+              // Otherwise, go back to the appropriate step based on current state
+              logger.info('[TelegramConnection] Safety timeout: Resetting to appropriate step');
+              if (step === 'sending_login') {
+                setStep('initial');
+                setLoading(false);
+                toast.error('Connection timed out. Please try again.');
+              }
+            }
           }
         } catch (error) {
           logger.warn('[TelegramConnection] Error in safety timeout check:', error);
@@ -1074,9 +1335,20 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
 
         // Check for phone number request
         if (content && content.body && content.body.includes('Please send your phone number')) {
-          logger.info('[TelegramConnection] Bot requested phone number');
-          setStep('phone_input');
-          setLoading(false);
+          logger.info('[TelegramConnection] Bot requested phone number - transitioning to phone input step');
+
+          // Update toast
+          toast.success('Ready for phone number input', { id: 'telegram-login-command' });
+
+          // Force state update with a small delay to ensure it takes effect
+          setTimeout(() => {
+            setStep('phone_input');
+            setLoading(false);
+
+            // Log the state change
+            logger.info('[TelegramConnection] State updated: step=phone_input, loading=false');
+          }, 100);
+
           return;
         }
 
@@ -1093,8 +1365,18 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
           // Start the verification code timer
           startVerificationCodeTimer();
 
-          setStep('code_input');
-          setLoading(false);
+          // Update toast
+          toast.success(`Verification code sent to ${phoneMatch && phoneMatch[1] ? phoneMatch[1] : 'your device'}`, { id: 'telegram-login-command' });
+
+          // Force state update with a small delay to ensure it takes effect
+          setTimeout(() => {
+            setStep('code_input');
+            setLoading(false);
+
+            // Log the state change
+            logger.info('[TelegramConnection] State updated: step=code_input, loading=false');
+          }, 100);
+
           return;
         }
 
@@ -1150,9 +1432,9 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
 
   // Submit phone number to the bot
   const submitPhoneNumber = async () => {
-    // Validate phone number
+    // Validate phone number with more precise checks
     if (!countryCode || countryCode === '+') {
-      setPhoneError('Please enter a country code');
+      setPhoneError('Please enter a country code (e.g., +1 for US)');
       return;
     }
 
@@ -1161,10 +1443,28 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
       return;
     }
 
+    // Ensure country code starts with +
+    let formattedCountryCode = countryCode;
+    if (!formattedCountryCode.startsWith('+')) {
+      formattedCountryCode = '+' + formattedCountryCode;
+    }
+
+    // Validate phone number format
+    const fullPhoneNumber = `${formattedCountryCode}${phoneNumber}`;
+    const phoneRegex = /^\+[1-9]\d{1,14}$/; // E.164 format
+
+    if (!phoneRegex.test(fullPhoneNumber)) {
+      setPhoneError('Invalid phone number format. Please enter a valid international number with country code.');
+      return;
+    }
+
     // Clear any previous errors
     setPhoneError(null);
     setLoading(true);
     setWaitingForBotResponse(true);
+
+    // Show a loading toast
+    toast.loading('Sending phone number...', { id: 'telegram-phone' });
 
     try {
       // Use the global Matrix client
@@ -1174,8 +1474,8 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
         throw new Error('Matrix client or room ID not available');
       }
 
-      // Format the full phone number
-      const fullPhoneNumber = `${countryCode}${phoneNumber}`;
+      // Use the already formatted phone number from validation
+      // const fullPhoneNumber is already defined above
 
       // Send the phone number to the bot
       logger.info('[TelegramConnection] Sending phone number to bot');
@@ -1185,15 +1485,98 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
         body: fullPhoneNumber
       });
 
-      // Set timeout for bot response
-      setBotTimeout();
+      toast.success('Phone number sent. Waiting for verification code...', { id: 'telegram-phone' });
 
-      toast.success('Phone number sent. Waiting for verification code...');
+      // Start polling for response immediately
+      let pollCount = 0;
+      const maxPolls = 30; // Poll for 15 seconds (30 * 500ms)
+      const pollInterval = setInterval(async () => {
+        try {
+          pollCount++;
+          logger.info(`[TelegramConnection] Polling for verification code message (${pollCount}/${maxPolls})`);
+
+          // Check for messages in the room
+          const room = matrixClient.getRoom(roomId);
+          if (room) {
+            const timeline = room.getLiveTimeline();
+            const events = timeline.getEvents();
+
+            // Look for the most recent messages from the bot
+            for (let i = events.length - 1; i >= Math.max(0, events.length - 10); i--) {
+              const event = events[i];
+              if (event.getType() === 'm.room.message' && event.getSender() === TELEGRAM_BOT_USER_ID) {
+                const content = event.getContent();
+
+                // Check for verification code message
+                if (content.body && content.body.includes('Login code sent to')) {
+                  // Extract phone number from message for display
+                  const phoneMatch = content.body.match(/Login code sent to ([+\d]+)/);
+                  if (phoneMatch && phoneMatch[1]) {
+                    // Store the phone number for reference
+                    setPhoneNumber(phoneMatch[1]);
+                  }
+
+                  logger.info('[TelegramConnection] Found verification code message:', content.body);
+                  clearInterval(pollInterval);
+
+                  // Start the verification code timer
+                  startVerificationCodeTimer();
+
+                  // Update toast
+                  toast.success(`Verification code sent to ${phoneMatch && phoneMatch[1] ? phoneMatch[1] : 'your device'}`, { id: 'telegram-phone' });
+
+                  // Force state update with a small delay to ensure it takes effect
+                  setTimeout(() => {
+                    setStep('code_input');
+                    setLoading(false);
+                    setWaitingForBotResponse(false);
+
+                    // Log the state change
+                    logger.info('[TelegramConnection] State updated by phone polling: step=code_input, loading=false');
+                  }, 100);
+
+                  return;
+                }
+
+                // Check for error message - be very specific about the error message
+                if (content.body && (
+                  content.body.includes('Invalid phone') ||
+                  content.body.includes('phone number is invalid') ||
+                  content.body.includes('Invalid phone code')
+                )) {
+                  logger.error(`[TelegramConnection] Phone number error: ${content.body}`);
+                  clearInterval(pollInterval);
+                  toast.error('Invalid phone number format', { id: 'telegram-phone' });
+                  setPhoneError('Invalid phone number format. Please include country code (e.g., +1 for US).');
+                  setLoading(false);
+                  setWaitingForBotResponse(false);
+                  return;
+                }
+              }
+            }
+          }
+
+          // If we've reached the maximum number of polls, stop polling
+          if (pollCount >= maxPolls) {
+            clearInterval(pollInterval);
+            logger.info('[TelegramConnection] No verification code message found after maximum polls');
+            toast.error('No response from Telegram. Please try again.', { id: 'telegram-phone' });
+            setLoading(false);
+            setWaitingForBotResponse(false);
+          }
+        } catch (error) {
+          logger.error('[TelegramConnection] Error polling for verification code message:', error);
+        }
+      }, 500); // Poll every 500ms
+
+      // Set timeout for bot response as a fallback
+      setBotTimeout();
     } catch (error) {
       logger.error('[TelegramConnection] Error sending phone number:', error);
       setPhoneError('Failed to send phone number. Please try again.');
       setLoading(false);
       setWaitingForBotResponse(false);
+      toast.error('Failed to send phone number', { id: 'telegram-phone' });
     }
   };
 
@@ -1209,6 +1592,9 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
     setCodeError(null);
     setLoading(true);
     setWaitingForBotResponse(true);
+
+    // Show a loading toast
+    toast.loading('Verifying code...', { id: 'telegram-verification' });
 
     try {
       // Use the global Matrix client
@@ -1228,6 +1614,79 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
       // Set timeout for bot response
       setBotTimeout();
 
+      // Start polling for response
+      let pollCount = 0;
+      const maxPolls = 20; // Poll for 10 seconds (20 * 500ms)
+      const pollInterval = setInterval(async () => {
+        try {
+          pollCount++;
+          logger.info(`[TelegramConnection] Polling for verification response (${pollCount}/${maxPolls})`);
+
+          // Check for messages in the room
+          const room = matrixClient.getRoom(roomId);
+          if (room) {
+            const timeline = room.getLiveTimeline();
+            const events = timeline.getEvents();
+
+            // Look for the most recent messages from the bot
+            for (let i = events.length - 1; i >= 0; i--) {
+              const event = events[i];
+              if (event.getType() === 'm.room.message' && event.getSender() === TELEGRAM_BOT_USER_ID) {
+                const content = event.getContent();
+
+                // Check for success message
+                if (content.body && (content.body.includes('Successfully logged in as') ||
+                                     content.body.includes('authentication successful'))) {
+                  // Extract username if available
+                  const usernameMatch = content.body.match(/logged in as @([\w\d_]+)/);
+                  const username = usernameMatch ? usernameMatch[1] : null;
+
+                  logger.info(`[TelegramConnection] Verification successful: ${content.body}`);
+                  clearInterval(pollInterval);
+                  toast.success('Verification successful!', { id: 'telegram-verification' });
+                  handleLoginSuccess(roomId, username);
+                  return;
+                }
+
+                // Check for specific error messages related to verification code
+                if (content.body && (
+                  content.body.includes('Invalid code') ||
+                  content.body.includes('code is invalid') ||
+                  content.body.includes('code expired') ||
+                  (content.body.includes('error') && content.body.includes('code'))
+                )) {
+                  logger.error(`[TelegramConnection] Verification failed: ${content.body}`);
+                  clearInterval(pollInterval);
+
+                  // Show specific error message based on the response
+                  if (content.body.includes('expired')) {
+                    toast.error('Verification code expired', { id: 'telegram-verification' });
+                    setCodeError('Verification code expired. Please request a new code.');
+                  } else {
+                    toast.error('Invalid verification code', { id: 'telegram-verification' });
+                    setCodeError('Invalid verification code. Please try again.');
+                  }
+
+                  setLoading(false);
+                  setWaitingForBotResponse(false);
+                  return;
+                }
+              }
+            }
+          }
+
+          // If we've reached the maximum number of polls, transition to connecting state
+          if (pollCount >= maxPolls) {
+            clearInterval(pollInterval);
+            logger.info('[TelegramConnection] No immediate response from bot after sending verification code, continuing to wait');
+            toast.loading('Waiting for Telegram to respond...', { id: 'telegram-verification' });
+            setStep('connecting');
+          }
+        } catch (error) {
+          logger.error('[TelegramConnection] Error polling for verification response:', error);
+        }
+      }, 500); // Poll every 500ms
+
       toast.success('Verification code sent. Completing login...');
       setStep('connecting');
     } catch (error) {
@@ -1235,6 +1694,7 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
       setCodeError('Failed to send verification code. Please try again.');
       setLoading(false);
       setWaitingForBotResponse(false);
+      toast.error('Failed to send verification code', { id: 'telegram-verification' });
     }
   };
 
@@ -1446,7 +1906,7 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
                       localStorage.getItem('matrix_sync_state') !== 'SYNCING') ? (
                   <span className="flex items-center justify-center">
                     <FiLoader className="animate-spin mr-2" />
-                    Syncing Matrix...
+                    Preparing Connection...
                   </span>
                 ) : (
                   'Connect Telegram'
@@ -1515,7 +1975,7 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
                         setCountryCode(value);
                       }
                     }}
-                    className="w-full bg-neutral-800 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full bg-neutral-800 text-white rounded-lg border-1 border-white/70 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
                 <div className="w-2/3">
@@ -1529,7 +1989,7 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
                         setPhoneNumber(value);
                       }
                     }}
-                    className="w-full bg-neutral-800 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full bg-neutral-800 text-white rounded-lg border-1 border-white/70 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
               </div>
@@ -1618,9 +2078,21 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
                 <p className="text-gray-300 mb-2">
                   <strong>Check your Telegram app</strong> for the verification code.
                 </p>
-                <p className="text-gray-400">
+                <p className="text-gray-400 mb-3">
                   If you don't receive a code, make sure you've entered the correct phone number.
                 </p>
+                <button
+                  onClick={() => {
+                    // Go back to phone input step to request a new code
+                    setStep('phone_input');
+                    setCodeError(null);
+                    setVerificationCode('');
+                    toast.info('Enter your phone number again to request a new code');
+                  }}
+                  className="text-blue-400 hover:text-blue-300 underline text-sm flex items-center mx-auto"
+                >
+                  <FiRefreshCw className="mr-1" /> Request New Code
+                </button>
               </div>
             </div>
 
@@ -1709,19 +2181,38 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
     }
   }, [error]);
 
-  return (
-    <div className="bg-neutral-800 rounded-lg p-6 max-w-md w-full mx-auto">
-      {renderContent()}
+  // Set the connecting_to_telegram flag when component mounts
+  useEffect(() => {
+    // Set flag to indicate we're connecting to Telegram
+    sessionStorage.setItem('connecting_to_telegram', 'true');
+    logger.info('[TelegramConnection] Set connecting_to_telegram flag');
 
-      {step !== 'complete' && (
-        <button
-          onClick={onCancel}
-          className="w-full mt-4 py-2 bg-transparent border border-gray-600 text-gray-300 rounded-lg hover:bg-gray-700 transition-colors"
-        >
-          Cancel
-        </button>
-      )}
-    </div>
+    return () => {
+      // Clear flag when component unmounts
+      if (step !== 'complete') {
+        sessionStorage.removeItem('connecting_to_telegram');
+        logger.info('[TelegramConnection] Cleared connecting_to_telegram flag');
+      }
+    };
+  }, [step]);
+
+  return (
+    // Wrap the component with MatrixInitializer to ensure Matrix is initialized
+    // The forceInitialize prop ensures Matrix is initialized even if the flag is not set
+    <MatrixInitializer forceInitialize={true}>
+      <div className="bg-neutral-800 rounded-lg p-6 max-w-md w-full mx-auto">
+        {renderContent()}
+
+        {step !== 'complete' && (
+          <button
+            onClick={onCancel}
+            className="w-full mt-4 py-2 bg-transparent border border-gray-600 text-gray-300 rounded-lg hover:bg-gray-700 transition-colors"
+          >
+            Cancel
+          </button>
+        )}
+      </div>
+    </MatrixInitializer>
   );
 };
 

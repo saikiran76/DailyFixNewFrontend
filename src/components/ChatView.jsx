@@ -44,7 +44,7 @@ import Chatbot from './Chatbot';
 import { motion } from 'framer-motion';
 import DFSpin from '../images/DF.png';
 import ContactAvatar from './ContactAvatar';
-
+import WhatsAppInfoPanel from './WhatsAppInfoPanel';
 // Import environment variables
 const API_URL = import.meta.env.VITE_API_URL;
 
@@ -123,7 +123,7 @@ const SyncProgressIndicator = ({ syncState, loadingState }) => {
   };
 
   // Hide the indicator if loading is complete or sync is complete
-  if (loadingState === LOADING_STATES.COMPLETE || 
+  if (loadingState === LOADING_STATES.COMPLETE ||
       (syncState.state === SYNC_STATES.APPROVED && syncState.progress === 100)) {
     return null;
   }
@@ -150,9 +150,9 @@ const SyncProgressIndicator = ({ syncState, loadingState }) => {
           )}
         </div>
         <div className="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
-          <div 
+          <div
             className={`h-full transition-all duration-300 ease-out ${getStatusColor()}`}
-            style={{ 
+            style={{
               width: `${syncState.progress}%`,
               transition: 'width 0.3s ease-out'
             }}
@@ -170,7 +170,7 @@ const SyncProgressIndicator = ({ syncState, loadingState }) => {
 
 const handleSyncError = (error, contactId) => {
   const errorMessage = error?.response?.data?.message || error?.message || 'An unknown error occurred';
-  
+
   setSyncState(prev => ({
     ...prev,
     state: SYNC_STATES.REJECTED,
@@ -181,7 +181,7 @@ const handleSyncError = (error, contactId) => {
   }));
 
   setError(`Message sync failed: ${errorMessage}`);
-  
+
   console.error('[ChatView] Sync error:', {
     contactId,
     error: errorMessage,
@@ -242,7 +242,7 @@ const LOADING_STATES = {
 const LoadingChatView = ({ details }) => {
   // Select a random fun fact
   const randomFact = SOCIAL_MEDIA_FUN_FACTS[Math.floor(Math.random() * SOCIAL_MEDIA_FUN_FACTS.length)];
-  
+
   return (
     <div className="flex flex-col h-full bg-[#ECE5DD]">
       {/* Header Skeleton */}
@@ -268,8 +268,8 @@ const LoadingChatView = ({ details }) => {
       {/* Loading Indicator with Fun Fact */}
       <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/50 backdrop-blur-sm">
         <div className="flex flex-col items-center max-w-md px-6 py-4 bg-neutral-800 rounded-lg">
-          <motion.img 
-            src={DFSpin} 
+          <motion.img
+            src={DFSpin}
             className="w-12 h-12 mb-3"
             variants={spinVariants}
             animate="animate"
@@ -366,7 +366,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
       logger.warn('[ChatView] Socket not available');
       return false;
     }
-    
+
     if (!socket.connected) {
       logger.warn('[ChatView] Socket not connected', {
         socketId: socket.id,
@@ -374,7 +374,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
       });
       return false;
     }
-    
+
     return true;
   }, [socket]);
 
@@ -683,10 +683,10 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
       // This is critical for the server's guaranteed delivery system
       if (typeof ack === 'function') {
         try {
-          ack({ 
-            success: true, 
-            received: true, 
-            timestamp: Date.now() 
+          ack({
+            success: true,
+            received: true,
+            timestamp: Date.now()
           });
           logger.debug('[ChatView] Message acknowledged successfully');
         } catch (ackError) {
@@ -697,7 +697,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
       // Process the message if it's for the selected contact
       if (payload && payload.contactId === selectedContact?.id && payload.message) {
         const messageId = payload.message.message_id || payload.message.id;
-        
+
         if (messageId && !processedMessageIds.has(messageId)) {
           // Normalize the message format
           const normalized = messageService.normalizeMessage(payload.message);
@@ -762,7 +762,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     if (!socket) {
       setConnectionStatus(CONNECTION_STATUS.DISCONNECTED);
       setSocketReady(false);
-      
+
       // Direct initialization when socket from useSocketConnection is not available
       // We need to import initializeSocket directly from socket.js
       // This ensures we can create a socket even when the hook hasn't provided one yet
@@ -771,7 +771,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
           setSocketInitError(false); // Reset error state on attempt
           logger.info('[ChatView] Attempting to initialize socket');
           // Pass the correct platform and options to initializeSocket
-          const newSocket = await initializeSocket({ 
+          const newSocket = await initializeSocket({
             platform: 'whatsapp',
             onConnect: () => {
               logger.info('[ChatView] Socket connected via manual initialization');
@@ -791,7 +791,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
               setSocketInitError(true);
             }
           });
-          
+
           if (newSocket) {
             logger.info('[ChatView] Socket initialized successfully');
             // The socket will be available through the useSocketConnection hook on next render
@@ -802,7 +802,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
           toast.error('Failed to connect to chat server. Please retry or refresh the page.');
         }
       };
-      
+
       initSocket();
       return;
     }
@@ -816,7 +816,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
       logger.info('[ChatView] Socket connected');
       setConnectionStatus(CONNECTION_STATUS.CONNECTED);
       setSocketReady(true);
-      
+
       // When socket connects, join the user room again
       if (currentUser?.id) {
         const userRoom = `user:${currentUser.id}`;
@@ -831,7 +831,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
       logger.info('[ChatView] Socket disconnected:', reason);
       setConnectionStatus(CONNECTION_STATUS.DISCONNECTED);
       setSocketReady(false);
-      
+
       // If the disconnect reason suggests we should reconnect, attempt to do so
       if (reason === 'io server disconnect' || reason === 'transport close') {
         logger.info('[ChatView] Attempting to reconnect socket');
@@ -844,11 +844,11 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
       setConnectionStatus(CONNECTION_STATUS.CONNECTING);
       setSocketReady(false);
     };
-    
+
     const handleError = (error) => {
       logger.error('[ChatView] Socket error:', error);
       setSocketReady(false);
-      
+
       // Sometimes the socket state doesn't update properly on errors,
       // check the actual connection state after a short delay
       setTimeout(() => {
@@ -866,24 +866,24 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     // Perform a health check on mount
     const checkConnection = () => {
       const isConnected = socket.connected;
-      logger.info('[ChatView] Socket health check:', { 
+      logger.info('[ChatView] Socket health check:', {
         connected: isConnected,
         readyState: socket.readyState,
         id: socket.id
       });
-      
+
       if (!isConnected && connectionStatus === CONNECTION_STATUS.CONNECTED) {
         logger.warn('[ChatView] Socket reports disconnected but state is connected - correcting');
         setConnectionStatus(CONNECTION_STATUS.DISCONNECTED);
         setSocketReady(false);
-        
+
         // Try to reconnect
         socket.connect();
       }
     };
-    
+
     checkConnection();
-    
+
     // Set up periodic health check
     const healthCheckInterval = setInterval(checkConnection, 30000); // 30 seconds
 
@@ -1034,7 +1034,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
     // Reset the socket init error state
     setSocketInitError(false);
     // Attempt to initialize a new socket connection
-    initializeSocket({ 
+    initializeSocket({
       platform: 'whatsapp',
       onConnect: () => {
         logger.info('[ChatView] Socket connected via retry');
@@ -1062,9 +1062,10 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
 
   if (!selectedContact) {
     return (
-      <div className="flex items-center justify-center h-full bg-black/25 rounded-xl">
-        <p className="text-lg text-[#757575]">Select a contact to start chatting</p>
-      </div>
+      // <div className="flex items-center justify-center h-full bg-black/25 rounded-xl">
+      //   <p className="text-lg text-[#757575]">Select a contact to start chatting</p>
+      // </div>
+      <WhatsAppInfoPanel userId={currentUser?.id} />
     );
   }
 
@@ -1074,7 +1075,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
   }
 
   return (
-    <div className="flex flex-col h-full bg-neutral-900 relative">
+    <div className="chat-view-container whatsapp-chat-view flex flex-col h-full bg-neutral-900 relative">
       {!selectedContact?.id ? (
         <div className="flex flex-col items-center justify-center h-full text-[#757575] bg-neutral-900">
           <p>Select a contact to view the chat</p>
@@ -1147,7 +1148,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
           {/* Messages Container */}
           <div
             ref={messagesContainerRef}
-            className="flex-1 overflow-y-auto p-3 space-y-3 bg-[#ECE5DD]"
+            className="messages-container flex-1 overflow-y-auto p-3 space-y-3 bg-[#ECE5DD]"
             onScroll={async (e) => {
               const { scrollTop, scrollHeight, clientHeight } = e.target;
               if (scrollTop === 0 && hasMoreMessages && !loading) {
@@ -1219,7 +1220,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
           )}
         </div>
       )}
-      
+
       {/* Add Chatbot component when a contact is selected */}
       {selectedContact?.id && <Chatbot contactId={selectedContact.id} />}
     </div>

@@ -10,19 +10,19 @@ import logger from './logger';
  */
 export function getParentEventId(event) {
   if (!event) return undefined;
-  
+
   try {
     // Check if the event has a replyEventId property (added by our code)
     if (event.replyEventId) {
       return event.replyEventId;
     }
-    
+
     // Check for m.in_reply_to relation
     const content = event.getContent ? event.getContent() : event.content;
     if (content && content['m.relates_to'] && content['m.relates_to']['m.in_reply_to']) {
       return content['m.relates_to']['m.in_reply_to'].event_id;
     }
-    
+
     // Check for legacy reply format
     if (content && content.body && content.body.startsWith('> <')) {
       // Try to extract the event ID from the fallback format
@@ -36,7 +36,7 @@ export function getParentEventId(event) {
   } catch (error) {
     logger.warn('[replyUtils] Error getting parent event ID:', error);
   }
-  
+
   return undefined;
 }
 
@@ -56,7 +56,7 @@ export function isReply(event) {
  */
 export function addReplyToMessageContent(content, replyToEvent) {
   if (!content || !replyToEvent) return;
-  
+
   try {
     // Add m.relates_to with m.in_reply_to
     content['m.relates_to'] = {
@@ -65,16 +65,30 @@ export function addReplyToMessageContent(content, replyToEvent) {
         event_id: replyToEvent.getId ? replyToEvent.getId() : replyToEvent.event_id,
       },
     };
-    
+
     // Add fallback body format for clients that don't support m.in_reply_to
     const originalBody = content.body || '';
     const replyToSender = replyToEvent.getSender ? replyToEvent.getSender() : replyToEvent.sender;
     const replyToContent = replyToEvent.getContent ? replyToEvent.getContent() : replyToEvent.content;
     const replyToBody = replyToContent.body || '';
-    
-    // Format the fallback text
+
+    // Get a better display name if possible
+    let displayName = replyToSender;
+
+    // For Telegram users, try to get a better name
+    if (replyToSender && replyToSender.includes('telegram_')) {
+      // Check if we have sender_name in the content
+      if (replyToContent && replyToContent.sender_name) {
+        displayName = replyToContent.sender_name;
+      } else {
+        // Use a more user-friendly format
+        displayName = getDisplayNameFromUserId(replyToSender);
+      }
+    }
+
+    // Format the fallback text - but don't include the raw Matrix ID
     const fallbackLines = replyToBody.split('\n').map(line => `> ${line}`);
-    content.body = `> <${replyToSender}> ${fallbackLines.join('\n')}\n\n${originalBody}`;
+    content.body = `${originalBody}`;
   } catch (error) {
     logger.warn('[replyUtils] Error adding reply to message content:', error);
   }
@@ -87,7 +101,7 @@ export function addReplyToMessageContent(content, replyToEvent) {
  */
 export function stripPlainReply(body) {
   if (!body) return '';
-  
+
   try {
     // Removes lines beginning with `> ` until you reach one that doesn't
     const lines = body.split('\n');
@@ -108,7 +122,7 @@ export function stripPlainReply(body) {
  */
 export function getDisplayNameFromUserId(userId) {
   if (!userId) return 'Unknown User';
-  
+
   try {
     // For Telegram users, the format is usually @telegram_123456789:server.org
     if (userId.includes('telegram_')) {
@@ -118,7 +132,7 @@ export function getDisplayNameFromUserId(userId) {
         return `User ${telegramId}`;
       }
     }
-    
+
     // For other users, just use the first part of the Matrix ID
     return userId.split(':')[0].replace('@', '');
   } catch (error) {

@@ -12,16 +12,29 @@ export const PRIORITY_LEVELS = {
 // Async thunks
 export const fetchContacts = createAsyncThunk(
   'contacts/fetchAll',
-  async (userId, { rejectWithValue }) => {
+  async (userId, { rejectWithValue, getState }) => {
     try {
-      logger.info('[Contacts] Fetching contacts for user:', userId);
+      // CRITICAL FIX: Check if WhatsApp is connected before fetching contacts
+      const state = getState();
+      const { whatsappConnected, accounts } = state.onboarding;
+
+      // Check if WhatsApp is connected using multiple sources
+      const isWhatsAppConnected = whatsappConnected ||
+                              accounts.some(acc => acc.platform === 'whatsapp' && acc.status === 'active');
+
+      if (!isWhatsAppConnected) {
+        logger.info('[Contacts] WhatsApp is not connected, returning empty contacts list');
+        return { contacts: [] };
+      }
+
+      logger.info('[Contacts] WhatsApp is connected, fetching contacts for user:', userId);
       const result = await contactService.getCurrentUserContacts();
-      
+
       // Handle in-progress sync case
       if (result.inProgress) {
         return { inProgress: true, contacts: [] };
       }
-      
+
       logger.info('[Contacts] Fetched contacts:', result.contacts?.length);
       return { contacts: result.contacts || [] };
     } catch (error) {
@@ -34,11 +47,26 @@ export const fetchContacts = createAsyncThunk(
 // freshSync Thunk
 export const freshSyncContacts = createAsyncThunk(
   'contacts/freshSync',
-  async (_, { rejectWithValue }) => {
+  async (_, { rejectWithValue, getState }) => {
     try {
+      // CRITICAL FIX: Check if WhatsApp is connected before performing fresh sync
+      const state = getState();
+      const { whatsappConnected, accounts } = state.onboarding;
+
+      // Check if WhatsApp is connected using multiple sources
+      const isWhatsAppConnected = whatsappConnected ||
+                              accounts.some(acc => acc.platform === 'whatsapp' && acc.status === 'active');
+
+      if (!isWhatsAppConnected) {
+        logger.info('[Contacts] WhatsApp is not connected, skipping fresh sync');
+        return [];
+      }
+
+      logger.info('[Contacts] WhatsApp is connected, performing fresh sync');
       const result = await contactService.performFreshSync();
       return result;
     } catch (error) {
+      logger.error('[Contacts] Fresh sync failed:', error);
       return rejectWithValue(error.message);
     }
   }
@@ -46,12 +74,26 @@ export const freshSyncContacts = createAsyncThunk(
 
 export const syncContact = createAsyncThunk(
   'contacts/sync',
-  async (contactId, { rejectWithValue }) => {
+  async (contactId, { rejectWithValue, getState }) => {
     try {
+      // CRITICAL FIX: Check if WhatsApp is connected before syncing contact
+      const state = getState();
+      const { whatsappConnected, accounts } = state.onboarding;
+
+      // Check if WhatsApp is connected using multiple sources
+      const isWhatsAppConnected = whatsappConnected ||
+                              accounts.some(acc => acc.platform === 'whatsapp' && acc.status === 'active');
+
+      if (!isWhatsAppConnected) {
+        logger.info('[Contacts] WhatsApp is not connected, skipping contact sync');
+        return { status: 'skipped', reason: 'whatsapp_not_connected' };
+      }
+
+      logger.info('[Contacts] WhatsApp is connected, syncing contact:', contactId);
       const result = await contactService.syncContact(contactId);
       return result;
     } catch (error) {
-      logger.info('[ContactSlice] Failed to sync contact:', error);
+      logger.error('[ContactSlice] Failed to sync contact:', error);
       return rejectWithValue(error.message);
     }
   }
@@ -158,7 +200,7 @@ const contactSlice = createSlice({
       const newContact = action.payload;
       // Check if contact already exists
       const existingContactIndex = state.items.findIndex(contact => contact.id === newContact.id);
-      
+
       if (existingContactIndex === -1) {
         // Add new contact with default membership if not specified
         state.items.push({
@@ -199,7 +241,9 @@ const contactSlice = createSlice({
       if (contact) {
         contact.display_name = displayName;
       }
-    }
+    },
+    // CRITICAL FIX: Add reset action for global cleanup
+    reset: () => initialState
   },
   extraReducers: (builder) => {
     builder
@@ -211,7 +255,7 @@ const contactSlice = createSlice({
       })
       .addCase(fetchContacts.fulfilled, (state, action) => {
         state.loading = false;
-        
+
         if (action.payload.inProgress) {
           state.syncStatus.inProgress = true;
           if (!state.items.length) {
@@ -228,7 +272,7 @@ const contactSlice = createSlice({
           state.syncStatus.inProgress = false;
           state.syncStatus.lastSyncTime = Date.now();
         }
-        
+
         state.initialLoadComplete = true;
         logger.info('[Contacts] Contacts fetch successful:', {
           count: state.items.length,
@@ -295,15 +339,16 @@ const contactSlice = createSlice({
 });
 
 // Export actions
-export const { 
-  clearContactError, 
+export const {
+  clearContactError,
   clearContacts,
   updateContactMembership,
   setPriority,
   cleanupPriorities,
   addContact,
   hideContact,
-  updateContactDisplayName
+  updateContactDisplayName,
+  reset
 } = contactSlice.actions;
 
 // Export reducer
@@ -319,5 +364,5 @@ export const selectContactsError = (state) => state.contacts.error;
 export const selectLastSyncTime = (state) => state.contacts.syncStatus.lastSyncTime;
 export const selectIsSyncing = (state) => state.contacts.syncStatus.inProgress;
 export const selectInitialLoadComplete = (state) => state.contacts.initialLoadComplete;
-export const selectContactPriority = (state, contactId) => 
-  state.contacts.priorityMap[contactId]?.priority || PRIORITY_LEVELS.LOW; 
+export const selectContactPriority = (state, contactId) =>
+  state.contacts.priorityMap[contactId]?.priority || PRIORITY_LEVELS.LOW;

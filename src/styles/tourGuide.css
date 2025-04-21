@@ -1,0 +1,128 @@
+/* Tour Guide Button Styles */
+
+.tour-guide-button {
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  z-index: 50;
+  transition: all 0.3s ease;
+}
+
+.tour-guide-button button {
+  background-color: #6d28d9; /* Purple-600 */
+  color: white;
+  border-radius: 9999px;
+  padding: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  transition: all 0.2s ease;
+}
+
+.tour-guide-button button:hover {
+  background-color: #5b21b6; /* Purple-700 */
+  transform: scale(1.1);
+}
+
+/* Platform selector modal */
+.platform-selector-modal {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.platform-selector-content {
+  background-color: #262626; /* Neutral-800 */
+  border-radius: 0.5rem;
+  padding: 1.5rem;
+  max-width: 28rem;
+  width: 100%;
+  margin: 0 1rem;
+}
+
+.platform-button {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background-color: #404040; /* Neutral-700 */
+  color: white;
+  border-radius: 0.5rem;
+  display: flex;
+  align-items: center;
+  transition: background-color 0.2s ease;
+}
+
+.platform-button:hover {
+  background-color: #525252; /* Neutral-600 */
+}
+
+.platform-icon {
+  margin-right: 0.75rem;
+  font-size: 1.25rem;
+}
+
+.platform-icon.whatsapp {
+  color: #25D366; /* WhatsApp green */
+}
+
+.platform-icon.telegram {
+  color: #0088cc; /* Telegram blue */
+}
+
+/* Tooltip highlight during tour */
+.tour-highlight {
+  position: relative;
+  z-index: 1000;
+  box-shadow: 0 0 0 6px rgba(147, 51, 234, 0.7); /* Purple-600 glow */
+  border-radius: 4px;
+  transition: all 0.3s ease;
+  outline: 2px solid rgba(147, 51, 234, 0.9);
+}
+
+/* Pulse animation for tour highlights */
+@keyframes tour-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(147, 51, 234, 0.8);
+  }
+  50% {
+    box-shadow: 0 0 0 10px rgba(147, 51, 234, 0.2);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(147, 51, 234, 0);
+  }
+}
+
+.tour-highlight {
+  animation: tour-pulse 1.5s infinite;
+}
+
+/* Tooltip highlight during regular onboarding */
+.tooltip-highlight {
+  position: relative;
+  z-index: 1000;
+  box-shadow: 0 0 0 6px rgba(59, 130, 246, 0.7); /* Blue-500 glow */
+  border-radius: 4px;
+  transition: all 0.3s ease;
+  outline: 2px solid rgba(59, 130, 246, 0.9);
+}
+
+/* Pulse animation for tooltip highlights */
+@keyframes tooltip-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.8);
+  }
+  50% {
+    box-shadow: 0 0 0 10px rgba(59, 130, 246, 0.2);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+  }
+}
+
+.tooltip-highlight {
+  animation: tooltip-pulse 1.5s infinite;
+}

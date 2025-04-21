@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useReducer } from 'react';
 import Sidebar from '../components/Sidebar';
 import WhatsAppContactList from '../components/WhatsAppContactList';
 import TelegramContactList from '../components/TelegramContactList';
@@ -10,6 +10,10 @@ import AISuggestionFeedback from '../components/AISuggestionFeedback';
 import TourPopup from '../components/TourPopup';
 import PlatformConnectionModal from '../components/PlatformConnectionModal';
 import LogoutModal from '../components/LogoutModal';
+import OnboardingTooltipManager from '../components/OnboardingTooltipManager';
+// TourGuideButton moved to Sidebar
+import MatrixInitializer from '../components/MatrixInitializer';
+import { MatrixClientProvider } from '../context/MatrixClientContext';
 import api from '../utils/api';
 import { useDispatch, useSelector } from 'react-redux';
 import { fetchContacts } from '../store/slices/contactSlice';
@@ -17,98 +21,103 @@ import { connect as connectSocket } from '../store/slices/socketSlice';
 import { updateAccounts, setWhatsappConnected } from '../store/slices/onboardingSlice';
 import { isWhatsAppConnected } from '../utils/connectionStorage';
 import { isWhatsAppConnectedDB } from '../utils/connectionStorageDB';
+import { isTelegramConnected } from '../utils/telegramHelper';
 import logger from '../utils/logger';
 import '../styles/platformButtons.css';
+import '../styles/tooltips.css';
+import '../styles/tourGuide.css';
 import { FiMenu, FiX } from 'react-icons/fi';
 import { IoArrowBack, IoChevronBackOutline, IoChevronForwardOutline } from "react-icons/io5";
+import platformManager from '../services/PlatformManager';
+import { toast } from 'react-hot-toast';
 import { FaWhatsapp, FaTelegram } from 'react-icons/fa';
 
-const AcknowledgmentModal = ({ isOpen, onClose, whatsappConnected, userId }) => {
-  const modalRef = React.useRef();
-  const [shouldRender, setShouldRender] = useState(false);
+// const AcknowledgmentModal = ({ isOpen, onClose, whatsappConnected, userId }) => {
+//   const modalRef = React.useRef();
+//   const [shouldRender, setShouldRender] = useState(false);
 
-  // Check if WhatsApp is connected before rendering
-  useEffect(() => {
-    // Only render if WhatsApp is connected (from props or localStorage)
-    const whatsappConnectedInCache = userId && isWhatsAppConnected(userId);
-    setShouldRender(isOpen && (whatsappConnected || whatsappConnectedInCache));
-  }, [isOpen, whatsappConnected, userId]);
+//   // Check if WhatsApp is connected before rendering
+//   useEffect(() => {
+//     // Only render if WhatsApp is connected (from props or localStorage)
+//     const whatsappConnectedInCache = userId && isWhatsAppConnected(userId);
+//     setShouldRender(isOpen && (whatsappConnected || whatsappConnectedInCache));
+//   }, [isOpen, whatsappConnected, userId]);
 
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (modalRef.current && !modalRef.current.contains(event.target)) {
-        onClose();
-      }
-    };
+//   useEffect(() => {
+//     const handleClickOutside = (event) => {
+//       if (modalRef.current && !modalRef.current.contains(event.target)) {
+//         onClose();
+//       }
+//     };
 
-    if (shouldRender) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
+//     if (shouldRender) {
+//       document.addEventListener('mousedown', handleClickOutside);
+//     }
 
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [shouldRender, onClose]);
+//     return () => {
+//       document.removeEventListener('mousedown', handleClickOutside);
+//     };
+//   }, [shouldRender, onClose]);
 
-  if (!shouldRender) return null;
+//   if (!shouldRender) return null;
 
-  return (
-    <div className="fixed inset-0 bg-black/75 bg-opacity-50 flex items-center justify-center z-50">
-      <div
-        ref={modalRef}
-        className="bg-neutral-900 border border-white/10 p-6 rounded-3xl max-w-xl w-full mx-4"
-      >
-        <div className="flex justify-between items-center mb-7">
-          <div className='flex items-center gap-3'>
-            <div>
-              <img className='size-10' src="https://media0.giphy.com/media/jU9PVpqUvR0aNc3nvX/giphy.gif?cid=6c09b952prsvlhpto7g95cgdkxbeyvjja133739m5398bj2o&ep=v1_stickers_search&rid=giphy.gif&ct=s" alt="whatsappLoad"/>
-            </div>
-            <h3 className="text-xl font-medium text-white">WhatsApp Sync Started</h3>
-          </div>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-white transition-colors w-auto h-[2.7rem] ml-3 rounded-full bg-neutral-800 p-2"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
+//   return (
+//     <div className="fixed inset-0 bg-black/75 bg-opacity-50 flex items-center justify-center z-50">
+//       <div
+//         ref={modalRef}
+//         className="bg-neutral-900 border border-white/10 p-6 rounded-3xl max-w-xl w-full mx-4"
+//       >
+//         <div className="flex justify-between items-center mb-7">
+//           <div className='flex items-center gap-3'>
+//             <div>
+//               <img className='size-10' src="https://media0.giphy.com/media/jU9PVpqUvR0aNc3nvX/giphy.gif?cid=6c09b952prsvlhpto7g95cgdkxbeyvjja133739m5398bj2o&ep=v1_stickers_search&rid=giphy.gif&ct=s" alt="whatsappLoad"/>
+//             </div>
+//             <h3 className="text-xl font-medium text-white">WhatsApp Sync Started</h3>
+//           </div>
+//           <button
+//             onClick={onClose}
+//             className="text-gray-400 hover:text-white transition-colors w-auto h-[2.7rem] ml-3 rounded-full bg-neutral-800 p-2"
+//           >
+//             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+//               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+//             </svg>
+//           </button>
+//         </div>
 
-        <p className="text-gray-300 mb-6">
-          Application started syncing your WhatsApp contacts. If there is a new message for any contact, it will be fetched automatically here.
-        </p>
+//         <p className="text-gray-300 mb-6">
+//           Application started syncing your WhatsApp contacts. If there is a new message for any contact, it will be fetched automatically here.
+//         </p>
 
-        {/* Guidelines Section */}
-        <div className="bg-neutral-700 border border-white/10 rounded-lg p-4">
-          <h4 className="text-white font-medium mb-4">Guidelines:</h4>
-          <div className="space-y-4 text-sm">
-            <div className="flex items-start gap-3">
-              <span className="text-white bg-[#1e6853] rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0">1</span>
-              <p className="text-white">Your incoming messages of the contacts will be tracked here</p>
-            </div>
-            <div className="flex items-start gap-3">
-              <span className="text-white bg-[#1e6853] rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0">2</span>
-              <p className="text-white">Try sending a message to a contact or try receiving a message from a contact such that app will start syncing your contacts here real-time.</p>
-            </div>
-            <div className="flex items-start gap-3">
-              <span className="text-white bg-[#1e6853] rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0">3</span>
-              <p className="text-white">Hit the refresh icon in the list to get your contacts when/once you have the incoming messages or you've sent any message to a contact.</p>
-            </div>
-            <div className="flex items-start gap-3">
-              <span className="text-white bg-[#1e6853] rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0">4</span>
-              <p className="text-white">From there on, your contacts will be synced here whenever your contacts have incoming messages will be here in the application, so that you could use our AI based features.</p>
-            </div>
-            {/* <div className="flex items-start gap-3">
-              <span className="text-white bg-[#1e6853] rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0">5</span>
-              <p className="text-white">Check the help/tutorial in the left to checkout the current features.</p>
-            </div> */}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
+//         {/* Guidelines Section */}
+//         <div className="bg-neutral-700 border border-white/10 rounded-lg p-4">
+//           <h4 className="text-white font-medium mb-4">Guidelines:</h4>
+//           <div className="space-y-4 text-sm">
+//             <div className="flex items-start gap-3">
+//               <span className="text-white bg-[#1e6853] rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0">1</span>
+//               <p className="text-white">Your incoming messages of the contacts will be tracked here</p>
+//             </div>
+//             <div className="flex items-start gap-3">
+//               <span className="text-white bg-[#1e6853] rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0">2</span>
+//               <p className="text-white">Try sending a message to a contact or try receiving a message from a contact such that app will start syncing your contacts here real-time.</p>
+//             </div>
+//             <div className="flex items-start gap-3">
+//               <span className="text-white bg-[#1e6853] rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0">3</span>
+//               <p className="text-white">Hit the refresh icon in the list to get your contacts when/once you have the incoming messages or you've sent any message to a contact.</p>
+//             </div>
+//             <div className="flex items-start gap-3">
+//               <span className="text-white bg-[#1e6853] rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0">4</span>
+//               <p className="text-white">From there on, your contacts will be synced here whenever your contacts have incoming messages will be here in the application, so that you could use our AI based features.</p>
+//             </div>
+//             {/* <div className="flex items-start gap-3">
+//               <span className="text-white bg-[#1e6853] rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0">5</span>
+//               <p className="text-white">Check the help/tutorial in the left to checkout the current features.</p>
+//             </div> */}
+//           </div>
+//         </div>
+//       </div>
+//     </div>
+//   );
+// };
 
 const Dashboard = () => {
   const dispatch = useDispatch();
@@ -121,13 +130,15 @@ const Dashboard = () => {
   const [accounts, setAccounts] = useState([]);
   const [selectedContactId, setSelectedContactId] = useState(null);
   // Initialize showAcknowledgment based on WhatsApp connection status
-  const [showAcknowledgment, setShowAcknowledgment] = useState(false);
+  // const [showAcknowledgment, setShowAcknowledgment] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   // Initialize showTourPopup based on WhatsApp connection status
   const [showTourPopup, setShowTourPopup] = useState(false);
   // Track if component is mounted to ensure proper rendering
   const [isMounted, setIsMounted] = useState(false);
+  // Add a forceUpdate state to trigger re-render after platform switch
+  const [forceUpdate, forceRender] = useReducer(x => x + 1, 0);
 
   // Set mounted state on component mount
   useEffect(() => {
@@ -135,6 +146,20 @@ const Dashboard = () => {
 
     // CRITICAL FIX: Initialize accounts if WhatsApp is connected
     if (whatsappConnected && accounts.length === 0) {
+      logger.info('[Dashboard] WhatsApp connected, initializing account');
+
+      // Track this connection in localStorage for the tooltip manager
+      try {
+        const connectedPlatforms = JSON.parse(localStorage.getItem('connected_platforms') || '[]');
+        if (!connectedPlatforms.includes('whatsapp')) {
+          connectedPlatforms.push('whatsapp');
+          localStorage.setItem('connected_platforms', JSON.stringify(connectedPlatforms));
+          logger.info('[Dashboard] Added WhatsApp to connected platforms list');
+        }
+      } catch (e) {
+        logger.error('[Dashboard] Error updating connected platforms:', e);
+      }
+
       setAccounts([{
         id: 'whatsapp',
         platform: 'whatsapp',
@@ -151,6 +176,18 @@ const Dashboard = () => {
 
       if (telegramConnected) {
         logger.info('[Dashboard] Found Telegram connection in localStorage (mount effect)');
+
+        // Track this connection in localStorage for the tooltip manager
+        try {
+          const connectedPlatforms = JSON.parse(localStorage.getItem('connected_platforms') || '[]');
+          if (!connectedPlatforms.includes('telegram')) {
+            connectedPlatforms.push('telegram');
+            localStorage.setItem('connected_platforms', JSON.stringify(connectedPlatforms));
+            logger.info('[Dashboard] Added Telegram to connected platforms list');
+          }
+        } catch (e) {
+          logger.error('[Dashboard] Error updating connected platforms:', e);
+        }
 
         // If we have no accounts or only WhatsApp, add Telegram
         if (accounts.length === 0 || (accounts.length === 1 && accounts[0].platform === 'whatsapp')) {
@@ -191,6 +228,7 @@ const Dashboard = () => {
   const [isAnalyticsView, setIsAnalyticsView] = useState(false);
   // State for controlling the feedback popup
   const [showFeedbackPopup, setShowFeedbackPopup] = useState(false);
+  
 
   // CRITICAL FIX: Log the selected platform and accounts for debugging
   useEffect(() => {
@@ -202,8 +240,8 @@ const Dashboard = () => {
 
     // CRITICAL FIX: If we have a Telegram account but selectedPlatform is not set to 'telegram',
     // set it to 'telegram'
-    if (accounts.some(acc => acc.platform === 'telegram') && selectedPlatform !== 'telegram') {
-      logger.info('[Dashboard] Found Telegram account but platform not selected, selecting Telegram');
+    if (!selectedPlatform && accounts.some(acc => acc.platform === 'telegram')) {
+      logger.info('[Dashboard] No platform selected but found Telegram account, selecting Telegram');
       setSelectedPlatform('telegram');
     }
   }, [selectedPlatform, accounts]);
@@ -290,14 +328,19 @@ const Dashboard = () => {
         }
       }
 
-      // Check for Telegram connection in localStorage
+      // Check for Telegram connection in IndexedDB and localStorage
       let telegramConnected = false;
       try {
-        const connectionStatus = JSON.parse(localStorage.getItem('dailyfix_connection_status') || '{}');
-        telegramConnected = connectionStatus.telegram === true;
+        // Use our new helper function to check for Telegram connection
+        telegramConnected = await isTelegramConnected(userId);
 
         if (telegramConnected) {
-          logger.info('[Dashboard] Found Telegram connection in localStorage');
+          logger.info('[Dashboard] Found Telegram connection using telegramHelper');
+
+          // Update localStorage for consistency
+          const connectionStatus = JSON.parse(localStorage.getItem('dailyfix_connection_status') || '{}');
+          connectionStatus.telegram = true;
+          localStorage.setItem('dailyfix_connection_status', JSON.stringify(connectionStatus));
         }
       } catch (error) {
         logger.error('[Dashboard] Error checking Telegram connection status:', error);
@@ -353,6 +396,19 @@ const Dashboard = () => {
 
         // Also update Redux store
         dispatch(updateAccounts(updatedAccounts));
+
+        // Update localStorage for persistence
+        try {
+          const authDataStr = localStorage.getItem('dailyfix_auth');
+          if (authDataStr) {
+            const authData = JSON.parse(authDataStr);
+            authData.telegramConnected = true;
+            localStorage.setItem('dailyfix_auth', JSON.stringify(authData));
+            logger.info('[Dashboard] Updated auth data with Telegram connection status');
+          }
+        } catch (error) {
+          logger.error('[Dashboard] Error updating auth data with Telegram connection:', error);
+        }
       }
 
       // CRITICAL FIX: If whatsappConnected is true but no WhatsApp account in storeAccounts, add it
@@ -410,7 +466,6 @@ const Dashboard = () => {
       setShowTourPopup(!whatsappIsConnected);
 
       // Show acknowledgment modal only if WhatsApp is connected
-      setShowAcknowledgment(whatsappIsConnected);
 
       if (storeAccounts && storeAccounts.length > 0) {
         logger.info('[Dashboard] Using accounts from Redux store:', storeAccounts);
@@ -478,7 +533,7 @@ const Dashboard = () => {
         } else {
           // CRITICAL FIX: Add a button to fix WhatsApp connection status
           logger.info('[Dashboard] WhatsApp not connected, showing fix button');
-          setShowFixButton(true);
+          // setShowFixButton(true);
 
           // Fallback to API check if Redux state says not connected
           try {
@@ -494,7 +549,7 @@ const Dashboard = () => {
                 status: 'active'
               }]);
               setSelectedPlatform('whatsapp');
-              setShowFixButton(false);
+              // setShowFixButton(false);
 
               // Initialize socket connection
               if (!socketConnected) {
@@ -607,16 +662,143 @@ const Dashboard = () => {
     }
   }, [accounts, socketConnected, selectedPlatform, dispatch, whatsappConnected]);
 
-  const handlePlatformSelect = (platform) => {
-    setSelectedPlatform(platform);
-    // Reset selected contact when platform changes
-    setSelectedContactId(null);
+  // Platform-specific initialization effect
+  useEffect(() => {
+    if (!selectedPlatform) return;
 
-    // Store selected platform in localStorage for persistence
+    logger.info(`[Dashboard] Running platform-specific initialization for ${selectedPlatform}`);
+
+    if (selectedPlatform === 'telegram') {
+      // For Telegram, ensure Matrix is initialized
+      if (!window.matrixClient) {
+        logger.info('[Dashboard] Telegram selected but Matrix client not available, initializing Matrix');
+        const event = new CustomEvent('dailyfix-initialize-matrix', {
+          detail: {
+            forTelegram: true,
+            source: 'Dashboard.platformSpecificInit',
+            timestamp: new Date().toISOString()
+          }
+        });
+        window.dispatchEvent(event);
+      }
+    } else if (selectedPlatform === 'whatsapp') {
+      // For WhatsApp, ensure socket connection and clear Telegram flags
+      if (!socketConnected) {
+        logger.info('[Dashboard] WhatsApp selected but socket not connected, initializing socket');
+        dispatch(connectSocket('whatsapp'));
+      }
+      
+      // Clear any Telegram connection flags
+      sessionStorage.removeItem('connecting_to_telegram');
+      sessionStorage.removeItem('telegram_connection_step');
+      sessionStorage.removeItem('telegram_phone_number');
+    }
+  }, [selectedPlatform, socketConnected, dispatch, forceUpdate]);
+
+  // const handlePlatformSelect = async (platform) => {
+  //   logger.info(`[Dashboard] Switching platform from ${selectedPlatform} to ${platform}`);
+
+  //   // Use platform manager to handle the switch with proper isolation
+  //   try {
+  //     // Show loading toast
+  //     const toastId = toast.loading(`Switching to ${platform.charAt(0).toUpperCase() + platform.slice(1)}...`);
+
+  //     const success = await platformManager.switchPlatform(platform);
+
+  //     if (success) {
+  //       // Update state
+  //       setSelectedPlatform(platform);
+  //       // Reset selected contact when platform changes
+  //       setSelectedContactId(null);
+  //       setSelectedContact(null);
+
+  //       // Reset onboarding status for this platform to trigger tooltips
+  //       try {
+  //         // Get current connected platforms
+  //         const connectedPlatforms = JSON.parse(localStorage.getItem('connected_platforms') || '[]');
+
+  //         // If this is a newly selected platform, mark it for tooltips
+  //         if (!connectedPlatforms.includes(platform)) {
+  //           // Remove any existing onboarding completion status
+  //           localStorage.removeItem(`${platform}_onboarding_complete`);
+
+  //           // Add to connected platforms list
+  //           connectedPlatforms.push(platform);
+  //           localStorage.setItem('connected_platforms', JSON.stringify(connectedPlatforms));
+  //           logger.info(`[Dashboard] Added ${platform} to connected platforms list for tooltips`);
+  //         }
+  //       } catch (e) {
+  //         logger.error('[Dashboard] Error updating connected platforms:', e);
+  //       }
+
+  //       // Store selected platform in localStorage for persistence
+  //       try {
+  //         localStorage.setItem('dailyfix_selected_platform', platform);
+  //       } catch (storageError) {
+  //         logger.error('[Dashboard] Error saving selected platform to localStorage:', storageError);
+  //       }
+
+  //       toast.success(`Switched to ${platform.charAt(0).toUpperCase() + platform.slice(1)}`, { id: toastId });
+  //     } else {
+  //       toast.error(`Failed to switch to ${platform}`, { id: toastId });
+  //     }
+  //   } catch (error) {
+  //     logger.error(`[Dashboard] Error switching to platform ${platform}:`, error);
+  //     toast.error(`Error switching to ${platform}`);
+  //   }
+  // };
+  const handlePlatformSelect = async (platform) => {
+    logger.info(`[Dashboard] Switching platform from ${selectedPlatform} to ${platform}`);
+  
+    // Use platform manager to handle the switch with proper isolation
     try {
-      localStorage.setItem('dailyfix_selected_platform', platform);
+      // Show loading toast
+      const toastId = toast.loading(`Switching to ${platform.charAt(0).toUpperCase() + platform.slice(1)}...`);
+  
+      const success = await platformManager.switchPlatform(platform);
+  
+      if (success) {
+        // Update state
+        setSelectedPlatform(platform);
+        // Reset selected contact when platform changes
+        setSelectedContactId(null);
+        setSelectedContact(null);
+        // Force a re-render to ensure UI updates properly
+        forceRender();
+  
+        // Reset onboarding status for this platform to trigger tooltips
+        try {
+          // Get current connected platforms
+          const connectedPlatforms = JSON.parse(localStorage.getItem('connected_platforms') || '[]');
+  
+          // If this is a newly selected platform, mark it for tooltips
+          if (!connectedPlatforms.includes(platform)) {
+            // Remove any existing onboarding completion status
+            localStorage.removeItem(`${platform}_onboarding_complete`);
+  
+            // Add to connected platforms list
+            connectedPlatforms.push(platform);
+            localStorage.setItem('connected_platforms', JSON.stringify(connectedPlatforms));
+            logger.info(`[Dashboard] Added ${platform} to connected platforms list for tooltips`);
+          }
+        } catch (e) {
+          logger.error('[Dashboard] Error updating connected platforms:', e);
+        }
+  
+        // Store selected platform in localStorage for persistence
+        try {
+          localStorage.setItem('dailyfix_selected_platform', platform);
+        } catch (storageError) {
+          logger.error('[Dashboard] Error saving selected platform to localStorage:', storageError);
+        }
+  
+        toast.success(`Switched to ${platform.charAt(0).toUpperCase() + platform.slice(1)}`, { id: toastId });
+      } else {
+        toast.error(`Failed to switch to ${platform}`, { id: toastId });
+      }
     } catch (error) {
-      logger.error('[Dashboard] Error saving selected platform to localStorage:', error);
+      logger.error(`[Dashboard] Error switching to platform ${platform}:`, error);
+      toast.error(`Error switching to ${platform}`);
     }
   };
 
@@ -691,7 +873,8 @@ const Dashboard = () => {
   }
 
   return (
-    <>
+    <MatrixInitializer>
+      <>
       {/* Tour popup - Only show when no WhatsApp is connected */}
       {showTourPopup && !whatsappConnected && !isWhatsAppConnected(session?.user?.id) && (
         <TourPopup
@@ -707,12 +890,12 @@ const Dashboard = () => {
         onConnectionComplete={handleConnectionComplete}
       />
 
-      <AcknowledgmentModal
+      {/* <AcknowledgmentModal
         isOpen={showAcknowledgment}
         onClose={() => setShowAcknowledgment(false)}
         whatsappConnected={whatsappConnected}
         userId={session?.user?.id}
-      />
+      /> */}
 
       {/* AI Suggestion Feedback Popup */}
       <AISuggestionFeedback
@@ -845,15 +1028,34 @@ const Dashboard = () => {
                   <div className="h-full flex flex-col">
                     <div className="flex-1 overflow-y-auto w-full">
                       {selectedPlatform === 'telegram' ? (
-                        <TelegramContactList
-                          onContactSelect={handleContactSelect}
-                          selectedContactId={selectedContactId}
-                        />
-                      ) : (
+                        <MatrixClientProvider>
+                          <TelegramContactList
+                            onContactSelect={handleContactSelect}
+                            selectedContactId={selectedContactId}
+                          />
+                        </MatrixClientProvider>
+                      ) : whatsappConnected ? (
                         <WhatsAppContactList
                           onContactSelect={handleContactSelect}
                           selectedContactId={selectedContactId}
                         />
+                      ) : (
+                        <div className="flex flex-col items-center justify-center h-full p-4 text-center">
+                          <div className="mb-4 text-gray-400">
+                            <FaWhatsapp className="text-6xl mx-auto mb-4 text-green-600 opacity-50" />
+                            <h3 className="text-xl font-semibold mb-2">No accounts Connected</h3>
+                            <p className="mb-4">You need to connect an account to view.</p>
+                            {/* <button
+                              onClick={() => {
+                                setShowConnectionModal(true);
+                                window.platformToConnect = 'whatsapp';
+                              }}
+                              className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
+                            >
+                              Connect WhatsApp
+                            </button> */}
+                          </div>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -875,7 +1077,9 @@ const Dashboard = () => {
                   {/* Chat View */}
                   <div className="flex-1 overflow-hidden h-[calc(100%-60px)]">
                     {selectedPlatform === 'telegram' ? (
-                      <TelegramChatView selectedContact={selectedContact} />
+                      <MatrixClientProvider>
+                        <TelegramChatView selectedContact={selectedContact} />
+                      </MatrixClientProvider>
                     ) : (
                       <ChatView selectedContact={selectedContact} />
                     )}
@@ -895,15 +1099,78 @@ const Dashboard = () => {
                   <div className="h-full flex flex-col">
                     <div className="flex-1 overflow-y-auto w-full">
                       {selectedPlatform === 'telegram' ? (
-                        <TelegramContactList
-                          onContactSelect={handleContactSelect}
-                          selectedContactId={selectedContactId}
-                        />
-                      ) : (
+                        <MatrixClientProvider>
+                          <TelegramContactList
+                            onContactSelect={handleContactSelect}
+                            selectedContactId={selectedContactId}
+                          />
+                        </MatrixClientProvider>
+                      ) : whatsappConnected ? (
                         <WhatsAppContactList
                           onContactSelect={handleContactSelect}
                           selectedContactId={selectedContactId}
                         />
+                      ) : (
+                        // <div className="flex flex-col items-center justify-center h-full p-4 text-center">
+                        //   <div className="mb-4 text-gray-400">
+                        //     <FaWhatsapp className="text-6xl mx-auto mb-4 text-green-600 opacity-50" />
+                        //     <h3 className="text-xl font-semibold mb-2">WhatsApp Not Connected</h3>
+                        //     <p className="mb-4">You need to connect WhatsApp to view your contacts.</p>
+                        //     <button
+                        //       onClick={() => {
+                        //         setShowConnectionModal(true);
+                        //         window.platformToConnect = 'whatsapp';
+                        //       }}
+                        //       className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
+                        //     >
+                        //       Connect WhatsApp
+                        //     </button>
+                        //   </div>
+                        // </div>
+                        <>
+                          <h2 className="text-xl text-center p-2 mt-7 font-bold text-white mb-4">Connect a Messaging Platform</h2>
+                          {/* <p className="text-gray-400 mb-6">You need to connect a messaging platform to start using DailyFix.</p> */}
+
+                          <div className="flex justify-center space-x-10 mt-7 mb-8">
+                            {/* WhatsApp Button */}
+                            <div
+                              className="platform-button group relative cursor-pointer"
+                              onClick={() => {
+                                setShowConnectionModal(true);
+                                // Pre-select WhatsApp in the modal
+                                window.platformToConnect = 'whatsapp';
+                              }}
+                            >
+                              <div className="w-20 h-20 rounded-full bg-green-600 flex items-center justify-center transform transition-all duration-300 group-hover:scale-110 group-hover:shadow-lg">
+                                <FaWhatsapp className="text-white text-4xl" />
+                              </div>
+                              <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                                <div className="bg-black bg-opacity-70 text-white text-sm py-1 px-3 rounded-lg mt-24">
+                                  Connect WhatsApp
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Telegram Button */}
+                            <div
+                              className="platform-button group relative cursor-pointer"
+                              onClick={() => {
+                                setShowConnectionModal(true);
+                                // Pre-select Telegram in the modal
+                                window.platformToConnect = 'telegram';
+                              }}
+                            >
+                              <div className="w-20 h-20 rounded-full bg-blue-500 flex items-center justify-center transform transition-all duration-300 group-hover:scale-110 group-hover:shadow-lg">
+                                <FaTelegram className="text-white text-4xl" />
+                              </div>
+                              <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                                <div className="bg-black bg-opacity-70 text-white text-sm py-1 px-3 rounded-lg mt-24">
+                                  Connect Telegram
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                </>
                       )}
                     </div>
                   </div>
@@ -911,7 +1178,9 @@ const Dashboard = () => {
                 right={
                   <div className="flex-1 overflow-hidden h-full">
                     {selectedPlatform === 'telegram' ? (
-                      <TelegramChatView selectedContact={selectedContact} />
+                      <MatrixClientProvider>
+                        <TelegramChatView selectedContact={selectedContact} />
+                      </MatrixClientProvider>
                     ) : (
                       <ChatView selectedContact={selectedContact} />
                     )}
@@ -922,7 +1191,18 @@ const Dashboard = () => {
           </>
         )}
       </div>
-    </>
+
+      {/* Onboarding Tooltips - Only for automatic onboarding */}
+      {selectedPlatform && (
+        <>
+          {logger.info(`[Dashboard] Rendering OnboardingTooltipManager for platform: ${selectedPlatform}`)}
+          <OnboardingTooltipManager platform={selectedPlatform} />
+        </>
+      )}
+
+      {/* Tour Guide Button moved to Sidebar */}
+      </>
+    </MatrixInitializer>
   );
 }
 

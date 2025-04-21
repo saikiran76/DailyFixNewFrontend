@@ -101,14 +101,29 @@ class ContactService {
     }
 
     try {
+      // CRITICAL FIX: Check if WhatsApp is connected before making API requests
+      const state = store.getState();
+      const { whatsappConnected, accounts } = state.onboarding;
+
+      // Check if WhatsApp is connected using multiple sources
+      const isWhatsAppConnected = whatsappConnected ||
+                                accounts.some(acc => acc.platform === 'whatsapp' && acc.status === 'active');
+
+      if (!isWhatsAppConnected) {
+        logger.info('[ContactService] WhatsApp is not connected, returning empty contacts list');
+        return { contacts: [] };
+      }
+
+      // Only proceed with WhatsApp API request if WhatsApp is connected
+      logger.info('[ContactService] WhatsApp is connected, fetching contacts');
       const response = await api.get(`${WHATSAPP_API_PREFIX}/contacts`);
-      
+
       // Log the response for debugging
       logger.info('[ContactService] Raw API response:', response?.data);
 
       // Check for different possible response structures
       const contacts = response?.data?.data;
-      
+
       if (!contacts || !Array.isArray(contacts)) {
         logger.error('[ContactService] Invalid response structure:', response?.data);
         throw new AppError(ErrorTypes.API, 'Invalid response from contacts API');
@@ -138,9 +153,19 @@ class ContactService {
     try {
       const state = store.getState();
       const userId = state.auth.session?.user?.id;
+      const { whatsappConnected, accounts } = state.onboarding;
 
       if (!userId) {
         throw new AppError(ErrorTypes.AUTH, 'No authenticated user found');
+      }
+
+      // CRITICAL FIX: Check if WhatsApp is connected before making API requests
+      const isWhatsAppConnected = whatsappConnected ||
+                              accounts.some(acc => acc.platform === 'whatsapp' && acc.status === 'active');
+
+      if (!isWhatsAppConnected) {
+        logger.info('[ContactService] WhatsApp is not connected, skipping fresh sync');
+        return [];
       }
 
       logger.info('[ContactService] Starting fresh sync for user:', userId);
@@ -150,7 +175,7 @@ class ContactService {
 
       // Make API call to fresh sync endpoint
       const response = await api.get(`${WHATSAPP_API_PREFIX}/freshSyncContacts`);
-      
+
       // Update cache with fresh data
       if (response?.data?.data) {
         this.cache.set(userId, {
@@ -208,18 +233,31 @@ class ContactService {
     }
 
     try {
+      // CRITICAL FIX: Check if WhatsApp is connected before making API requests
+      const state = store.getState();
+      const { whatsappConnected, accounts } = state.onboarding;
+
+      // Check if WhatsApp is connected using multiple sources
+      const isWhatsAppConnected = whatsappConnected ||
+                              accounts.some(acc => acc.platform === 'whatsapp' && acc.status === 'active');
+
+      if (!isWhatsAppConnected) {
+        logger.info('[ContactService] WhatsApp is not connected, skipping contact sync');
+        return { status: 'skipped', reason: 'whatsapp_not_connected' };
+      }
+
       this.syncInProgress.set(contactId, true);
       logger.info('[ContactService] Starting sync for contact:', contactId);
 
       const response = await api.post(`${WHATSAPP_API_PREFIX}/contacts/${contactId}/sync`);
-      
+
       if (!response?.data) {
         throw new AppError(ErrorTypes.API, 'Invalid response from sync API');
       }
 
       // Update last sync time
       this.lastSyncTime.set(contactId, Date.now());
-      
+
       // Clear cache to force fresh data on next fetch
       this.clearCache();
 
@@ -247,7 +285,7 @@ class ContactService {
     try {
       logger.info('[ContactService] Updating contact status:', { contactId, status });
       const response = await api.patch(`${WHATSAPP_API_PREFIX}/contacts/${contactId}/status`, status);
-      
+
       if (!response?.data?.data) {
         throw new AppError(ErrorTypes.API, 'Invalid response from status update API');
       }
@@ -285,4 +323,4 @@ const contactService = new ContactService();
 export { contactService };
 
 // Also provide default export for flexibility
-export default contactService; 
+export default contactService;

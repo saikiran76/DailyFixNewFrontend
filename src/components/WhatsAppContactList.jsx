@@ -235,7 +235,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
           loadContactsWithRetry(retryCount + 1);
         }, delay);
       } else {
-        toast.error('Failed to load contacts after multiple attempts');
+        // toast.error('Failed to load contacts after multiple attempts');
       }
     }
   }, [dispatch, syncProgress]);
@@ -629,19 +629,19 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
           return; // Exit early if no valid session
         }
 
-        logger.info('[WhatsAppContactList] Initializing socket with session:', { 
+        logger.info('[WhatsAppContactList] Initializing socket with session:', {
           hasToken: !!session?.access_token,
-          userId: session?.user?.id 
+          userId: session?.user?.id
         });
-        
+
         // Now attempt socket initialization with the validated session
         const socket = await initializeSocket({ platform: 'whatsapp' });
-        
+
         if (!socket) {
           logger.error('[WhatsAppContactList] Failed to get socket instance');
           return;
         }
-        
+
         const handleSyncProgress = (data) => {
           if (data.userId === session.user.id) {
             setSyncProgress({
@@ -682,7 +682,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
         logger.error('[WhatsAppContactList] Socket initialization error:', error);
       }
     };
-    
+
     // Only attempt to initialize the socket if we have a session
     if (session?.access_token) {
       initSocket();
@@ -756,7 +756,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
         onClose={() => setShowAcknowledgment(false)}
       />
 
-      <div className="flex flex-col h-full w-[100%] md:w-full bg-white">
+      <div className="contact-list-container whatsapp-contact-list flex flex-col h-full w-[100%] md:w-full bg-white">
         {/* Header */}
         <div className="flex items-center justify-between p-4 bg-neutral-900 border-b border-gray-200">
           <h1 className="text-[#ece5dd] font-bold text-xl">Chats</h1>

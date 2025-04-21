@@ -7,6 +7,7 @@ import { supabase } from '../utils/supabase';
 import authService from '../services/authService';
 import logger from '../utils/logger';
 import { useStore } from 'react-redux';
+import { toast } from 'react-hot-toast';
 
 /**
  * SessionManager component
@@ -187,7 +188,26 @@ const SessionManager = ({ children }) => {
                 return;
               } else {
                 logger.error('[SessionManager] Token refresh failed:', refreshError);
-                // Continue to normal auth initialization
+
+                // If we're getting a 401/403 error, the session is likely expired
+                if (refreshError?.status === 401 || refreshError?.status === 403) {
+                  logger.warn('[SessionManager] Session expired, redirecting to login');
+
+                  // Show a user-friendly notification
+                  toast.error(
+                    'Your session has expired. Please log in again.',
+                    { duration: 5000, id: 'session-expired' }
+                  );
+
+                  // Redirect to login page after a short delay
+                  setTimeout(() => {
+                    navigate('/login');
+                  }, 2000);
+
+                  return;
+                }
+
+                // Continue to normal auth initialization for other errors
               }
             } catch (refreshError) {
               logger.error('[SessionManager] Error during token refresh:', refreshError);

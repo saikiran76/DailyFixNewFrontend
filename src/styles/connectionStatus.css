@@ -1,0 +1,65 @@
+/* Connection Status Indicator Styles */
+
+.connection-status-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Pulse animation for connected status */
+.pulse-subtle {
+  animation: pulse-subtle 3s infinite;
+}
+
+@keyframes pulse-subtle {
+  0% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 4px rgba(16, 185, 129, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+}
+
+/* Status label styling */
+.connection-status-label {
+  font-size: 0.75rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.connection-status-label.connected {
+  color: #10b981; /* green-500 */
+}
+
+.connection-status-label.connecting {
+  color: #f59e0b; /* yellow-500 */
+}
+
+.connection-status-label.disconnected {
+  color: #9ca3af; /* gray-400 */
+}
+
+/* Tooltip styling */
+.connection-status-tooltip {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: rgba(0, 0, 0, 0.8);
+  color: white;
+  padding: 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  z-index: 50;
+  opacity: 0;
+  transition: opacity 0.2s ease-in-out;
+  pointer-events: none;
+}
+
+.connection-status-indicator:hover .connection-status-tooltip {
+  opacity: 1;
+}

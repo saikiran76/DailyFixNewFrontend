@@ -68,6 +68,8 @@ const initialState = {
     realTimeSetup: false
   },
   isReloginFlow: false,
+  onboardingComplete: false,
+  tooltipStep: 0,
 };
 
 // Async thunks
@@ -218,6 +220,12 @@ const onboardingSlice = createSlice({
     },
     setReloginFlow: (state, action) => {
       state.isReloginFlow = action.payload;
+    },
+    setOnboardingComplete: (state, action) => {
+      state.onboardingComplete = action.payload;
+    },
+    setTooltipStep: (state, action) => {
+      state.tooltipStep = action.payload;
     },
     setWhatsappConnected: (state, action) => {
       state.whatsappConnected = action.payload;
@@ -393,7 +401,9 @@ export const {
   setBridgeRoomId,
   resetWhatsappSetup,
   setReloginFlow,
-  updateAccounts
+  updateAccounts,
+  setOnboardingComplete,
+  setTooltipStep
 } = onboardingSlice.actions;
 
 // Selectors

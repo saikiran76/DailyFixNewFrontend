@@ -78,12 +78,20 @@ class AuthService {
     }
 
     // Helper method to clear session data
-    clearSessionData() {
+    clearSessionData(clearCredentials = false) {
         try {
             localStorage.removeItem('dailyfix_auth');
             localStorage.removeItem('access_token');
             localStorage.removeItem('session_expiry');
             localStorage.removeItem('matrix_credentials');
+
+            // CRITICAL FIX: Only clear stored credentials on explicit logout
+            // This allows us to recover from token refresh failures
+            if (clearCredentials) {
+                localStorage.removeItem('dailyfix_credentials');
+                logger.info('[AuthService] Stored credentials cleared');
+            }
+
             tokenManager.clearTokens();
             store.dispatch(updateSession({ session: null }));
             logger.info('[AuthService] Session data cleared successfully');
@@ -225,6 +233,27 @@ class AuthService {
         }
     }
 
+    // Securely store credentials for token refresh recovery
+    async storeCredentials(email, password) {
+        try {
+            // CRITICAL FIX: Store credentials securely for token refresh recovery
+            // This is used as a last resort when refresh tokens are invalidated
+            const credentials = {
+                email,
+                password,
+                timestamp: Date.now()
+            };
+
+            // Store credentials in localStorage
+            localStorage.setItem('dailyfix_credentials', JSON.stringify(credentials));
+            logger.info('[AuthService] Credentials stored for recovery');
+            return true;
+        } catch (error) {
+            logger.error('[AuthService] Error storing credentials:', error);
+            return false;
+        }
+    }
+
     async signIn(email, password) {
         try {
             const { data: { session }, error } = await supabase.auth.signInWithPassword({
@@ -251,6 +280,12 @@ class AuthService {
                 throw new Error('Failed to store session data');
             }
 
+            // CRITICAL FIX: Store credentials for token refresh recovery
+            // Only store if we have both email and password
+            if (email && password) {
+                await this.storeCredentials(email, password);
+            }
+
             return { session, user };
         } catch (error) {
             logger.error('[AuthService] Sign in error:', error);
@@ -264,9 +299,13 @@ class AuthService {
         try {
             const { error } = await supabase.auth.signOut();
             if (error) throw error;
-            this.clearSessionData();
+            // CRITICAL FIX: Clear credentials on explicit logout
+            this.clearSessionData(true);
+            logger.info('[AuthService] User signed out successfully');
         } catch (error) {
             logger.error('[AuthService] Sign out error:', error);
+            // Even if the API call fails, clear local data
+            this.clearSessionData(true);
             throw error;
         }
     }

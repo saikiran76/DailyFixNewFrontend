@@ -1,6 +1,51 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { FiChevronDown, FiChevronRight, FiStar, FiMessageCircle, FiAtSign, FiUser, FiUsers, FiHash, FiVolumeX, FiArchive } from 'react-icons/fi';
-import { getCategoryDisplayName, getCategoryIcon } from '../utils/contactOrganizer';
+import { FiChevronDown, FiChevronRight, FiStar, FiMessageCircle, FiAtSign, FiUser, FiUsers, FiHash, FiVolumeX, FiArchive, FiCpu, FiLock, FiGlobe, FiCircle, FiRefreshCw } from 'react-icons/fi';
+import { getCategoryDisplayName, getCategoryIcon, ContactCategories } from '../utils/contactOrganizer';
+import { TelegramEntityTypes } from '../utils/telegramEntityUtils';
+
+// Helper function to get entity type label
+const getEntityTypeLabel = (entityType) => {
+  switch (entityType) {
+    case TelegramEntityTypes.DIRECT_MESSAGE:
+      return 'DM';
+    case TelegramEntityTypes.BOT:
+      return 'Bot';
+    case TelegramEntityTypes.CHANNEL:
+      return 'Channel';
+    case TelegramEntityTypes.SUPERGROUP:
+      return 'Supergroup';
+    case TelegramEntityTypes.PRIVATE_GROUP:
+      return 'Private';
+    case TelegramEntityTypes.PUBLIC_GROUP:
+      return 'Group';
+    case TelegramEntityTypes.GROUP:
+      return 'Group';
+    default:
+      return '';
+  }
+};
+
+// Helper function to get entity type color
+const getEntityTypeColor = (entityType) => {
+  switch (entityType) {
+    case TelegramEntityTypes.DIRECT_MESSAGE:
+      return 'bg-purple-500 text-white';
+    case TelegramEntityTypes.BOT:
+      return 'bg-cyan-500 text-white';
+    case TelegramEntityTypes.CHANNEL:
+      return 'bg-pink-500 text-white';
+    case TelegramEntityTypes.SUPERGROUP:
+      return 'bg-blue-500 text-white';
+    case TelegramEntityTypes.PRIVATE_GROUP:
+      return 'bg-red-500 text-white';
+    case TelegramEntityTypes.PUBLIC_GROUP:
+      return 'bg-indigo-500 text-white';
+    case TelegramEntityTypes.GROUP:
+      return 'bg-indigo-500 text-white';
+    default:
+      return 'bg-gray-500 text-white';
+  }
+};
 
 const ContactCategory = ({
   category,
@@ -56,6 +101,10 @@ const ContactCategory = ({
       case 'hash': return <FiHash className="text-pink-500" />;
       case 'volume-x': return <FiVolumeX className="text-gray-500" />;
       case 'archive': return <FiArchive className="text-amber-500" />;
+      case 'cpu': return <FiCpu className="text-cyan-500" />;
+      case 'lock': return <FiLock className="text-red-500" />;
+      case 'globe': return <FiGlobe className="text-blue-400" />;
+      case 'circle': return <FiCircle className="text-gray-400" />;
       default: return <FiMessageCircle className="text-gray-400" />;
     }
   };
@@ -124,13 +173,23 @@ const ContactCategory = ({
 
       {isExpanded && (
         <div className="mt-1 space-y-1 pl-2">
-          {contacts.map(contact => (
+          {contacts.length === 0 ? (
+            <div className="p-3 text-center text-gray-500 italic text-sm">
+              {category === ContactCategories.DIRECT_MESSAGES ? 'No direct messages yet' :
+               category === ContactCategories.GROUPS ? 'No groups yet' :
+               category === ContactCategories.CHANNELS ? 'No channels yet' :
+               'No contacts in this category'}
+            </div>
+          ) : (
+            contacts.map(contact => (
             <div
               key={contact.id}
               className={`flex items-center p-3 rounded-lg cursor-pointer transition-all duration-200 ${
                 selectedContactId === contact.id
                   ? 'bg-[#0088cc] bg-opacity-20 border-l-4 border-[#0088cc]'
-                  : 'hover:bg-neutral-800 border-l-4 border-transparent'
+                  : contact.needsRefresh
+                    ? 'bg-yellow-900 bg-opacity-20 hover:bg-yellow-900 hover:bg-opacity-30 border-l-4 border-yellow-500 animate-pulse'
+                    : 'hover:bg-neutral-800 border-l-4 border-transparent'
               }`}
               onClick={() => onContactSelect(contact)}
               onContextMenu={(e) => handleContextMenu(e, contact)}
@@ -154,7 +213,11 @@ const ContactCategory = ({
                       ? 'bg-[#0088cc]'
                       : 'bg-gray-700 hover:bg-[#0088cc] hover:bg-opacity-70'
                   }`}>
-                    {contact.isGroup ? (
+                    {contact.isBot ? (
+                      <FiCpu className="text-white text-lg" />
+                    ) : contact.isChannel ? (
+                      <FiHash className="text-white text-lg" />
+                    ) : contact.isGroup ? (
                       <FiUsers className="text-white text-lg" />
                     ) : (
                       <span className="text-white text-lg font-medium">
@@ -181,6 +244,12 @@ const ContactCategory = ({
                     <FiVolumeX className="w-3 h-3" />
                   </div>
                 )}
+
+                {contact.isPrivate && (
+                  <div className="absolute -bottom-1 left-0 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center shadow-md">
+                    <FiLock className="w-3 h-3" />
+                  </div>
+                )}
               </div>
 
               <div className="ml-3 flex-1 min-w-0">
@@ -188,6 +257,9 @@ const ContactCategory = ({
                   <h3 className="font-medium truncate text-white">
                     {contact.telegramContact?.firstName || contact.name}
                     {contact.telegramContact?.lastName && ` ${contact.telegramContact.lastName}`}
+                    {contact.needsRefresh && (
+                      <span className="ml-2 text-yellow-500 animate-pulse">⚠️</span>
+                    )}
                   </h3>
                   {contact.timestamp && (
                     <span className="text-xs text-gray-400">
@@ -197,16 +269,31 @@ const ContactCategory = ({
                 </div>
 
                 <div className="flex items-center">
-                  {contact.telegramContact?.username && (
+                  {contact.telegramContact?.username && !contact.needsRefresh && (
                     <span className="text-[#0088cc] text-xs mr-2">@{contact.telegramContact.username}</span>
                   )}
-                  <p className="text-sm truncate text-gray-400">
-                    {contact.lastMessage || (contact.isGroup ? `${contact.members} members` : 'No messages yet')}
-                  </p>
+                  {contact.entityType && !contact.needsRefresh && (
+                    <span className={`text-xs mr-2 px-1.5 py-0.5 rounded ${getEntityTypeColor(contact.entityType)}`}>
+                      {getEntityTypeLabel(contact.entityType)}
+                    </span>
+                  )}
+                  {contact.needsRefresh ? (
+                    <div className="flex items-center text-sm text-yellow-500">
+                      <FiRefreshCw className="w-4 h-4 mr-1 animate-spin" />
+                      <span className="font-medium">{contact.lastMessage || 'Tap to refresh contacts'}</span>
+                    </div>
+                  ) : (
+                    <p className="text-sm truncate text-gray-400">
+                      {contact.lastMessage ||
+                       (contact.isGroup ? `${contact.members} members` :
+                        (contact.isPlaceholder ? 'Tap to view messages' :
+                         (contact.room ? 'Loading messages...' : 'Tap to view conversation')))}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
-          ))}
+          )))}
         </div>
       )}
     </div>

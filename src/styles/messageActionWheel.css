@@ -1,0 +1,208 @@
+/* Message Action Wheel Styles - Simplified */
+
+/* Message container positioning */
+.message-container {
+  position: relative;
+}
+
+/* Action wheel wrapper - base styles */
+.message-action-wheel-wrapper {
+  position: absolute;
+  z-index: 100;
+  animation: fadeIn 0.2s ease;
+  pointer-events: auto; /* Ensure clicks are captured */
+}
+
+/* Positioning for large messages (above the message) */
+.message-action-wheel-wrapper.large-message {
+  top: -45px; /* Move slightly higher to ensure visibility */
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+}
+
+/* Positioning for small messages (to the left of the message) */
+.message-action-wheel-wrapper.small-message {
+  top: 50%; /* Center vertically */
+  left: -55px; /* Position further from the message to avoid cut-off */
+  transform: translateY(-50%); /* Center vertically */
+  display: flex;
+  align-items: center;
+  z-index: 200; /* Ensure it's above everything */
+}
+
+/* Action buttons container - base styles */
+.action-buttons-container {
+  display: flex;
+  gap: 8px;
+  background-color: rgba(0, 0, 0, 0.7);
+  padding: 4px 8px;
+  border-radius: 20px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.1); /* Add subtle border for better visibility */
+}
+
+/* Horizontal layout for large messages */
+.large-message .action-buttons-container {
+  flex-direction: row;
+}
+
+/* Vertical layout for small messages */
+.small-message .action-buttons-container {
+  flex-direction: column;
+  padding: 6px;
+  gap: 6px; /* Increase gap for better visibility */
+}
+
+/* Individual action buttons */
+.action-button {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.2); /* Add border for better visibility */
+  cursor: pointer;
+  position: relative;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.action-button:hover {
+  transform: scale(1.15);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.action-button:active {
+  transform: scale(0.95);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+/* Action icon */
+.action-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Tooltip - base styles */
+.action-tooltip {
+  position: absolute;
+  padding: 4px 8px;
+  border-radius: 4px;
+  color: white;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  z-index: 101;
+  animation: fadeIn 0.2s ease;
+}
+
+/* Tooltip positioning for large messages (below the button) */
+.large-message .action-tooltip {
+  bottom: -30px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+/* Tooltip positioning for small messages (to the right of the button) */
+.small-message .action-tooltip {
+  left: 36px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* Tooltip arrow - base styles */
+.action-tooltip::before {
+  content: '';
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+
+/* Arrow for large messages (pointing up) */
+.large-message .action-tooltip::before {
+  top: -4px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-bottom: 4px solid currentColor;
+}
+
+/* Arrow for small messages (pointing left) */
+.small-message .action-tooltip::before {
+  left: -4px;
+  top: 50%;
+  transform: translateY(-50%);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-right: 4px solid currentColor;
+}
+
+/* Simple fade-in animation */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .action-button {
+    width: 28px;
+    height: 28px;
+  }
+
+  .action-buttons-container {
+    gap: 6px;
+    padding: 3px 6px;
+  }
+
+  .action-tooltip {
+    font-size: 10px;
+    padding: 3px 6px;
+  }
+
+  /* For all screen sizes, ensure the action bar is visible */
+  .message-action-wheel-wrapper.small-message {
+    left: -50px; /* Position to ensure visibility */
+    top: 50%; /* Center vertically */
+    transform: translateY(-50%); /* Center vertically */
+  }
+
+  /* For very small screens, always use the above-message positioning */
+  @media (max-width: 480px) {
+    .message-action-wheel-wrapper.small-message,
+    .message-action-wheel-wrapper.large-message {
+      top: -40px;
+      left: 0;
+      right: 0;
+      transform: none;
+      justify-content: center;
+    }
+
+    .small-message .action-buttons-container,
+    .large-message .action-buttons-container {
+      flex-direction: row;
+      padding: 4px 6px;
+    }
+
+    /* Make buttons slightly smaller on mobile */
+    .action-button {
+      width: 26px;
+      height: 26px;
+    }
+  }
+}
