@@ -44,7 +44,7 @@ import Chatbot from './Chatbot';
 import { motion } from 'framer-motion';
 import DFSpin from '../images/DF.png';
 import ContactAvatar from './ContactAvatar';
-import WhatsAppInfoPanel from './WhatsAppInfoPanel';
+import WhatsAppInfoPanel from './WhatsappInfoPanel';
 // Import environment variables
 const API_URL = import.meta.env.VITE_API_URL;
 
