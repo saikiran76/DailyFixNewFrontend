@@ -1,7 +1,7 @@
 import styled from 'styled-components'
 import { FaWhatsapp, FaTelegram } from 'react-icons/fa'
 import { FiPlus } from 'react-icons/fi'
-import CpuComponent from './cpuComponent'
+import CpuComponent from './CpuComponent'
 import '../styles/platforms.css'
 import '../styles/techBackground.css'
 
