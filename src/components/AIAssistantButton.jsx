@@ -7,6 +7,7 @@ import AIResponseMessage from './AIResponseMessage';
 import AITypingIndicator from './AITypingIndicator';
 import AIChatInterface from './AIChatInterface';
 import DFLogo from '../images/DF.png';
+import { ENDPOINTS, CONFIG } from '../config/aiService';
 import '../styles/aiAssistant.css';
 
 /**
@@ -147,7 +148,7 @@ const AIAssistantButton = ({ client, selectedContact, className = "" }) => {
       const events = timeline.getEvents();
       const messages = events
         .filter(event => event.getType() === 'm.room.message')
-        .slice(-20)  // Last 20 messages
+        .slice(-CONFIG.MAX_CONTEXT_MESSAGES)  // Last N messages based on config
         .map(event => ({
           id: event.getId(),
           sender: event.getSender(),
@@ -175,7 +176,7 @@ const AIAssistantButton = ({ client, selectedContact, className = "" }) => {
       logger.info('[AIAssistant] Sending query to AI assistant API');
 
       // Send request to AI assistant API
-      const response = await fetch('http://localhost:8000/api/v1/query', {
+      const response = await fetch(ENDPOINTS.QUERY, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -203,8 +204,8 @@ const AIAssistantButton = ({ client, selectedContact, className = "" }) => {
         timestamp: Date.now()
       };
 
-      // Update recent queries (keep only the last 10)
-      const updatedQueries = [newQuery, ...recentQueries].slice(0, 10);
+      // Update recent queries (keep only the configured maximum)
+      const updatedQueries = [newQuery, ...recentQueries].slice(0, CONFIG.MAX_RECENT_QUERIES);
       setRecentQueries(updatedQueries);
 
       // Save to localStorage
@@ -263,7 +264,7 @@ const AIAssistantButton = ({ client, selectedContact, className = "" }) => {
       // Index messages in the background
       try {
         // Send batch of messages to be indexed
-        fetch('http://localhost:8000/api/v1/indexeddb/batch', {
+        fetch(ENDPOINTS.BATCH_INDEX, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

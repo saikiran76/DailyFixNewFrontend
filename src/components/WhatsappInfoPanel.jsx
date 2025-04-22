@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { isWhatsAppConnected } from '../utils/connectionStorage';
 import logger from '../utils/logger';
-
+import PlatformShowcase from './PlatformShowcase';
+import '../styles/TechCard.css'
 /**
  * WhatsAppInfoPanel component
  * Displays WhatsApp connection information and guidelines
@@ -23,24 +24,24 @@ const WhatsAppInfoPanel = ({ userId }) => {
 
   // Check if WhatsApp is connected
   const whatsappConnectedInCache = userId && isWhatsAppConnected(userId);
-  
+
   if (!whatsappConnectedInCache) {
     return (
-      <div className="flex items-center justify-center h-full bg-black/25 rounded-xl">
-        <p className="text-lg text-[#757575]">Select a contact to start chatting</p>
+      <div className="flex items-center justify-center h-full bg-neutral-900 rounded-xl">
+        <PlatformShowcase />
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col items-center justify-center h-full p-6">
+    <div className="flex flex-col items-center justify-center h-full p-6 bg-neutral-900">
       <div className="bg-neutral-900 border border-white/10 p-6 rounded-3xl max-w-xl w-full mx-4">
         <div className="flex items-center mb-7">
           <div className="flex items-center gap-3">
             <div>
-              <img 
-                className="size-10" 
-                src="https://media0.giphy.com/media/jU9PVpqUvR0aNc3nvX/giphy.gif" 
+              <img
+                className="size-10"
+                src="https://media0.giphy.com/media/jU9PVpqUvR0aNc3nvX/giphy.gif"
                 alt="whatsappLoad"
               />
             </div>

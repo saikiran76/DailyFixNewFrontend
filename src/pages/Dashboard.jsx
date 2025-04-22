@@ -24,6 +24,7 @@ import { isWhatsAppConnectedDB } from '../utils/connectionStorageDB';
 import { isTelegramConnected } from '../utils/telegramHelper';
 import logger from '../utils/logger';
 import '../styles/platformButtons.css';
+import '../styles/platforms.css'
 import '../styles/tooltips.css';
 import '../styles/tourGuide.css';
 import { FiMenu, FiX } from 'react-icons/fi';
@@ -222,13 +223,13 @@ const Dashboard = () => {
   const [showConnectionModal, setShowConnectionModal] = useState(false);
   const [isContactListVisible, setIsContactListVisible] = useState(true);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
-  const [showFixButton, setShowFixButton] = useState(false);
+  // Removed unused state: const [showFixButton, setShowFixButton] = useState(false);
 
   // State for toggling between WhatsApp view and Analytics Dashboard
   const [isAnalyticsView, setIsAnalyticsView] = useState(false);
   // State for controlling the feedback popup
   const [showFeedbackPopup, setShowFeedbackPopup] = useState(false);
-  
+
 
   // CRITICAL FIX: Log the selected platform and accounts for debugging
   useEffect(() => {
@@ -531,9 +532,8 @@ const Dashboard = () => {
             }
           }
         } else {
-          // CRITICAL FIX: Add a button to fix WhatsApp connection status
-          logger.info('[Dashboard] WhatsApp not connected, showing fix button');
-          // setShowFixButton(true);
+          // CRITICAL FIX: WhatsApp not connected
+          logger.info('[Dashboard] WhatsApp not connected');
 
           // Fallback to API check if Redux state says not connected
           try {
@@ -549,7 +549,7 @@ const Dashboard = () => {
                 status: 'active'
               }]);
               setSelectedPlatform('whatsapp');
-              // setShowFixButton(false);
+              // WhatsApp is connected
 
               // Initialize socket connection
               if (!socketConnected) {
@@ -687,7 +687,7 @@ const Dashboard = () => {
         logger.info('[Dashboard] WhatsApp selected but socket not connected, initializing socket');
         dispatch(connectSocket('whatsapp'));
       }
-      
+
       // Clear any Telegram connection flags
       sessionStorage.removeItem('connecting_to_telegram');
       sessionStorage.removeItem('telegram_connection_step');
@@ -749,14 +749,14 @@ const Dashboard = () => {
   // };
   const handlePlatformSelect = async (platform) => {
     logger.info(`[Dashboard] Switching platform from ${selectedPlatform} to ${platform}`);
-  
+
     // Use platform manager to handle the switch with proper isolation
     try {
       // Show loading toast
       const toastId = toast.loading(`Switching to ${platform.charAt(0).toUpperCase() + platform.slice(1)}...`);
-  
+
       const success = await platformManager.switchPlatform(platform);
-  
+
       if (success) {
         // Update state
         setSelectedPlatform(platform);
@@ -765,17 +765,17 @@ const Dashboard = () => {
         setSelectedContact(null);
         // Force a re-render to ensure UI updates properly
         forceRender();
-  
+
         // Reset onboarding status for this platform to trigger tooltips
         try {
           // Get current connected platforms
           const connectedPlatforms = JSON.parse(localStorage.getItem('connected_platforms') || '[]');
-  
+
           // If this is a newly selected platform, mark it for tooltips
           if (!connectedPlatforms.includes(platform)) {
             // Remove any existing onboarding completion status
             localStorage.removeItem(`${platform}_onboarding_complete`);
-  
+
             // Add to connected platforms list
             connectedPlatforms.push(platform);
             localStorage.setItem('connected_platforms', JSON.stringify(connectedPlatforms));
@@ -784,14 +784,14 @@ const Dashboard = () => {
         } catch (e) {
           logger.error('[Dashboard] Error updating connected platforms:', e);
         }
-  
+
         // Store selected platform in localStorage for persistence
         try {
           localStorage.setItem('dailyfix_selected_platform', platform);
         } catch (storageError) {
           logger.error('[Dashboard] Error saving selected platform to localStorage:', storageError);
         }
-  
+
         toast.success(`Switched to ${platform.charAt(0).toUpperCase() + platform.slice(1)}`, { id: toastId });
       } else {
         toast.error(`Failed to switch to ${platform}`, { id: toastId });
@@ -945,10 +945,10 @@ const Dashboard = () => {
         {/* Check for any connected platform (WhatsApp or Telegram) */}
         {/* CRITICAL FIX: Use accounts array to check for connected platforms */}
         {accounts.length === 0 ? (
-          // No platforms connected or no WhatsApp account - Show connect platform message
+          // No platforms connected - Show only the grid with platform buttons
           <div className="flex-1 flex items-center justify-center bg-neutral-900">
             <div className="text-center p-8 max-w-md">
-              {showFixButton ? (
+              {false ? (
                 <>
                   <h2 className="text-2xl font-bold text-white mb-4">WhatsApp Connection Issue</h2>
                   <p className="text-gray-400 mb-6 text-center">
@@ -964,13 +964,13 @@ const Dashboard = () => {
                 </>
               ) : (
                 <>
-                  <h2 className="text-2xl font-bold text-white mb-4">Connect a Messaging Platform</h2>
-                  <p className="text-gray-400 mb-6">You need to connect a messaging platform to start using DailyFix.</p>
+                  <h2 className="text-2xl font-bold text-white mb-4">Supported Platforms</h2>
+                  <p className="text-gray-400 mb-6">Select a messaging platform to connect</p>
 
-                  <div className="flex justify-center space-x-10 mb-8">
+                  <div className="grid grid-cols-3 gap-8 mb-8">
                     {/* WhatsApp Button */}
                     <div
-                      className="platform-button group relative cursor-pointer"
+                      className="platform-button group relative cursor-pointer flex flex-col items-center"
                       onClick={() => {
                         setShowConnectionModal(true);
                         // Pre-select WhatsApp in the modal
@@ -980,6 +980,7 @@ const Dashboard = () => {
                       <div className="w-20 h-20 rounded-full bg-green-600 flex items-center justify-center transform transition-all duration-300 group-hover:scale-110 group-hover:shadow-lg">
                         <FaWhatsapp className="text-white text-4xl" />
                       </div>
+                      <p className="mt-3 text-white font-medium">WhatsApp</p>
                       <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
                         <div className="bg-black bg-opacity-70 text-white text-sm py-1 px-3 rounded-lg mt-24">
                           Connect WhatsApp
@@ -989,7 +990,7 @@ const Dashboard = () => {
 
                     {/* Telegram Button */}
                     <div
-                      className="platform-button group relative cursor-pointer"
+                      className="platform-button group relative cursor-pointer flex flex-col items-center"
                       onClick={() => {
                         setShowConnectionModal(true);
                         // Pre-select Telegram in the modal
@@ -999,11 +1000,20 @@ const Dashboard = () => {
                       <div className="w-20 h-20 rounded-full bg-blue-500 flex items-center justify-center transform transition-all duration-300 group-hover:scale-110 group-hover:shadow-lg">
                         <FaTelegram className="text-white text-4xl" />
                       </div>
+                      <p className="mt-3 text-white font-medium">Telegram</p>
                       <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
                         <div className="bg-black bg-opacity-70 text-white text-sm py-1 px-3 rounded-lg mt-24">
                           Connect Telegram
                         </div>
                       </div>
+                    </div>
+
+                    {/* More to Come Button */}
+                    <div className="platform-button group relative cursor-pointer flex flex-col items-center">
+                      <div className="w-20 h-20 rounded-full bg-purple-600 flex items-center justify-center transform transition-all duration-300">
+                        <span className="text-white text-4xl">+</span>
+                      </div>
+                      <p className="mt-3 text-white font-medium">More to Come</p>
                     </div>
                   </div>
                 </>
@@ -1026,7 +1036,7 @@ const Dashboard = () => {
                   isSidebarOpen ? 'translate-x-[13rem]' : 'translate-x-0'
                 }`}>
                   <div className="h-full flex flex-col">
-                    <div className="flex-1 overflow-y-auto w-full">
+                    <div className="flex-1 overflow-y-auto w-full bg-neutral-900">
                       {selectedPlatform === 'telegram' ? (
                         <MatrixClientProvider>
                           <TelegramContactList
@@ -1097,7 +1107,7 @@ const Dashboard = () => {
                 storageKey={`${selectedPlatform}-contact-list-width`}
                 left={
                   <div className="h-full flex flex-col">
-                    <div className="flex-1 overflow-y-auto w-full">
+                    <div className="flex-1 overflow-y-auto w-full bg-neutral-900">
                       {selectedPlatform === 'telegram' ? (
                         <MatrixClientProvider>
                           <TelegramContactList
@@ -1111,66 +1121,20 @@ const Dashboard = () => {
                           selectedContactId={selectedContactId}
                         />
                       ) : (
-                        // <div className="flex flex-col items-center justify-center h-full p-4 text-center">
-                        //   <div className="mb-4 text-gray-400">
-                        //     <FaWhatsapp className="text-6xl mx-auto mb-4 text-green-600 opacity-50" />
-                        //     <h3 className="text-xl font-semibold mb-2">WhatsApp Not Connected</h3>
-                        //     <p className="mb-4">You need to connect WhatsApp to view your contacts.</p>
-                        //     <button
-                        //       onClick={() => {
-                        //         setShowConnectionModal(true);
-                        //         window.platformToConnect = 'whatsapp';
-                        //       }}
-                        //       className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
-                        //     >
-                        //       Connect WhatsApp
-                        //     </button>
-                        //   </div>
-                        // </div>
-                        <>
-                          <h2 className="text-xl text-center p-2 mt-7 font-bold text-white mb-4">Connect a Messaging Platform</h2>
-                          {/* <p className="text-gray-400 mb-6">You need to connect a messaging platform to start using DailyFix.</p> */}
-
-                          <div className="flex justify-center space-x-10 mt-7 mb-8">
-                            {/* WhatsApp Button */}
-                            <div
-                              className="platform-button group relative cursor-pointer"
+                        <div className="flex flex-col items-center justify-center h-full p-4 text-center">
+                          <div className="mb-4 text-gray-400">
+                            <h3 className="text-xl font-semibold mb-2">No Platform Connected</h3>
+                            <p className="mb-4">Please connect a messaging platform.</p>
+                            <button
                               onClick={() => {
                                 setShowConnectionModal(true);
-                                // Pre-select WhatsApp in the modal
-                                window.platformToConnect = 'whatsapp';
                               }}
+                              className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 transition-colors"
                             >
-                              <div className="w-20 h-20 rounded-full bg-green-600 flex items-center justify-center transform transition-all duration-300 group-hover:scale-110 group-hover:shadow-lg">
-                                <FaWhatsapp className="text-white text-4xl" />
-                              </div>
-                              <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                                <div className="bg-black bg-opacity-70 text-white text-sm py-1 px-3 rounded-lg mt-24">
-                                  Connect WhatsApp
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Telegram Button */}
-                            <div
-                              className="platform-button group relative cursor-pointer"
-                              onClick={() => {
-                                setShowConnectionModal(true);
-                                // Pre-select Telegram in the modal
-                                window.platformToConnect = 'telegram';
-                              }}
-                            >
-                              <div className="w-20 h-20 rounded-full bg-blue-500 flex items-center justify-center transform transition-all duration-300 group-hover:scale-110 group-hover:shadow-lg">
-                                <FaTelegram className="text-white text-4xl" />
-                              </div>
-                              <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                                <div className="bg-black bg-opacity-70 text-white text-sm py-1 px-3 rounded-lg mt-24">
-                                  Connect Telegram
-                                </div>
-                              </div>
-                            </div>
+                              Connect Platform
+                            </button>
                           </div>
-                </>
+                        </div>
                       )}
                     </div>
                   </div>

@@ -549,132 +549,90 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
             <h3 className="text-xl font-semibold mb-6">Connect a Messaging Platform</h3>
             <p className="text-gray-300 mb-8">You need to connect a messaging platform to start using DailyFix.</p>
 
-            <div className="flex justify-center space-x-10 mb-8">
-              {/* WhatsApp Button */}
-              {accounts.some(acc => acc.platform === 'whatsapp' && (acc.status === 'active' || acc.status === 'pending')) ? (
-                <div className="platform-button disabled group relative">
-                  <div className="w-20 h-20 rounded-full bg-green-600 flex items-center justify-center transform transition-all duration-300 opacity-90 relative">
-                    <FaWhatsapp className="text-white text-4xl" />
-                    <div className="connected-badge">
-                      Connected
-                    </div>
-                  </div>
-                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                    <div className="bg-black bg-opacity-70 text-white text-sm py-1 px-3 rounded-lg mt-24">
-                      Already Connected
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div
-                  className={`platform-button group relative ${loading ? 'loading cursor-not-allowed' : 'cursor-pointer'}`}
-                  onClick={() => {
-                    // Prevent multiple clicks
-                    if (loading) return;
-
-                    // Clear any previous initialization flags
-                    sessionStorage.removeItem('whatsapp_initializing');
-
-                    // This uses the original initializeMatrix function for WhatsApp
-                    // NOT initializeMatrixForWhatsApp which is only for pre-selection
-                    initializeMatrix();
-                  }}
-                >
-                  <div className="w-20 h-20 rounded-full bg-green-600 flex items-center justify-center transform transition-all duration-300 group-hover:scale-110 group-hover:shadow-lg">
-                    {loading ? (
-                      <div className="animate-spin">
-                        <FaWhatsapp className="text-white text-4xl opacity-70" />
-                      </div>
-                    ) : (
+            <div className="flex justify-center space-x-10 mb-8" style={{ background: 'transparent' }}>
+              {/* WhatsApp Button - Completely Redesigned */}
+              <div className="platform-icon-container">
+                {accounts.some(acc => acc.platform === 'whatsapp' && (acc.status === 'active' || acc.status === 'pending')) ? (
+                  <div className="platform-icon disabled">
+                    <div className="icon-circle bg-green-600">
                       <FaWhatsapp className="text-white text-4xl" />
-                    )}
-                  </div>
-                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                    <div className="bg-black bg-opacity-70 text-white text-sm py-1 px-3 rounded-lg mt-24">
-                      {loading ? 'Connecting...' : 'Connect WhatsApp'}
+                      <span className="badge">Connected</span>
                     </div>
+                    <span className="icon-label">Already Connected</span>
                   </div>
-                </div>
-              )}
-
-              {/* Telegram Button */}
-              {accounts.some(acc => acc.platform === 'telegram' && (acc.status === 'active' || acc.status === 'pending')) ? (
-                <div className="platform-button disabled group relative">
-                  <div className="w-20 h-20 rounded-full bg-blue-500 flex items-center justify-center transform transition-all duration-300 opacity-90 relative">
-                    <FaTelegram className="text-white text-4xl" />
-                    <div className="connected-badge">
-                      Connected
+                ) : (
+                  <div
+                    className={`platform-icon ${loading ? 'loading' : ''}`}
+                    onClick={() => {
+                      if (loading) return;
+                      sessionStorage.removeItem('whatsapp_initializing');
+                      initializeMatrix();
+                    }}
+                  >
+                    <div className="icon-circle bg-green-600">
+                      {loading ? (
+                        <div className="animate-spin">
+                          <FaWhatsapp className="text-white text-4xl opacity-70" />
+                        </div>
+                      ) : (
+                        <FaWhatsapp className="text-white text-4xl" />
+                      )}
                     </div>
+                    <span className="icon-label">{loading ? 'Connecting...' : 'Connect WhatsApp'}</span>
                   </div>
-                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                    <div className="bg-black bg-opacity-70 text-white text-sm py-1 px-3 rounded-lg mt-24">
-                      Already Connected
+                )}
+              </div>
+
+              {/* Telegram Button - Completely Redesigned */}
+              <div className="platform-icon-container">
+                {accounts.some(acc => acc.platform === 'telegram' && (acc.status === 'active' || acc.status === 'pending')) ? (
+                  <div className="platform-icon disabled">
+                    <div className="icon-circle bg-blue-500">
+                      <FaTelegram className="text-white text-4xl" />
+                      <span className="badge">Connected</span>
                     </div>
+                    <span className="icon-label">Already Connected</span>
                   </div>
-                </div>
-              ) : (
-                <div
-                  className="platform-button telegram group relative cursor-pointer"
-                  onClick={() => {
-                    // Show loading state immediately for better UX
-                    const button = document.querySelector('.platform-button.telegram');
-                    if (button) {
-                      button.classList.add('loading');
-                    }
+                ) : (
+                  <div
+                    className="platform-icon"
+                    onClick={() => {
+                      const telegramLoading = document.querySelector('.platform-icon .icon-circle.bg-blue-500');
+                      if (telegramLoading) telegramLoading.classList.add('loading');
 
-                    // Start fresh with a clean state
-                    toast.loading('Preparing Telegram connection...', { id: 'telegram-init' });
+                      toast.loading('Preparing Telegram connection...', { id: 'telegram-init' });
+                      sessionStorage.setItem('connecting_to_telegram', 'true');
+                      logger.info('[PlatformConnectionModal] Set connecting_to_telegram flag');
 
-                    // Set flag to indicate we're connecting to Telegram
-                    // This will trigger Matrix initialization in MatrixInitializer
-                    sessionStorage.setItem('connecting_to_telegram', 'true');
-                    logger.info('[PlatformConnectionModal] Set connecting_to_telegram flag');
+                      toast.loading('Connecting to Telegram...', { id: 'telegram-init' });
 
-                    // Use our direct connect utility
-                    toast.loading('Connecting to Telegram...', { id: 'telegram-init' });
+                      matrixDirectConnect.connectToMatrix(session.user.id).then(client => {
+                        window.matrixClient = client;
+                        matrixTokenRefresher.setupRefreshListeners(client, session.user.id);
+                        return matrixDirectConnect.startClient(client);
+                      }).then(() => {
+                        logger.info('[PlatformConnectionModal] Matrix initialized successfully for Telegram');
+                        toast.success('Ready to connect Telegram', { id: 'telegram-init' });
+                        setStep('telegram-setup');
 
-                    // Connect to Matrix using our direct connect utility
-                    // This will use the MatrixInitializer component which will now initialize
-                    // because we set the connecting_to_telegram flag
-                    matrixDirectConnect.connectToMatrix(session.user.id).then(client => {
-                      // Set the global Matrix client
-                      window.matrixClient = client;
+                        setTimeout(() => {
+                          setShowModal(false);
+                        }, 1000);
+                      }).catch(error => {
+                        logger.error('[PlatformConnectionModal] Error initializing Matrix for Telegram:', error);
+                        toast.error('Failed to prepare Telegram connection. Please try again.', { id: 'telegram-init' });
 
-                      // Set up token refresh listeners
-                      matrixTokenRefresher.setupRefreshListeners(client, session.user.id);
-
-                      // Start the client
-                      return matrixDirectConnect.startClient(client);
-                    }).then(() => {
-                      logger.info('[PlatformConnectionModal] Matrix initialized successfully for Telegram');
-                      toast.success('Ready to connect Telegram', { id: 'telegram-init' });
-                      setStep('telegram-setup');
-
-                      // Automatically close the modal after a short delay
-                      setTimeout(() => {
-                        setShowModal(false);
-                      }, 1000);
-                    }).catch(error => {
-                      logger.error('[PlatformConnectionModal] Error initializing Matrix for Telegram:', error);
-                      toast.error('Failed to prepare Telegram connection. Please try again.', { id: 'telegram-init' });
-
-                      // Remove loading state on error
-                      if (button) {
-                        button.classList.remove('loading');
-                      }
-                    });
-                  }}
-                >
-                  <div className="w-20 h-20 rounded-full bg-blue-500 flex items-center justify-center transform transition-all duration-300 group-hover:scale-110 group-hover:shadow-lg">
-                    <FaTelegram className="text-white text-4xl" />
-                  </div>
-                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                    <div className="bg-black bg-opacity-70 text-white text-sm py-1 px-3 rounded-lg mt-24">
-                      Connect Telegram
+                        if (telegramLoading) telegramLoading.classList.remove('loading');
+                      });
+                    }}
+                  >
+                    <div className="icon-circle bg-blue-500">
+                      <FaTelegram className="text-white text-4xl" />
                     </div>
+                    <span className="icon-label">Connect Telegram</span>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
 
             <div className="mt-8 border-t border-gray-700 pt-6 text-left">

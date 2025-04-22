@@ -1,0 +1,82 @@
+.platform-button {
+    cursor: pointer;
+    transition: all 0.3s ease;
+  }
+  
+  .platform-button:hover {
+    transform: translateY(-5px);
+  }
+  
+  .platform-button .tooltip {
+    position: absolute;
+    bottom: -30px;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 5px 10px;
+    border-radius: 5px;
+    font-size: 14px;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  
+  .platform-button:hover .tooltip {
+    opacity: 1;
+  }
+  
+  /* Connected badge styles */
+  .platform-button .connected-badge {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background-color: #3b82f6; /* blue-500 */
+    color: white;
+    font-size: 0.75rem;
+    font-weight: bold;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0 0 9999px 9999px;
+    text-align: center;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    z-index: 10;
+  }
+  
+  /* Disabled platform button */
+  .platform-button.disabled {
+    opacity: 0.8;
+    cursor: default;
+  }
+  
+  /* Loading state for platform buttons */
+  .platform-button.loading {
+    position: relative;
+    pointer-events: none;
+  }
+  
+  .platform-button.loading::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    border-radius: 9999px;
+    border: 3px solid rgba(255, 255, 255, 0.3);
+    border-top-color: white;
+    animation: spin 1s linear infinite;
+    z-index: 20;
+  }
+  
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  
+  .platform-button.disabled:hover {
+    transform: none;
+  }
+
+  
+  

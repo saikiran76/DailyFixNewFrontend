@@ -1,34 +1,54 @@
-.platform-button {
-  cursor: pointer;
-  transition: all 0.3s ease;
+/* New Platform Icon Container */
+.platform-icon-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: transparent;
 }
 
-.platform-button:hover {
+/* Platform Icon */
+.platform-icon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  background: transparent;
+}
+
+.platform-icon:hover {
   transform: translateY(-5px);
 }
 
-.platform-button .tooltip {
-  position: absolute;
-  bottom: -30px;
-  left: 50%;
-  transform: translateX(-50%);
-  background-color: rgba(0, 0, 0, 0.8);
-  color: white;
-  padding: 5px 10px;
-  border-radius: 5px;
+/* Icon Circle */
+.icon-circle {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+  position: relative;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.platform-icon:hover .icon-circle {
+  transform: scale(1.05);
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* Icon Label */
+.icon-label {
+  margin-top: 12px;
   font-size: 14px;
-  opacity: 0;
-  transition: opacity 0.3s ease;
-  pointer-events: none;
-  white-space: nowrap;
+  color: white;
+  opacity: 0.9;
+  text-align: center;
 }
 
-.platform-button:hover .tooltip {
-  opacity: 1;
-}
-
-/* Connected badge styles */
-.platform-button .connected-badge {
+/* Badge for connected platforms */
+.badge {
   position: absolute;
   bottom: 0;
   left: 0;
@@ -44,36 +64,44 @@
   z-index: 10;
 }
 
-/* Disabled platform button */
-.platform-button.disabled {
+/* Disabled state */
+.platform-icon.disabled {
   opacity: 0.8;
   cursor: default;
 }
 
-/* Loading state for platform buttons */
-.platform-button.loading {
+.platform-icon.disabled:hover {
+  transform: none;
+}
+
+.platform-icon.disabled:hover .icon-circle {
+  transform: none;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* Loading state */
+.platform-icon.loading,
+.icon-circle.loading {
   position: relative;
   pointer-events: none;
 }
 
-.platform-button.loading::after {
+.platform-icon.loading .icon-circle::after,
+.icon-circle.loading::after {
   content: '';
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
-  border-radius: 9999px;
+  border-radius: 50%;
   border: 3px solid rgba(255, 255, 255, 0.3);
   border-top-color: white;
   animation: spin 1s linear infinite;
   z-index: 20;
+  background-color: transparent !important;
 }
 
 @keyframes spin {
   to { transform: rotate(360deg); }
-}
-
-.platform-button.disabled:hover {
-  transform: none;
 }

@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  updateOnboardingStep,
   setCurrentStep,
   setIsComplete,
   ONBOARDING_STEPS
@@ -11,8 +10,8 @@ import {
 import logger from '../utils/logger';
 import { toast } from 'react-toastify';
 import DFLogo from '../images/DF.png';
-import { FiArrowRight, FiCheck } from 'react-icons/fi';
-import { FaRocket, FaRobot, FaChartBar } from 'react-icons/fa';
+import { FiArrowRight, FiCheck, FiLock, FiShield } from 'react-icons/fi';
+import { FaRocket, FaRobot, FaChartBar, FaUserShield } from 'react-icons/fa';
 import onb1 from '../images/onb1.gif'
 import onb2 from '../images/onb2.gif'
 import onb3 from '../images/onb3.gif'
@@ -46,6 +45,12 @@ const NewOnboarding = () => {
     logger.info('[NewOnboarding] Initializing with step:', currentStep);
   }, [session, currentStep, navigate]);
 
+  // State for terms and conditions checkboxes
+  const [termsAccepted, setTermsAccepted] = useState({
+    security: false,
+    privacy: false
+  });
+
   // Tutorial steps content
   const steps = [
     {
@@ -65,12 +70,28 @@ const NewOnboarding = () => {
       description: "Get insights about your messaging patterns and communication habits with our analytics dashboard.",
       icon: <FaChartBar className="text-4xl text-green-500" />,
       image: onb3
+    },
+    {
+      title: "Your Privacy & Security",
+      description: "Before you get started, please review and accept our terms regarding your data security and privacy.",
+      icon: <FaUserShield className="text-4xl text-purple-500" />,
+      isTerms: true
     }
   ];
 
   // Handle next step
   const handleNext = () => {
-    if (activeStep < steps.length - 1) {
+    // If we're on the terms step, check if both terms are accepted
+    if (activeStep === steps.length - 2 && steps[activeStep + 1].isTerms) {
+      setActiveStep(activeStep + 1);
+    } else if (activeStep === steps.length - 1 && steps[activeStep].isTerms) {
+      // Check if both terms are accepted before completing
+      if (termsAccepted.security && termsAccepted.privacy) {
+        handleComplete();
+      } else {
+        toast.error('Please accept both terms to continue');
+      }
+    } else if (activeStep < steps.length - 1) {
       setActiveStep(activeStep + 1);
     } else {
       handleComplete();
@@ -158,25 +179,25 @@ const NewOnboarding = () => {
         <div className="w-full max-w-4xl bg-white rounded-2xl shadow-xl p-8">
           {/* Progress indicator */}
           <div className="flex justify-center w-full mb-8">
-            {steps.map((_, index) => (
+            {steps.filter(step => !step.isTerms).map((_, index) => (
               <div key={index} className="flex items-center">
                 <div
-                  className={`flex items-center justify-center w-10 h-10 rounded-full border-2
-                    ${index <= activeStep
+                  className={`flex items-center justify-center w-10 h-10 rounded-full border-2 transition-all duration-300
+                    ${index <= (activeStep < steps.length - 1 ? activeStep : activeStep - 1)
                       ? 'border-purple-600 bg-purple-600 text-white'
                       : 'border-gray-300 bg-white text-gray-400'
                     }`}
                 >
-                  {index < activeStep ? (
+                  {index < (activeStep < steps.length - 1 ? activeStep : activeStep - 1) ? (
                     <FiCheck className="text-white" />
                   ) : (
                     index + 1
                   )}
                 </div>
-                {index < steps.length - 1 && (
+                {index < steps.filter(step => !step.isTerms).length - 1 && (
                   <div
-                    className={`w-16 h-1 ${
-                      index < activeStep ? 'bg-purple-600' : 'bg-gray-300'
+                    className={`w-16 h-1 transition-all duration-300 ${
+                      index < (activeStep < steps.length - 1 ? activeStep : activeStep - 1) ? 'bg-purple-600' : 'bg-gray-300'
                     }`}
                   />
                 )}
@@ -207,14 +228,70 @@ const NewOnboarding = () => {
                   <h2 className="text-2xl font-bold mb-2">{steps[activeStep].title}</h2>
                   <p className="text-gray-600 text-lg mb-4">{steps[activeStep].description}</p>
 
-                  {/* Illustration with GIF */}
-                  <div className="w-full max-w-md h-48 bg-gray-100 rounded-lg flex items-center justify-center mb-8 overflow-hidden">
-                    <img
-                      src={steps[activeStep].image}
-                      alt={steps[activeStep].title}
-                      className="w-full h-full object-contain"
-                    />
-                  </div>
+                  {/* Illustration with GIF or Terms & Conditions */}
+                  {steps[activeStep].isTerms ? (
+                    <div className="w-full max-w-md bg-gradient-to-b from-white to-gray-50 rounded-lg p-6 mb-8 border border-gray-200 shadow-sm transition-all duration-300">
+                      <div className="space-y-6">
+                        <div className="flex items-start space-x-3 p-4 bg-white rounded-lg border border-gray-100 shadow-sm hover:shadow-md transition-all duration-300 cursor-pointer" onClick={() => setTermsAccepted({...termsAccepted, security: !termsAccepted.security})}>
+                          <div className="flex-shrink-0 mt-0.5">
+                            <div className={`w-5 h-5 rounded flex items-center justify-center ${termsAccepted.security ? 'bg-purple-600' : 'border-2 border-gray-300'}`}>
+                              {termsAccepted.security && <FiCheck className="text-white text-sm" />}
+                            </div>
+                          </div>
+                          <div className="text-left">
+                            <label htmlFor="security-term" className="font-medium text-gray-800 flex items-center cursor-pointer">
+                              <FiLock className="mr-2 text-purple-600" /> Secure Messaging
+                            </label>
+                            <p className="text-gray-600 text-sm mt-1 leading-relaxed">
+                              I understand that my connected accounts are secure with DailyFix, and all messages are end-to-end encrypted.
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-start space-x-3 p-4 bg-white rounded-lg border border-gray-100 shadow-sm hover:shadow-md transition-all duration-300 cursor-pointer" onClick={() => setTermsAccepted({...termsAccepted, privacy: !termsAccepted.privacy})}>
+                          <div className="flex-shrink-0 mt-0.5">
+                            <div className={`w-5 h-5 rounded flex items-center justify-center ${termsAccepted.privacy ? 'bg-purple-600' : 'border-2 border-gray-300'}`}>
+                              {termsAccepted.privacy && <FiCheck className="text-white text-sm" />}
+                            </div>
+                          </div>
+                          <div className="text-left">
+                            <label htmlFor="privacy-term" className="font-medium text-gray-800 flex items-center cursor-pointer">
+                              <FiShield className="mr-2 text-purple-600" /> AI Privacy
+                            </label>
+                            <p className="text-gray-600 text-sm mt-1 leading-relaxed">
+                              I understand that DailyFix AI that interacts with my conversations is completely secure, abides by the rules of privacy, and doesn't leak any kind of data.
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 p-4 bg-purple-50 rounded-md border border-purple-100 shadow-inner">
+                          <p className="text-sm text-purple-700 leading-relaxed">
+                            At DailyFix, we prioritize your privacy and security above all else. Your data remains yours, and our AI systems are designed with privacy-first principles.
+                          </p>
+                        </div>
+
+                        <div className="flex justify-center">
+                          {termsAccepted.security && termsAccepted.privacy ? (
+                            <div className="text-green-600 text-sm font-medium flex items-center">
+                              <FiCheck className="mr-1" /> Ready to continue
+                            </div>
+                          ) : (
+                            <div className="text-gray-500 text-sm font-medium">
+                              Please accept both terms to continue
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="w-full max-w-md h-48 bg-gray-100 rounded-lg flex items-center justify-center mb-8 overflow-hidden">
+                      <img
+                        src={steps[activeStep].image}
+                        alt={steps[activeStep].title}
+                        className="w-full h-full object-contain"
+                      />
+                    </div>
+                  )}
                 </div>
               </motion.div>
             </AnimatePresence>
@@ -236,15 +313,15 @@ const NewOnboarding = () => {
 
             <button
               onClick={handleNext}
-              disabled={loading}
+              disabled={loading || (steps[activeStep].isTerms && (!termsAccepted.security || !termsAccepted.privacy))}
               className={`px-6 py-3 w-auto rounded-lg flex items-center ${
-                loading
+                loading || (steps[activeStep].isTerms && (!termsAccepted.security || !termsAccepted.privacy))
                   ? 'bg-purple-400 cursor-not-allowed'
                   : 'bg-purple-600 hover:bg-purple-700'
               } text-white`}
             >
               {activeStep === steps.length - 1 ? (
-                loading ? 'Completing...' : 'Get Started'
+                loading ? 'Completing...' : (steps[activeStep].isTerms ? 'I Accept & Continue' : 'Get Started')
               ) : (
                 <>
                   Next
