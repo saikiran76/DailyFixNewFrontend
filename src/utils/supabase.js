@@ -6,7 +6,7 @@ export const getSupabaseClient = () => {
   if (!supabaseInstance) {
     // CRITICAL FIX: Add debugging and fallback values for Vercel deployment
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://odpltrqbcognwmxttlpp.supabase.co';
-    const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9kcGx0cnFiY29nbndteHR0bHBwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczNDgwNDM3MSwiZXhwIjoyMDUwMzgwMzcxfQ.Mbo2BPrKuav00ZxOvoNfVArXeK018pBf8FkS0viyA4E';
+    const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
     // Log the values for debugging
     console.log('[Supabase] URL:', supabaseUrl);
