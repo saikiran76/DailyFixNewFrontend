@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { FiSend, FiMessageCircle, FiUser, FiUsers, FiPaperclip, FiImage, FiSmile, FiMic, FiHelpCircle } from 'react-icons/fi';
 import AIAssistantButton from './AIAssistantButton';
 import AIFeatureTour from './AIFeatureTour';
+import AIActionButtons from './TelegramAI/AIActionButtons';
 import '../styles/messageBubbles.css';
 import { useMatrixClient } from '../context/MatrixClientContext';
 import { toast } from 'react-hot-toast';
@@ -1757,6 +1758,17 @@ const TelegramChatView = ({ selectedContact }) => {
           </>
         )}
       </div>
+
+      {/* AI Action Buttons */}
+      {client && selectedContact && !selectedContact.isPlaceholder && (
+        <div className="px-3 pt-3">
+          <AIActionButtons
+            roomId={selectedContact.id}
+            client={client}
+            messages={messages}
+          />
+        </div>
+      )}
 
       {/* Message input */}
       <div className="p-3 border-t border-white/10 bg-neutral-900">
