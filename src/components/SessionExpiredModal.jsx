@@ -118,7 +118,7 @@ const SessionExpiredModal = ({ isOpen, onClose }) => {
           </div>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-white transition-colors p-2"
+            className="text-gray-400 w-auto hover:text-white transition-colors p-2"
             aria-label="Close modal"
           >
             <FiX size={24} />

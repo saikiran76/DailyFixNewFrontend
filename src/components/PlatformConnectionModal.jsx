@@ -566,8 +566,13 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
 
   // Initialize Matrix for Telegram
   const initializeMatrixForTelegram = useCallback((telegramLoading) => {
+    // Set a flag to indicate we're connecting to Telegram
+    // This is critical for the token refresh mechanism
+    sessionStorage.setItem('connecting_to_telegram', 'true');
+    logger.info('[PlatformConnectionModal] Set connecting_to_telegram flag for Matrix initialization');
+
     // Get credentials and create client using matrixTokenManager
-    matrixTokenManager.getCredentials(session.user.id)
+    return matrixTokenManager.getCredentials(session.user.id)
       .then(async (credentials) => {
         // If no credentials, register a new Matrix account
         if (!credentials || !credentials.accessToken) {
@@ -630,7 +635,12 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
         logger.error('[PlatformConnectionModal] Error initializing Matrix for Telegram:', error);
         toast.error('Failed to prepare Telegram connection. Please try again.', { id: 'telegram-init' });
 
+        // Clear loading state
+        setLoading(false);
         if (telegramLoading) telegramLoading.classList.remove('loading');
+
+        // Clear the connecting flag on error to allow retrying
+        sessionStorage.removeItem('connecting_to_telegram');
       });
   }, [session.user.id]);
 
@@ -647,8 +657,12 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
         // Set loading state
         setLoading(true);
 
+        // Clear any previous error states
+        sessionStorage.removeItem('matrix_token_refreshing');
+
         // Set flag to indicate we're connecting to Telegram
         // This will trigger Matrix initialization in MatrixInitializer
+        // This flag is critical for the token refresh mechanism
         sessionStorage.setItem('connecting_to_telegram', 'true');
         logger.info('[PlatformConnectionModal] Set connecting_to_telegram flag for pre-selected platform');
 
@@ -657,6 +671,10 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
 
         // Use the new initializeMatrixForTelegram function
         initializeMatrixForTelegram(null)
+          .catch(error => {
+            logger.error('[PlatformConnectionModal] Error in pre-selected Telegram connection flow:', error);
+            // Additional error handling if needed
+          })
           .finally(() => {
             // Ensure loading state is cleared even if there's an error
             setLoading(false);
@@ -757,7 +775,12 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
                         // Set loading state
                         setLoading(true);
 
+                        // Clear any previous error states
+                        sessionStorage.removeItem('matrix_token_refreshing');
+
                         toast.loading('Preparing Telegram connection...', { id: 'telegram-init' });
+
+                        // This flag is critical for the token refresh mechanism
                         sessionStorage.setItem('connecting_to_telegram', 'true');
                         logger.info('[PlatformConnectionModal] Set connecting_to_telegram flag');
 
@@ -765,6 +788,10 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
 
                         // Initialize Matrix for Telegram using client-side approach
                         initializeMatrixForTelegram(null)
+                          .catch(error => {
+                            logger.error('[PlatformConnectionModal] Error in Telegram connection flow:', error);
+                            // Additional error handling if needed
+                          })
                           .finally(() => {
                             // Ensure loading state is cleared even if there's an error
                             setLoading(false);
