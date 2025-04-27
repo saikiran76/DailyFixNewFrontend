@@ -1,5 +1,5 @@
 /**
- * Application-wide constants
+ * Application-wide constants - excluded .env.prod and dev from pushing
  */
 
 // API endpoints
