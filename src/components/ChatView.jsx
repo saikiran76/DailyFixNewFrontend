@@ -799,7 +799,7 @@ const ChatView = ({ selectedContact, onContactUpdate }) => {
         } catch (error) {
           logger.error('[ChatView] Failed to initialize socket:', error);
           setSocketInitError(true);
-          toast.error('Failed to connect to chat server. Please retry or refresh the page.');
+          // toast.error('Failed to connect to chat server. Please retry or refresh the page.');
         }
       };
 

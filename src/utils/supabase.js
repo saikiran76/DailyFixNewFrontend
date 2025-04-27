@@ -4,9 +4,17 @@ let supabaseInstance = null;
 
 export const getSupabaseClient = () => {
   if (!supabaseInstance) {
+    // CRITICAL FIX: Add debugging and fallback values for Vercel deployment
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://odpltrqbcognwmxttlpp.supabase.co';
+    const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+    // Log the values for debugging
+    console.log('[Supabase] URL:', supabaseUrl);
+    console.log('[Supabase] Key exists:', !!supabaseKey);
+
     supabaseInstance = createClient(
-      import.meta.env.VITE_SUPABASE_URL,
-      import.meta.env.VITE_SUPABASE_ANON_KEY,
+      supabaseUrl,
+      supabaseKey,
       {
         auth: {
           // CRITICAL FIX: Improve token handling and session persistence

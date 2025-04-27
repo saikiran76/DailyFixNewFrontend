@@ -1,6 +1,5 @@
 import axios from 'axios';
 import { supabase } from './supabase';
-import { toast } from 'react-hot-toast';
 import { tokenManager } from './tokenManager';
 import logger from './logger';
 
@@ -54,7 +53,7 @@ export const ResponseSchemas = {
 
 // Create unified API instance
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || "http://localhost:4000",
+  baseURL: "https://dailyfix-apigate.duckdns.org",
   timeout: 180000, // 180 seconds
   withCredentials: false, // Changed from true to false to avoid CORS issues
   headers: {
