@@ -15,6 +15,7 @@ import { toast } from 'react-toastify';
 import { saveToIndexedDB, getFromIndexedDB } from '../utils/indexedDBHelper';
 import matrixTokenManager from '../utils/matrixTokenManager';
 import matrixRegistration from '../utils/matrixRegistration';
+import matrixTokenRefresher from '../utils/matrixTokenRefresher';
 import '../styles/platformButtons.css';
 
 // Constants
@@ -590,17 +591,35 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
           }
         }
 
-        // Create a new client with the credentials
-        const client = matrixTokenManager.createClient(credentials);
+        // Import Matrix SDK
+        const matrixSdk = await import('matrix-js-sdk');
+
+        // Create Matrix client directly (Element-web style)
+        const { userId, accessToken, homeserver, deviceId } = credentials;
+        const homeserverUrl = homeserver || 'https://dfix-hsbridge.duckdns.org';
+
+        const clientOpts = {
+          baseUrl: homeserverUrl,
+          userId: userId,
+          deviceId: deviceId || `DFIX_WEB_${Date.now()}`,
+          accessToken: accessToken,
+          timelineSupport: true,
+          store: new matrixSdk.MemoryStore({ localStorage: window.localStorage }),
+          useAuthorizationHeader: true
+        };
+
+        logger.info('[PlatformConnectionModal] Creating new Matrix client for Telegram');
+        const client = matrixSdk.createClient(clientOpts);
 
         // Set the global Matrix client
         window.matrixClient = client;
 
-        // Set up refresh listeners
-        matrixTokenManager.setupRefreshListeners(client, session.user.id);
+        // Set up refresh listeners using matrixTokenRefresher
+        matrixTokenRefresher.setupRefreshListeners(client, session.user.id);
 
-        // Start the client
-        return matrixTokenManager.startClient(client);
+        // Start the client directly
+        logger.info('[PlatformConnectionModal] Starting Matrix client for Telegram');
+        return client.startClient();
       })
       .then(() => {
         logger.info('[PlatformConnectionModal] Matrix initialized successfully for Telegram');
@@ -625,6 +644,9 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
       if (window.platformToConnect === 'telegram') {
         logger.info('[PlatformConnectionModal] Pre-selected platform: telegram');
 
+        // Set loading state
+        setLoading(true);
+
         // Set flag to indicate we're connecting to Telegram
         // This will trigger Matrix initialization in MatrixInitializer
         sessionStorage.setItem('connecting_to_telegram', 'true');
@@ -634,7 +656,11 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
         toast.loading('Connecting to Telegram...', { id: 'telegram-init' });
 
         // Use the new initializeMatrixForTelegram function
-        initializeMatrixForTelegram(null);
+        initializeMatrixForTelegram(null)
+          .finally(() => {
+            // Ensure loading state is cleared even if there's an error
+            setLoading(false);
+          });
 
         // Clear the selection after using it
         window.platformToConnect = null;
@@ -724,10 +750,12 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
                     </div>
                   ) : (
                     <div
-                      className="platform-icon"
+                      className={`platform-icon ${loading ? 'loading' : ''}`}
                       onClick={() => {
-                        const telegramLoading = document.querySelector('.platform-icon .icon-circle.bg-blue-500');
-                        if (telegramLoading) telegramLoading.classList.add('loading');
+                        if (loading) return;
+
+                        // Set loading state
+                        setLoading(true);
 
                         toast.loading('Preparing Telegram connection...', { id: 'telegram-init' });
                         sessionStorage.setItem('connecting_to_telegram', 'true');
@@ -736,13 +764,23 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
                         toast.loading('Connecting to Telegram...', { id: 'telegram-init' });
 
                         // Initialize Matrix for Telegram using client-side approach
-                        initializeMatrixForTelegram(telegramLoading);
+                        initializeMatrixForTelegram(null)
+                          .finally(() => {
+                            // Ensure loading state is cleared even if there's an error
+                            setLoading(false);
+                          });
                       }}
                     >
                       <div className="w-20 h-20 rounded-full bg-blue-500/20 flex items-center justify-center">
-                        <FaTelegram className="text-blue-500 text-4xl" />
+                        {loading ? (
+                          <div className="animate-spin">
+                            <FaTelegram className="text-blue-500 text-4xl opacity-70" />
+                          </div>
+                        ) : (
+                          <FaTelegram className="text-blue-500 text-4xl" />
+                        )}
                       </div>
-                      <span className="mt-2 text-xs text-gray-300">Connect Telegram</span>
+                      <span className="mt-2 text-xs text-gray-300">{loading ? 'Connecting...' : 'Connect Telegram'}</span>
                     </div>
                   )}
                 </div>
