@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { FiChevronDown, FiChevronUp, FiInfo, FiExternalLink } from 'react-icons/fi';
 import DFLogo from '../images/DF.png';
+import AIActionButtons from './AIActionButtons';
 import '../styles/aiAssistant.css';
 
 /**
@@ -15,7 +16,7 @@ import '../styles/aiAssistant.css';
  * - Proper formatting and styling for better readability
  * - Animated transitions for a polished experience
  */
-const AIResponseMessage = ({ response, sources = [], query, timestamp }) => {
+const AIResponseMessage = ({ response, sources = [], query, timestamp, suggestedActions = [], client, roomId }) => {
   const [expanded, setExpanded] = useState(true); // Default to expanded view
   const [showSourcesView, setShowSourcesView] = useState(false);
 
@@ -147,6 +148,15 @@ const AIResponseMessage = ({ response, sources = [], query, timestamp }) => {
             {response}
           </div>
         </div>
+
+        {/* Action Buttons */}
+        {suggestedActions && suggestedActions.length > 0 && (
+          <AIActionButtons
+            actions={suggestedActions}
+            roomId={roomId}
+            client={client}
+          />
+        )}
 
         {/* Sources (expandable) */}
         {sources.length > 0 && expanded && (

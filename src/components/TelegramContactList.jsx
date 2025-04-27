@@ -1,1612 +1,1876 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { FiSearch, FiRefreshCw, FiMessageCircle, FiUsers, FiAlertCircle, FiPlus, FiFilter, FiSettings } from 'react-icons/fi';
-import { FaTelegram } from 'react-icons/fa';
+import { FiSend, FiMessageCircle, FiUser, FiUsers, FiPaperclip, FiImage, FiSmile, FiMic, FiHelpCircle } from 'react-icons/fi';
+import AIAssistantButton from './AIAssistantButton';
+import AIFeatureTour from './AIFeatureTour';
+import AIActionButtons from './TelegramAI/AIActionButtons';
+import '../styles/messageBubbles.css';
 import { useMatrixClient } from '../context/MatrixClientContext';
 import { toast } from 'react-hot-toast';
-import roomListManager from '../utils/roomListManager';
+import matrixTimelineManager from '../utils/matrixTimelineManager';
 import logger from '../utils/logger';
-import contactOrganizer, { ContactCategories } from '../utils/contactOrganizer';
-import telegramEntityUtils, { TelegramEntityTypes } from '../utils/telegramEntityUtils';
-import slidingSyncManager from '../utils/SlidingSyncManager';
-import ContactCategory from './ContactCategory';
+import ChatConfirmation from './ChatConfirmation';
+import RoomMemberList from './RoomMemberList';
+import ReplyPreview from './ReplyPreview';
+import MessageReply from './MessageReply';
+import MessageBubbleWithWheel from './MessageBubbleWithWheel';
+import DateSeparator from './DateSeparator';
+import { getParentEventId, addReplyToMessageContent } from '../utils/replyUtils';
+import { getMediaUrl, getFallbackAvatarUrl } from '../utils/mediaUtils';
+import '../styles/messageActionWheel.css';
+import '../styles/dateSeparator.css';
 
-const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
+const TelegramChatView = ({ selectedContact }) => {
   const { client, loading: clientLoading } = useMatrixClient() || {};
-  const [contacts, setContacts] = useState([]);
-  const [filteredContacts, setFilteredContacts] = useState([]);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [messages, setMessages] = useState([]);
+  const [inputMessage, setInputMessage] = useState('');
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const [sending, setSending] = useState(false);
   const [error, setError] = useState(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMoreMessages, setHasMoreMessages] = useState(true);
+  const [oldestEventId, setOldestEventId] = useState(null);
+  const messagesEndRef = useRef(null);
 
-  // Organization state
-  const [organizedContacts, setOrganizedContacts] = useState({});
-  const [pinnedContactIds, setPinnedContactIds] = useState([]);
-  const [mutedContactIds, setMutedContactIds] = useState([]);
-  const [archivedContactIds, setArchivedContactIds] = useState([]);
-  const [showMuted, setShowMuted] = useState(true);
-  const [showArchived, setShowArchived] = useState(false);
-  const [activeFilter, setActiveFilter] = useState('all');
+  // Confirmation and room joining states
+  const [needsConfirmation, setNeedsConfirmation] = useState(true);
+  const [isJoining, setIsJoining] = useState(false);
+  const [joinError, setJoinError] = useState(null);
 
-  // Reference to track if we've already tried to load contacts
-  const hasTriedLoading = useRef(false);
+  // Room members panel state
+  const [showMemberList, setShowMemberList] = useState(false);
 
-  // Initialize room list manager on component mount
+  // AI Feature Tour state
+  const [showAITour, setShowAITour] = useState(false);
+
+  // Reply state
+  const [replyToEvent, setReplyToEvent] = useState(null);
+  const [parentEvents, setParentEvents] = useState({});
+
+  // Check if user has already confirmed viewing this chat
   useEffect(() => {
-    // Track if the component is mounted
-    let isMounted = true;
+    if (selectedContact) {
+      logger.info('[TelegramChatView] Selected contact:', selectedContact);
 
-    // Set a global timeout to prevent the component from hanging indefinitely
-    const globalTimeout = setTimeout(() => {
-      if (loading && isMounted) {
-        logger.warn('[TelegramContactList] Global timeout reached, forcing completion');
-        setLoading(false);
-
-        // Try to load cached contacts first
-        loadCachedContacts().then(cachedContacts => {
-          if (cachedContacts && cachedContacts.length > 0) {
-            logger.info(`[TelegramContactList] Loaded ${cachedContacts.length} contacts from cache after global timeout`);
-            setContacts(cachedContacts);
-            setFilteredContacts(cachedContacts);
-            // Organize the cached contacts
-            organizeContactList();
-          } else {
-            // If no cached contacts, show a special placeholder with prominent refresh CTA
-            const placeholderContact = {
-              id: 'telegram_placeholder',
-              name: 'Telegram',
-              avatar: null,
-              lastMessage: '⚠️ Connection timed out. Tap here to refresh your contacts.',
-              timestamp: Date.now(),
-              unreadCount: 1, // Add an unread count to draw attention
-              isGroup: false,
-              isTelegram: true,
-              members: 1,
-              isPlaceholder: true,
-              needsRefresh: true // Special flag to show refresh CTA
-            };
-
-            setContacts([placeholderContact]);
-            setFilteredContacts([placeholderContact]);
-          }
-        }).catch(err => {
-          logger.error('[TelegramContactList] Error loading cached contacts after global timeout:', err);
-
-          // Show a special placeholder with prominent refresh CTA
-          const placeholderContact = {
-            id: 'telegram_placeholder',
-            name: 'Telegram',
-            avatar: null,
-            lastMessage: '⚠️ Connection timed out. Tap here to refresh your contacts.',
-            timestamp: Date.now(),
-            unreadCount: 1, // Add an unread count to draw attention
-            isGroup: false,
-            isTelegram: true,
-            members: 1,
-            isPlaceholder: true,
-            needsRefresh: true // Special flag to show refresh CTA
-          };
-
-          setContacts([placeholderContact]);
-          setFilteredContacts([placeholderContact]);
-        });
-      }
-    }, 20000); // 20 seconds global timeout
-
-    const initializeContacts = async () => {
-      if (!client || !isMounted || clientLoading) return;
-
-      try {
-        // Check if the Matrix client is ready
-        const syncState = client.getSyncState();
-        logger.info(`[TelegramContactList] Initial Matrix client sync state: ${syncState}`);
-
-        // Initialize room list with Telegram filter
-        roomListManager.initRoomList(
-          client.getUserId(),
-          client,
-          {
-            filters: { platform: 'telegram' },
-            sortBy: 'lastMessage',
-            onMessagesUpdated: handleMessagesUpdated
-          },
-          handleRoomsUpdated
-        );
-
-        // If the client is not ready, wait for it to be ready
-        if (syncState !== 'PREPARED' && syncState !== 'SYNCING') {
-          logger.warn('[TelegramContactList] Matrix client not ready, waiting for sync state change');
-
-          // Set up a one-time sync state change listener
-          const syncStateHandler = (state, prevState) => {
-            logger.info(`[TelegramContactList] Sync state changed: ${prevState} -> ${state}`);
-            if ((state === 'PREPARED' || state === 'SYNCING') && isMounted) {
-              // Remove the listener to avoid memory leaks
-              client.removeListener('sync', syncStateHandler);
-              // Load contacts now that the client is ready
-              loadContacts();
-            }
-          };
-
-          client.on('sync', syncStateHandler);
-
-          // Also set a timeout to load contacts anyway after 3 seconds
-          setTimeout(() => {
-            if (isMounted) {
-              client.removeListener('sync', syncStateHandler);
-              logger.warn('[TelegramContactList] Timeout waiting for sync, loading contacts anyway');
-              loadContacts();
-
-              // Force a refresh after a short delay if we still don't have contacts
-              setTimeout(() => {
-                if (isMounted && contacts.length === 0) {
-                  logger.warn('[TelegramContactList] Still no contacts after timeout, forcing refresh');
-                  handleRefresh();
-                }
-              }, 2000);
-            }
-          }, 3000);
-        } else {
-          // Load cached contacts first
-          await loadCachedContacts();
-
-          // Then load fresh contacts
-          loadContacts();
-
-          // Force an immediate sync
-          roomListManager.syncRooms(client.getUserId(), true);
-        }
-      } catch (error) {
-        logger.error('[TelegramContactList] Error initializing contacts:', error);
-
-        // Try to load contacts anyway
-        if (isMounted) {
-          loadContacts();
-        }
-      }
-    };
-
-    initializeContacts();
-
-    return () => {
-      // Mark component as unmounted
-      isMounted = false;
-
-      // Clear the global timeout
-      clearTimeout(globalTimeout);
-
-      // Clean up room list manager
+      // Check if the room is in 'invite' state
       if (client) {
-        try {
-          roomListManager.cleanup(client.getUserId());
-        } catch (error) {
-          logger.error('[TelegramContactList] Error cleaning up room list manager:', error);
-        }
-      }
-    };
-  }, [client, clientLoading]);
-
-  // Handle rooms updated event
-  const handleRoomsUpdated = (rooms) => {
-    logger.info('[TelegramContactList] Rooms updated:', rooms.length);
-    setContacts(rooms);
-    setFilteredContacts(rooms);
-    setLoading(false);
-  };
-
-  // Handle messages updated event
-  const handleMessagesUpdated = (roomId, messages) => {
-    // Update the contact with the latest message
-    setContacts(prevContacts => {
-      const updatedContacts = [...prevContacts];
-      const contactIndex = updatedContacts.findIndex(contact => contact.id === roomId);
-
-      if (contactIndex >= 0) {
-        if (messages.length > 0) {
-          // Get the latest message
-          const latestMessage = messages[messages.length - 1];
-
-          // Format the message content based on type
-          let formattedContent = latestMessage.content;
-
-          // If it's not a text message, show a descriptive text
-          if (latestMessage.type === 'image') {
-            formattedContent = '📷 Image';
-          } else if (latestMessage.type === 'video') {
-            formattedContent = '🎥 Video';
-          } else if (latestMessage.type === 'audio') {
-            formattedContent = '🔊 Audio message';
-          } else if (latestMessage.type === 'file') {
-            formattedContent = '📎 File';
-          } else if (latestMessage.type === 'sticker') {
-            formattedContent = '🏷️ Sticker';
-          }
-
-          // Add sender name for group chats if the message is not from the current user
-          if (updatedContacts[contactIndex].isGroup && !latestMessage.isFromMe) {
-            let senderName = '';
-
-            // Get a clean sender name without Telegram IDs
-            if (latestMessage.senderName) {
-              // Check if it's a Telegram ID format
-              if (latestMessage.senderName.includes('@telegram_')) {
-                senderName = 'User';
-              } else {
-                // Just use the first name
-                senderName = latestMessage.senderName.split(' ')[0];
-              }
-            } else if (latestMessage.sender && latestMessage.sender.includes('telegram_')) {
-              senderName = 'User';
-            } else if (latestMessage.sender) {
-              // Use first part of Matrix ID without the @ symbol
-              senderName = latestMessage.sender.split(':')[0].replace('@', '');
-            }
-
-            if (senderName) {
-              formattedContent = `${senderName}: ${formattedContent}`;
-            }
-          }
-
-          // Update the contact with the formatted message
-          updatedContacts[contactIndex] = {
-            ...updatedContacts[contactIndex],
-            lastMessage: formattedContent,
-            timestamp: latestMessage.timestamp
-          };
+        const room = client.getRoom(selectedContact.id);
+        if (room) {
+          const membership = room.getMyMembership();
+          logger.info(`[TelegramChatView] Room membership state: ${membership}`);
         } else {
-          // Even if there are no messages, update the contact to show a better message
-          // than "No messages yet"
-          if (!updatedContacts[contactIndex].lastMessage) {
-            updatedContacts[contactIndex] = {
-              ...updatedContacts[contactIndex],
-              lastMessage: updatedContacts[contactIndex].isGroup ?
-                `${updatedContacts[contactIndex].members} members` :
-                'Tap to start conversation'
-            };
-          }
+          logger.warn(`[TelegramChatView] Room not found for ID: ${selectedContact.id}`);
         }
       }
 
-      // Re-sort contacts by timestamp
-      return updatedContacts.sort((a, b) => b.timestamp - a.timestamp);
-    });
-  };
-
-  // Filter contacts when search query changes
-  useEffect(() => {
-    if (searchQuery.trim() === '') {
-      setFilteredContacts(contacts);
-    } else {
-      const query = searchQuery.toLowerCase();
-      const filtered = contacts.filter(contact =>
-        contact.name.toLowerCase().includes(query)
-      );
-      setFilteredContacts(filtered);
+      try {
+        const confirmedChats = JSON.parse(localStorage.getItem('confirmed_chats') || '[]');
+        if (confirmedChats.includes(selectedContact.id)) {
+          logger.info(`[TelegramChatView] Chat already confirmed: ${selectedContact.id}`);
+          setNeedsConfirmation(false);
+        } else {
+          logger.info(`[TelegramChatView] Chat needs confirmation: ${selectedContact.id}`);
+          setNeedsConfirmation(true);
+        }
+      } catch (e) {
+        logger.error('[TelegramChatView] Error checking confirmed chats:', e);
+        setNeedsConfirmation(true);
+      }
     }
-  }, [searchQuery, contacts]);
-
-  // Load cached contacts from IndexedDB with improved reliability
-  const loadCachedContacts = async () => {
-    try {
-      if (!client) return [];
-
-      const userId = client.getUserId();
-      logger.info(`[TelegramContactList] Attempting to load cached contacts for user ${userId}`);
-
-      // First try to get contacts from localStorage (faster and more reliable)
-      try {
-        const localStorageContacts = localStorage.getItem('cached_telegram_contacts');
-        if (localStorageContacts) {
-          const parsedContacts = JSON.parse(localStorageContacts);
-          if (parsedContacts && parsedContacts.length > 0) {
-            logger.info(`[TelegramContactList] Loaded ${parsedContacts.length} contacts from localStorage`);
-            return parsedContacts;
-          }
-        }
-      } catch (localStorageError) {
-        logger.warn('[TelegramContactList] Error loading contacts from localStorage:', localStorageError);
-      }
-
-      // Fallback to IndexedDB if localStorage fails
-      // Use Promise.resolve to ensure we're handling the return value as a Promise
-      const cachedContacts = await Promise.resolve(roomListManager.loadCachedRooms(userId) || []);
-
-      if (cachedContacts && cachedContacts.length > 0) {
-        logger.info(`[TelegramContactList] Loaded ${cachedContacts.length} cached contacts from IndexedDB`);
-
-        // Filter for Telegram contacts only
-        const telegramContacts = cachedContacts.filter(contact => contact.isTelegram);
-
-        // Filter out placeholder contacts if we have real contacts
-        const realContacts = telegramContacts.filter(contact => !contact.isPlaceholder);
-        const hasRealContacts = realContacts.length > 0;
-
-        // Use real contacts if available, otherwise use all Telegram contacts
-        const contactsToUse = hasRealContacts ? realContacts : telegramContacts;
-
-        if (contactsToUse.length > 0) {
-          logger.info(`[TelegramContactList] Using ${contactsToUse.length} cached ${hasRealContacts ? 'real' : 'placeholder'} contacts`);
-          setContacts(contactsToUse);
-          setFilteredContacts(contactsToUse);
-          setLoading(false);
-          setError(null); // Clear any previous errors
-          return contactsToUse;
-        }
-      }
-
-      logger.info('[TelegramContactList] No usable cached contacts found');
-      return [];
-    } catch (error) {
-      logger.error('[TelegramContactList] Error loading cached contacts:', error);
-      // Continue with fresh load
-      return [];
-    }
-  };
-
-  // Enhanced loadCachedContacts function already defined above
-
-  // Load contacts using RoomListManager with improved reliability
-  const loadContacts = async (isBackgroundLoad = false) => {
-    setError(null);
-
-    // Only set loading state if this is not a background load
-    if (!isBackgroundLoad) {
-      setLoading(true);
-    }
-
-    // Use a ref to track if we're still loading
-    const isLoadingRef = { current: true };
-
-    // Set a timeout to prevent hanging indefinitely
-    const loadingTimeout = setTimeout(() => {
-      if (isLoadingRef.current) {
-        logger.warn('[TelegramContactList] Loading contacts timed out');
-        setLoading(false);
-
-        // Don't set error if we have cached contacts
-        if (contacts.length === 0) {
-          // Try to load from cache before showing error
-          loadCachedContacts().then(cachedContacts => {
-            if (cachedContacts && cachedContacts.length > 0) {
-              logger.info(`[TelegramContactList] Loaded ${cachedContacts.length} contacts from cache after timeout`);
-              setContacts(cachedContacts);
-            } else {
-              setError('Loading timed out. Please try refreshing.');
-            }
-          }).catch(err => {
-            logger.error('[TelegramContactList] Error loading cached contacts after timeout:', err);
-            setError('Loading timed out. Please try refreshing.');
-          });
-        }
-      }
-    }, 15000); // 15 seconds timeout
-
-    // Declare telegramRooms at the function level so it's accessible throughout
-    let telegramRooms = [];
-
-    try {
-      if (!client) {
-        throw new Error('Matrix client not initialized');
-      }
-
-      // Check if the Matrix client is ready
-      const syncState = client.getSyncState();
-      logger.info(`[TelegramContactList] Matrix client sync state: ${syncState}`);
-
-      // If the client is not ready, wait a moment
-      if (syncState !== 'PREPARED' && syncState !== 'SYNCING') {
-        logger.warn('[TelegramContactList] Matrix client not ready, waiting...');
-        await new Promise(resolve => setTimeout(resolve, 2000));
-      }
-
-      // Try to use sliding sync first if available
-      try {
-        // Check if sliding sync is supported and initialize if needed
-        if (!slidingSyncManager.initialized) {
-          const initialized = slidingSyncManager.initialize(client);
-          if (initialized) {
-            logger.info('[TelegramContactList] Initialized sliding sync manager for contact loading');
-          }
-        }
-
-        // If sliding sync is initialized, use it to load contacts
-        if (slidingSyncManager.initialized) {
-          logger.info('[TelegramContactList] Using sliding sync to load contacts');
-
-          try {
-            // Create a list for all rooms
-            await slidingSyncManager.setList('all_rooms', {
-              ranges: [[0, 100]],  // Get first 100 rooms
-              sort: ['by_recency'],
-              timeline_limit: 1     // We only need minimal timeline data for contacts
-            });
-
-            // Start the sync loop if not already running
-            if (!slidingSyncManager.syncInProgress) {
-              slidingSyncManager.startSyncLoop();
-            }
-
-            // Wait for the sync to complete
-            const syncPromise = new Promise((resolve) => {
-              const onSyncComplete = () => {
-                slidingSyncManager.removeListener('syncComplete', onSyncComplete);
-                resolve();
-              };
-              slidingSyncManager.on('syncComplete', onSyncComplete);
-
-              // Set a timeout in case sync takes too long
-              setTimeout(() => {
-                slidingSyncManager.removeListener('syncComplete', onSyncComplete);
-                resolve();
-              }, 10000); // 10 second timeout
-            });
-
-            await syncPromise;
-
-            // Get all rooms from the client (sliding sync should have updated them)
-            const allRooms = client.getRooms() || [];
-            logger.info(`[TelegramContactList] Sliding sync found ${allRooms.length} rooms`);
-
-            // Filter for Telegram rooms
-            const slidingSyncTelegramRooms = allRooms.filter(room => {
-              // Check for Telegram senders in the room
-              const members = room.getJoinedMembers() || [];
-              return members.some(member => member.userId.includes('@telegram_'));
-            });
-
-            if (slidingSyncTelegramRooms.length > 0) {
-              logger.info(`[TelegramContactList] Found ${slidingSyncTelegramRooms.length} Telegram rooms via sliding sync`);
-
-              // Transform rooms to contacts
-              const userId = client.getUserId();
-              telegramRooms = roomListManager.transformRooms(userId, slidingSyncTelegramRooms, client);
-
-              // Update contacts
-              setContacts(telegramRooms);
-              setFilteredContacts(telegramRooms);
-
-              // Cache the contacts
-              try {
-                localStorage.setItem('cached_telegram_contacts', JSON.stringify(telegramRooms));
-                logger.info(`[TelegramContactList] Cached ${telegramRooms.length} contacts from sliding sync`);
-              } catch (cacheError) {
-                logger.warn('[TelegramContactList] Error caching contacts from sliding sync:', cacheError);
-              }
-
-              // Mark loading as complete
-              isLoadingRef.current = false;
-              setLoading(false);
-              clearTimeout(loadingTimeout);
-
-              return telegramRooms;
-            } else {
-              logger.warn('[TelegramContactList] No Telegram rooms found via sliding sync, falling back to traditional sync');
-              // Fall through to traditional sync
-            }
-          } catch (slidingSyncError) {
-            logger.warn('[TelegramContactList] Error using sliding sync for contacts, falling back to traditional sync:', slidingSyncError);
-            // Fall through to traditional sync
-          }
-        }
-      } catch (slidingSyncSetupError) {
-        logger.warn('[TelegramContactList] Error setting up sliding sync for contacts, falling back to traditional sync:', slidingSyncSetupError);
-        // Fall through to traditional sync
-      }
-
-      // Try to load cached contacts first
-      const cachedContacts = await loadCachedContacts();
-      if (cachedContacts && cachedContacts.length > 0) {
-        logger.info(`[TelegramContactList] Using ${cachedContacts.length} cached contacts`);
-        return; // We already set the contacts in loadCachedContacts
-      }
-
-      // CRITICAL FIX: Always sync all rooms to find all Telegram rooms
-
-      // Note the Telegram room from localStorage for reference, but don't limit to just this room
-      let knownTelegramRoomId = null;
-      try {
-        const connectionStatus = JSON.parse(localStorage.getItem('dailyfix_connection_status') || '{}');
-        knownTelegramRoomId = connectionStatus.telegramRoomId;
-
-        if (knownTelegramRoomId) {
-          logger.info('[TelegramContactList] Found Telegram room ID in localStorage:', knownTelegramRoomId);
-        }
-      } catch (directRoomError) {
-        logger.warn('[TelegramContactList] Error getting room from localStorage:', directRoomError);
-      }
-
-      // Always sync rooms to find ALL Telegram rooms
-      try {
-        // Trigger a sync in the room list manager
-        const userId = client.getUserId();
-
-        // Force a sync of all rooms
-        logger.info('[TelegramContactList] Forcing sync of all rooms');
-
-        // First, get all rooms directly from the client
-        const allClientRooms = client.getRooms() || [];
-        logger.info(`[TelegramContactList] Found ${allClientRooms.length} total rooms directly from client`);
-
-        // Log all rooms for debugging
-        allClientRooms.forEach((room, index) => {
-            try {
-              // Get room membership state
-              let roomState = 'unknown';
-              try {
-                if (room.getMyMembership) {
-                  roomState = room.getMyMembership();
-                }
-              } catch (stateError) {
-                // Ignore errors getting room state
-              }
-
-              // Get joined members
-              const joinedMembers = room.getJoinedMembers() || [];
-              const joinedMemberIds = joinedMembers.map(m => m.userId).join(', ');
-
-              // Get invited members
-              let invitedMembers = [];
-              try {
-                // Try to get invited members from room state
-                const memberEvents = room.currentState.getStateEvents('m.room.member');
-                invitedMembers = memberEvents
-                  .filter(event => event.getContent().membership === 'invite')
-                  .map(event => ({ userId: event.getStateKey() }));
-              } catch (memberError) {
-                // Ignore errors getting invited members
-              }
-
-              const invitedMemberIds = invitedMembers.map(m => m.userId).join(', ');
-
-              // Check for inviter if this is an invited room
-              let inviter = 'unknown';
-              if (roomState === 'invite') {
-                try {
-                  const memberEvents = room.currentState.getStateEvents('m.room.member');
-                  const myMemberEvent = memberEvents.find(event =>
-                    event.getStateKey() === userId &&
-                    event.getContent().membership === 'invite'
-                  );
-
-                  if (myMemberEvent) {
-                    inviter = myMemberEvent.getSender() || 'unknown';
-                  }
-                } catch (inviteError) {
-                  // Ignore errors checking invite events
-                }
-              }
-
-              logger.info(`[TelegramContactList] Room ${index}: ${room.roomId} - ${room.name} - State: ${roomState}${roomState === 'invite' ? ` - Inviter: ${inviter}` : ''} - Joined: ${joinedMemberIds} - Invited: ${invitedMemberIds}`);
-
-              // Check for Telegram senders in the room's timeline
-              try {
-                const timeline = room.getLiveTimeline && room.getLiveTimeline();
-                if (timeline) {
-                  const events = timeline.getEvents && timeline.getEvents();
-                  if (events && events.length > 0) {
-                    // Find events from Telegram senders
-                    const telegramEvents = events.filter(event => {
-                      const sender = event.getSender && event.getSender();
-                      return sender && (
-                        sender.includes('@telegram_') ||
-                        sender.includes(':telegram') ||
-                        sender.includes('telegram')
-                      );
-                    });
-
-                    if (telegramEvents.length > 0) {
-                      logger.info(`[TelegramContactList] Found ${telegramEvents.length} Telegram events in room ${room.roomId}`);
-                      telegramEvents.forEach((event, eventIndex) => {
-                        logger.info(`[TelegramContactList] Telegram event ${eventIndex} in room ${room.roomId}: sender=${event.getSender()}, type=${event.getType()}`);
-                      });
-                    }
-                  }
-                }
-              } catch (timelineError) {
-                // Timeline might not be accessible
-              }
-            } catch (roomError) {
-              logger.error(`[TelegramContactList] Error getting room details for room ${index}:`, roomError);
-            }
-          });
-
-          // Now sync rooms through the room list manager
-          try {
-            const syncedRooms = await roomListManager.syncRooms(userId, true);
-
-            // Filter for Telegram rooms
-            if (syncedRooms && Array.isArray(syncedRooms)) {
-              telegramRooms = syncedRooms.filter(room => room.isTelegram);
-              logger.info(`[TelegramContactList] Found ${telegramRooms.length} Telegram rooms via sync`);
-            } else {
-              logger.warn('[TelegramContactList] syncRooms did not return an array of rooms');
-            }
-          } catch (syncError) {
-            logger.error('[TelegramContactList] Error syncing rooms:', syncError);
-            // Continue with any rooms we found directly
-          }
-
-          // If we still don't have any rooms, try to get the Telegram room directly from the client
-          if (telegramRooms.length === 0) {
-            logger.info('[TelegramContactList] No Telegram rooms found via sync, checking all rooms');
-
-            // Get all rooms from the client
-            const allRooms = client.getRooms() || [];
-            logger.info(`[TelegramContactList] Found ${allRooms.length} total rooms`);
-
-            // Log all rooms for debugging
-            allRooms.forEach((room, index) => {
-              try {
-                const members = room.getJoinedMembers() || [];
-                const memberIds = members.map(m => m.userId).join(', ');
-                logger.info(`[TelegramContactList] Room ${index}: ${room.roomId} - ${room.name} - Members: ${memberIds}`);
-              } catch (error) {
-                logger.error(`[TelegramContactList] Error getting room details for room ${index}:`, error);
-              }
-            });
-
-            // Check if any of the rooms has the Telegram bot as a member
-            const telegramRoom = allRooms.find(room => {
-              try {
-                const members = room.getJoinedMembers() || [];
-                return members.some(member =>
-                  member.userId === '@telegrambot:dfix-hsbridge.duckdns.org' ||
-                  member.userId.includes('telegram') ||
-                  member.name?.includes('Telegram')
-                );
-              } catch (error) {
-                return false;
-              }
-            });
-
-            if (telegramRoom) {
-              logger.info(`[TelegramContactList] Found Telegram room directly: ${telegramRoom.roomId}`);
-
-              // Create a contact from this room
-              const contact = {
-                id: telegramRoom.roomId,
-                name: telegramRoom.name || 'Telegram',
-                avatar: telegramRoom.getAvatarUrl('https://dfix-hsbridge.duckdns.org', 96, 96, 'crop'),
-                lastMessage: 'Connected to Telegram',
-                timestamp: Date.now(),
-                unreadCount: 0,
-                isGroup: false,
-                isTelegram: true,
-                members: telegramRoom.getJoinedMembers().length,
-                telegramContact: {
-                  id: 'telegram_user',
-                  username: 'telegram_user',
-                  firstName: 'Telegram',
-                  lastName: '',
-                  avatar: null
-                }
-              };
-
-              telegramRooms = [contact];
-
-              // Save the room ID to localStorage
-              try {
-                const connectionStatus = JSON.parse(localStorage.getItem('dailyfix_connection_status') || '{}');
-                connectionStatus.telegramRoomId = telegramRoom.roomId;
-                localStorage.setItem('dailyfix_connection_status', JSON.stringify(connectionStatus));
-                logger.info(`[TelegramContactList] Saved Telegram room ID to localStorage: ${telegramRoom.roomId}`);
-              } catch (error) {
-                logger.error('[TelegramContactList] Error saving Telegram room ID to localStorage:', error);
-              }
-            }
-          }
-        } catch (syncError) {
-          logger.error('[TelegramContactList] Error syncing rooms:', syncError);
-        }
-      } catch (mainError) {
-        logger.error('[TelegramContactList] Error in main try block:', mainError);
-      }
-
-      // If we still don't have any rooms, create a placeholder
-      if (telegramRooms.length === 0) {
-        logger.warn('[TelegramContactList] No Telegram rooms found, creating placeholder');
-
-        // Check if we have a Telegram room ID in localStorage
-        try {
-          const connectionStatus = JSON.parse(localStorage.getItem('dailyfix_connection_status') || '{}');
-          const telegramRoomId = connectionStatus.telegramRoomId;
-
-          if (telegramRoomId) {
-            // Create a placeholder with the room ID
-            const placeholderContact = {
-              id: telegramRoomId,
-              name: 'Telegram',
-              avatar: null,
-              lastMessage: 'Connected to Telegram',
-              timestamp: Date.now(),
-              unreadCount: 0,
-              isGroup: false,
-              isTelegram: true,
-              telegramContact: {
-                id: 'telegram_user',
-                username: 'telegram_user',
-                firstName: 'Telegram',
-                lastName: '',
-                avatar: null
-              },
-              members: 1,
-              isPlaceholder: true
-            };
-
-            telegramRooms = [placeholderContact];
-          } else {
-            // Create a generic placeholder
-            const placeholderContact = {
-              id: 'telegram_placeholder',
-              name: 'Telegram',
-              avatar: null,
-              lastMessage: 'Connected to Telegram',
-              timestamp: Date.now(),
-              unreadCount: 0,
-              isGroup: false,
-              isTelegram: true,
-              telegramContact: {
-                id: 'telegram_user',
-                username: 'telegram_user',
-                firstName: 'Telegram',
-                lastName: '',
-                avatar: null
-              },
-              members: 1,
-              isPlaceholder: true
-            };
-
-            telegramRooms = [placeholderContact];
-          }
-        } catch (error) {
-          // Create a generic placeholder
-          const placeholderContact = {
-            id: 'telegram_placeholder',
-            name: 'Telegram',
-            avatar: null,
-            lastMessage: 'Connected to Telegram',
-            timestamp: Date.now(),
-            unreadCount: 0,
-            isGroup: false,
-            isTelegram: true,
-            telegramContact: {
-              id: 'telegram_user',
-              username: 'telegram_user',
-              firstName: 'Telegram',
-              lastName: '',
-              avatar: null
-            },
-            members: 1,
-            isPlaceholder: true
-          };
-
-          telegramRooms = [placeholderContact];
-        }
-      }
-
-      try {
-        // Update the contacts
-        setContacts(telegramRooms);
-        setFilteredContacts(telegramRooms);
-        logger.info(`[TelegramContactList] Successfully loaded ${telegramRooms.length} Telegram contacts`);
-      } catch (error) {
-        logger.error('[TelegramContactList] Error loading contacts:', error);
-        setError('Failed to load Telegram contacts');
-
-        // Show a placeholder contact even if there's an error
-        const errorPlaceholder = {
-          id: 'telegram_error',
-          name: 'Telegram',
-          avatar: null,
-          lastMessage: 'There was an error loading your contacts. Tap to retry.',
-          timestamp: Date.now(),
-          unreadCount: 0,
-          isGroup: false,
-          isTelegram: true,
-          isPlaceholder: true,
-          isError: true
-        };
-
-        setContacts([errorPlaceholder]);
-        setFilteredContacts([errorPlaceholder]);
-      } finally {
-        // Mark loading as complete
-        isLoadingRef.current = false;
-
-        // Clear the loading timeout
-        clearTimeout(loadingTimeout);
-        setLoading(false);
-
-        // Cache the contacts for future use if we have any
-        if (telegramRooms.length > 0) {
-          try {
-            localStorage.setItem('cached_telegram_contacts', JSON.stringify(telegramRooms));
-            logger.info(`[TelegramContactList] Cached ${telegramRooms.length} contacts`);
-          } catch (cacheError) {
-            logger.warn('[TelegramContactList] Error caching contacts:', cacheError);
-          }
-        }
-      }
-  };
-
-  const handleRefresh = async () => {
-    if (refreshing) {
-      // If already refreshing, just show a toast
-      toast.loading('Already refreshing conversations...', { id: 'refresh-toast' });
+  }, [selectedContact, client]);
+
+  // Handle room joining
+  const handleConfirmViewChat = async () => {
+    if (!selectedContact || !client) {
+      logger.error('[TelegramChatView] Cannot confirm view chat: selectedContact or client is null');
       return;
     }
 
-    setRefreshing(true);
-    // Reset the loading flag
-    hasTriedLoading.current = false;
-
-    // Show immediate feedback
-    toast.loading('Refreshing conversations...', { id: 'refresh-toast' });
-
-    // Set a timeout to prevent the refresh from hanging indefinitely
-    const refreshTimeout = setTimeout(() => {
-      if (refreshing) {
-        logger.warn('[TelegramContactList] Refresh timed out');
-        setRefreshing(false);
-        toast.error('Refresh timed out. Please try again.', { id: 'refresh-toast' });
-      }
-    }, 20000); // 20 seconds timeout
+    logger.info('[TelegramChatView] Confirming view chat for:', selectedContact.name);
 
     try {
-      // First try to get contacts from localStorage
-      const cachedContacts = await loadCachedContacts();
+      // Check if room needs joining (has 'invite' state)
+      const room = client.getRoom(selectedContact.id);
+      if (room) {
+        const membership = room.getMyMembership();
+        logger.info(`[TelegramChatView] Room membership state before joining: ${membership}`);
 
-      // If we have cached contacts, show them immediately
-      if (cachedContacts && cachedContacts.length > 0) {
-        logger.info(`[TelegramContactList] Using ${cachedContacts.length} cached contacts while refreshing`);
-        // We already set the contacts in loadCachedContacts
+        if (membership === 'invite') {
+          setIsJoining(true);
+          setJoinError(null);
+
+          // Join the room
+          logger.info(`[TelegramChatView] Joining room ${selectedContact.id}`);
+          await client.joinRoom(selectedContact.id);
+
+          // Wait a moment for the room state to update
+          await new Promise(resolve => setTimeout(resolve, 1000));
+
+          // Check membership after joining
+          const updatedMembership = room.getMyMembership();
+          logger.info(`[TelegramChatView] Room membership state after joining: ${updatedMembership}`);
+        } else {
+          logger.info(`[TelegramChatView] Room already joined with membership: ${membership}`);
+        }
       } else {
-        // Clear any existing contacts to show loading state
-        setContacts([]);
-        setFilteredContacts([]);
+        logger.warn(`[TelegramChatView] Room not found for ID: ${selectedContact.id}`);
       }
 
-      // CRITICAL FIX: Force a resync of all rooms from the Matrix client
-      logger.info('[TelegramContactList] Forcing resync of all rooms from Matrix client');
-
-      // First, clear the room list cache
-      try {
-        if (client) {
-          const userId = client.getUserId();
-          roomListManager.cleanup(userId);
-          logger.info('[TelegramContactList] Cleared room list cache');
-        }
-      } catch (cleanupError) {
-        logger.error('[TelegramContactList] Error clearing room list cache:', cleanupError);
+      // Save confirmation to localStorage
+      const confirmedChats = JSON.parse(localStorage.getItem('confirmed_chats') || '[]');
+      if (!confirmedChats.includes(selectedContact.id)) {
+        confirmedChats.push(selectedContact.id);
+        localStorage.setItem('confirmed_chats', JSON.stringify(confirmedChats));
+        logger.info(`[TelegramChatView] Added ${selectedContact.id} to confirmed chats`);
       }
 
-      // Force the Matrix client to sync
-      try {
-        if (client) {
-          // Force a sync
-          logger.info('[TelegramContactList] Forcing Matrix client sync');
-          // Don't call startClient() as it's already started
-          // Instead, force a sync by calling syncLeftRooms()
-          if (client.syncLeftRooms) {
-            await client.syncLeftRooms();
-          }
-          logger.info('[TelegramContactList] Matrix client sync requested');
-        }
-      } catch (syncError) {
-        logger.error('[TelegramContactList] Error forcing Matrix client sync:', syncError);
-      }
+      // Update state
+      setNeedsConfirmation(false);
+      setIsJoining(false);
+      setJoinError(null);
 
-      // Initialize room list with Telegram filter
-      try {
-        if (client) {
-          const userId = client.getUserId();
-          logger.info('[TelegramContactList] Reinitializing room list');
-          roomListManager.initRoomList(
-            userId,
-            client,
-            {
-              filters: { platform: 'telegram' },
-              sortBy: 'lastMessage',
-              onMessagesUpdated: handleMessagesUpdated
-            },
-            handleRoomsUpdated
-          );
-        }
-      } catch (initError) {
-        logger.error('[TelegramContactList] Error reinitializing room list:', initError);
-      }
-
-      // Force a sync of all rooms
-      try {
-        if (client) {
-          const userId = client.getUserId();
-          logger.info('[TelegramContactList] Forcing sync of all rooms');
-          const syncedRooms = await roomListManager.syncRooms(userId, true);
-          logger.info(`[TelegramContactList] Synced ${syncedRooms.length} rooms`);
-
-          // Check if any of the synced rooms are Telegram rooms
-          const telegramRooms = syncedRooms.filter(room => room.isTelegram);
-          logger.info(`[TelegramContactList] Found ${telegramRooms.length} Telegram rooms in synced rooms`);
-
-          // If we found Telegram rooms, update the contacts
-          if (telegramRooms.length > 0) {
-            setContacts(telegramRooms);
-            setFilteredContacts(telegramRooms);
-          }
-        }
-      } catch (roomSyncError) {
-        logger.error('[TelegramContactList] Error syncing rooms:', roomSyncError);
-      }
-
-      // Load contacts with a timeout to prevent hanging
-      const loadPromise = loadContacts();
-      const timeoutPromise = new Promise((resolve) => {
-        setTimeout(() => {
-          logger.warn('[TelegramContactList] Contact loading timed out');
-          resolve();
-        }, 5000);
-      });
-
-      await Promise.race([loadPromise, timeoutPromise]);
-
-      // Check if we have any contacts after all our efforts
-      if (contacts.length === 0) {
-        // Last resort: Try to create a placeholder contact
-        try {
-          const connectionStatus = JSON.parse(localStorage.getItem('dailyfix_connection_status') || '{}');
-          const telegramRoomId = connectionStatus.telegramRoomId;
-
-          if (telegramRoomId && client) {
-            const telegramRoom = client.getRoom(telegramRoomId);
-            if (telegramRoom) {
-              const contact = {
-                id: telegramRoom.roomId,
-                name: telegramRoom.name || 'Telegram',
-                avatar: telegramRoom.getAvatarUrl('https://dfix-hsbridge.duckdns.org', 96, 96, 'crop'),
-                lastMessage: 'Connected to Telegram',
-                timestamp: Date.now(),
-                unreadCount: 0,
-                isGroup: false,
-                isTelegram: true,
-                members: telegramRoom.getJoinedMembers().length,
-                telegramContact: {
-                  id: 'telegram_user',
-                  username: 'telegram_user',
-                  firstName: 'Telegram',
-                  lastName: '',
-                  avatar: null
-                }
-              };
-
-              setContacts([contact]);
-              setFilteredContacts([contact]);
-              logger.info('[TelegramContactList] Created placeholder contact from known Telegram room');
-            }
-          }
-        } catch (placeholderError) {
-          logger.error('[TelegramContactList] Error creating placeholder contact:', placeholderError);
-        }
-      }
-
-      // Show different messages based on refresh count to make it more engaging
-      const refreshMessages = [
-        "Refreshed conversations!",
-        "Latest conversations loaded!",
-        "Telegram updated successfully!",
-        "All fresh and up-to-date!",
-        "Telegram synced successfully!"
-      ];
-      const randomMessage = refreshMessages[Math.floor(Math.random() * refreshMessages.length)];
-      toast.success(randomMessage, { id: 'refresh-toast' });
+      // Load messages
+      logger.info('[TelegramChatView] Loading messages after confirmation');
+      loadMessages();
     } catch (error) {
-      logger.error('[TelegramContactList] Error refreshing contacts:', error);
-      toast.error('Refresh completed with some issues');
+      logger.error('[TelegramChatView] Error joining room:', error);
+      setJoinError(error.message || 'Failed to join the chat. Please try again.');
+      setIsJoining(false);
+    }
+  };
 
-      // Try to load contacts directly as a fallback
-      try {
-        const connectionStatus = JSON.parse(localStorage.getItem('dailyfix_connection_status') || '{}');
-        const telegramRoomId = connectionStatus.telegramRoomId;
+  // Load messages when selected contact changes and confirmation is not needed
+  useEffect(() => {
+    if (selectedContact && client && !needsConfirmation) {
+      // Always load messages when contact changes
+      loadMessages();
 
-        if (telegramRoomId && client) {
-          const telegramRoom = client.getRoom(telegramRoomId);
-          if (telegramRoom) {
-            const contact = {
-              id: telegramRoom.roomId,
-              name: telegramRoom.name || 'Telegram',
-              avatar: telegramRoom.getAvatarUrl('https://dfix-hsbridge.duckdns.org', 96, 96, 'crop'),
-              lastMessage: 'Connected to Telegram',
-              timestamp: Date.now(),
-              unreadCount: 0,
-              isGroup: false,
-              isTelegram: true,
-              members: telegramRoom.getJoinedMembers().length,
-              telegramContact: {
-                id: 'telegram_user',
-                username: 'telegram_user',
-                firstName: 'Telegram',
-                lastName: '',
-                avatar: null
-              }
-            };
+      // Set up real-time updates
+      setupRealTimeUpdates(selectedContact.id);
+    }
 
-            setContacts([contact]);
-            setFilteredContacts([contact]);
+    // Return cleanup function
+    return () => {
+      // Clean up any listeners when component unmounts or selectedContact changes
+      if (client && matrixTimelineManager && matrixTimelineManager.initialized) {
+        try {
+          logger.info('[TelegramChatView] Cleaning up event listeners');
+          // Only remove listeners for the current room, not all rooms
+          if (selectedContact?.id) {
+            matrixTimelineManager.removeRoomListeners(selectedContact.id);
           }
+        } catch (error) {
+          logger.warn('[TelegramChatView] Error cleaning up event listeners:', error);
         }
-      } catch (fallbackError) {
-        logger.error('[TelegramContactList] Fallback error:', fallbackError);
       }
-    } finally {
-      // Clear the refresh timeout
-      clearTimeout(refreshTimeout);
+    };
+  }, [selectedContact, client, needsConfirmation]);
 
-      // Add a small delay for better UX
-      setTimeout(() => {
-        setRefreshing(false);
-        toast.dismiss('refresh-toast');
-      }, 500);
-    }
-  };
-
-  const formatTimestamp = (timestamp) => {
-    if (!timestamp) return '';
-
-    const date = new Date(timestamp);
-    const now = new Date();
-    const isToday = date.toDateString() === now.toDateString();
-
-    if (isToday) {
-      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    } else {
-      return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-    }
-  };
-
-  // We already imported LoadingState at the top
-
-  // We already defined hasTriedLoading at the top
-
-  // Function to organize contacts with improved filtering
-  const organizeContactList = () => {
-    if (!contacts || contacts.length === 0) return;
-
-    // Filter out the Telegram bridge bot and any contacts with raw Matrix IDs as names
-    const filteredContactsList = contacts.filter(contact => {
-      // Filter out the Telegram bridge bot - ULTRA-STRICT filtering
-      if (contact.name === '@telegrambot:dfix-hsbridge.duckdns.org' ||
-          contact.name === 'telegrambot' ||
-          contact.name === 'telegram bridge bot' ||
-          contact.name.toLowerCase().includes('telegram bridge') ||
-          contact.name.toLowerCase() === 'telegram' ||
-          contact.id === '@telegrambot:dfix-hsbridge.duckdns.org' ||
-          (contact.telegramContact && contact.telegramContact.username === 'telegrambot') ||
-          (contact.members <= 2 && contact.name.toLowerCase() === 'telegram')) {
-        logger.debug('[TelegramContactList] Filtering out bridge bot:', contact.name);
-        return false;
+  // Add a cleanup effect when component unmounts
+  useEffect(() => {
+    // Return cleanup function for component unmount
+    return () => {
+      logger.info('[TelegramChatView] Component unmounting, cleaning up resources');
+      // Clean up any cached data or listeners
+      if (matrixTimelineManager && matrixTimelineManager.initialized) {
+        try {
+          matrixTimelineManager.cleanup();
+        } catch (error) {
+          logger.warn('[TelegramChatView] Error during final cleanup:', error);
+        }
       }
+    };
+  }, []);
 
-      // Filter out contacts with raw Matrix IDs as names
-      if (contact.name && contact.name.includes('@telegram_')) {
-        return false;
+  // Add keyboard shortcut for AI Assistant (Alt+A)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Alt+A to open AI Assistant
+      if (e.altKey && e.key === 'a') {
+        e.preventDefault();
+        // Find the AI Assistant button and click it
+        const aiButton = document.querySelector('.ai-assistant-button');
+        if (aiButton) {
+          aiButton.click();
+        }
       }
-
-      // Filter out the generic 'Telegram' contact if it has no messages
-      if (contact.name === 'Telegram' && !contact.lastMessage) {
-        return false;
-      }
-
-      return true;
-    });
-
-    const options = {
-      pinnedContactIds,
-      mutedContactIds,
-      archivedContactIds,
-      showMuted,
-      showArchived,
-      mentionKeywords: [`@${client?.getUserId()}`]
     };
 
-    const organized = contactOrganizer.organizeContacts(filteredContactsList, options);
-    setOrganizedContacts(organized);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
-    // Also update the filtered contacts list for search
-    setFilteredContacts(filteredContactsList);
-  };
-
-  // Organize contacts whenever they change
+  // First-time user experience for AI button
   useEffect(() => {
-    organizeContactList();
-  }, [contacts, pinnedContactIds, mutedContactIds, archivedContactIds, showMuted, showArchived]);
+    if (selectedContact) {
+      // Check if user has seen the AI button highlight
+      const aiButtonHighlighted = localStorage.getItem('ai_button_highlighted');
 
-  // Function to toggle pin status for a contact
-  const togglePinContact = (contactId) => {
-    if (pinnedContactIds.includes(contactId)) {
-      setPinnedContactIds(pinnedContactIds.filter(id => id !== contactId));
-    } else {
-      setPinnedContactIds([...pinnedContactIds, contactId]);
-    }
-  };
+      if (aiButtonHighlighted !== 'true') {
+        // Wait for the DOM to update
+        setTimeout(() => {
+          const aiButton = document.querySelector('.ai-assistant-button-composer');
+          const aiButtonContainer = document.querySelector('.ai-button-container');
+          if (aiButton && aiButtonContainer) {
+            // Add a pulsing animation to draw attention
+            aiButton.classList.add('animate-attention');
 
-  // Function to toggle mute status for a contact
-  const toggleMuteContact = (contactId) => {
-    if (mutedContactIds.includes(contactId)) {
-      setMutedContactIds(mutedContactIds.filter(id => id !== contactId));
-    } else {
-      setMutedContactIds([...mutedContactIds, contactId]);
-    }
-  };
+            // Add a tooltip
+            const tooltip = document.createElement('div');
+            tooltip.className = 'absolute -top-16 left-1/2 transform -translate-x-1/2 bg-[#0088CC] text-white text-xs py-2 px-3 rounded shadow-lg whitespace-nowrap z-50';
+            tooltip.innerHTML = 'Try the AI Assistant! <span class="text-xs opacity-80">(Alt+A)</span>';
 
-  // Function to toggle archive status for a contact
-  const toggleArchiveContact = (contactId) => {
-    if (archivedContactIds.includes(contactId)) {
-      setArchivedContactIds(archivedContactIds.filter(id => id !== contactId));
-    } else {
-      setArchivedContactIds([...archivedContactIds, contactId]);
-    }
-  };
+            // Add arrow
+            const arrow = document.createElement('div');
+            arrow.className = 'absolute -bottom-1 left-1/2 transform -translate-x-1/2 w-2 h-2 bg-[#0088CC] rotate-45';
+            tooltip.appendChild(arrow);
 
-  // If we've been loading for too long, try to load contacts directly
-  useEffect(() => {
-    if (loading && !hasTriedLoading.current && client) {
-      hasTriedLoading.current = true;
+            aiButtonContainer.appendChild(tooltip);
 
-      // Set a timeout to check if we're still loading after 5 seconds
-      const directLoadTimer = setTimeout(async () => {
-        if (loading) {
-          logger.info('[TelegramContactList] Still loading after timeout, trying direct room fetch');
-
-          try {
-            // Try to get the Telegram room directly from localStorage
-            const connectionStatus = JSON.parse(localStorage.getItem('dailyfix_connection_status') || '{}');
-            const telegramRoomId = connectionStatus.telegramRoomId;
-
-            if (telegramRoomId) {
-              logger.info('[TelegramContactList] Found Telegram room ID in localStorage:', telegramRoomId);
-
-              // Try to get the room directly
-              const telegramRoom = client.getRoom(telegramRoomId);
-              if (telegramRoom) {
-                logger.info('[TelegramContactList] Found Telegram room:', telegramRoom.name);
-
-                // Create a contact from this room
-                const contact = {
-                  id: telegramRoom.roomId,
-                  name: telegramRoom.name || 'Telegram',
-                  avatar: telegramRoom.getAvatarUrl('https://dfix-hsbridge.duckdns.org', 96, 96, 'crop'),
-                  lastMessage: 'Connected to Telegram',
-                  timestamp: Date.now(),
-                  unreadCount: 0,
-                  isGroup: false,
-                  isTelegram: true,
-                  members: telegramRoom.getJoinedMembers().length
-                };
-
-                setContacts([contact]);
-                setFilteredContacts([contact]);
-                setLoading(false);
+            // Remove after 5 seconds
+            setTimeout(() => {
+              aiButton.classList.remove('animate-attention');
+              if (tooltip.parentNode) {
+                tooltip.parentNode.removeChild(tooltip);
               }
+              localStorage.setItem('ai_button_highlighted', 'true');
+            }, 5000);
+          }
+        }, 2000);
+      }
+    }
+  }, [selectedContact]);
+
+  // Scroll to bottom when messages change
+  useEffect(() => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages]);
+
+  // Helper function to show welcome messages
+  const showWelcomeMessages = (customMessage) => {
+    const welcomeMessages = [
+      {
+        id: 'welcome-1',
+        sender: '@telegrambot:dfix-hsbridge.duckdns.org',
+        content: {
+          msgtype: 'm.text',
+          body: customMessage || 'Welcome to Telegram! You are now connected to your Telegram account.'
+        },
+        timestamp: Date.now() - 60000,
+        isFromMe: false
+      },
+      {
+        id: 'welcome-2',
+        sender: '@telegrambot:dfix-hsbridge.duckdns.org',
+        content: {
+          msgtype: 'm.text',
+          body: 'You can now send and receive messages from your Telegram contacts.'
+        },
+        timestamp: Date.now() - 30000,
+        isFromMe: false
+      }
+    ];
+
+    setMessages(welcomeMessages);
+  };
+
+  // Fetch parent events for replies
+  const fetchParentEvents = async (messages) => {
+    if (!client || !messages || messages.length === 0) return {};
+
+    const newParentEvents = { ...parentEvents };
+    const eventIdsToFetch = [];
+
+    // Find all messages that are replies and collect their parent event IDs
+    messages.forEach(message => {
+      if (message.rawEvent) {
+        // Try to get parent ID using getParentEventId function
+        const parentId = getParentEventId(message.rawEvent);
+        if (parentId && parentId !== 'fallback_format' && !newParentEvents[parentId]) {
+          eventIdsToFetch.push(parentId);
+        }
+      } else if (message.content && message.content['m.relates_to'] && message.content['m.relates_to']['m.in_reply_to']) {
+        // Handle ElementMatrixClient format
+        const parentId = message.content['m.relates_to']['m.in_reply_to'].event_id;
+        if (parentId && !newParentEvents[parentId]) {
+          eventIdsToFetch.push(parentId);
+        }
+      }
+    });
+
+    // Fetch all parent events in parallel
+    if (eventIdsToFetch.length > 0) {
+      logger.info(`[TelegramChatView] Fetching ${eventIdsToFetch.length} parent events for replies`);
+
+      const roomId = selectedContact.id;
+
+      // First check if we have any of these events in our cache
+      try {
+        // Check if we have any cached parent events in localStorage
+        const cachedParentEventsStr = localStorage.getItem(`parent_events_${roomId}`);
+        if (cachedParentEventsStr) {
+          const cachedParentEvents = JSON.parse(cachedParentEventsStr);
+          // Filter out events we already have in cache
+          eventIdsToFetch.forEach((eventId, index) => {
+            if (cachedParentEvents[eventId]) {
+              newParentEvents[eventId] = cachedParentEvents[eventId];
+              logger.info(`[TelegramChatView] Using cached parent event: ${eventId}`);
+              // Remove from the list to fetch
+              eventIdsToFetch.splice(index, 1);
             }
-          } catch (error) {
-            logger.error('[TelegramContactList] Error in direct room fetch:', error);
+          });
+        }
+      } catch (cacheError) {
+        logger.warn('[TelegramChatView] Error checking cached parent events:', cacheError);
+      }
+
+      // Initialize MatrixTimelineManager if needed
+      if (!matrixTimelineManager.initialized) {
+        matrixTimelineManager.initialize(client);
+      }
+
+      const fetchPromises = eventIdsToFetch.map(async (eventId) => {
+        try {
+          // Use MatrixTimelineManager to get the parent event
+          const event = await matrixTimelineManager.getParentEvent(roomId, eventId);
+
+          if (event) {
+            // Add methods that MessageReply component might expect
+            if (typeof event.getRoomId !== 'function') {
+              event.getRoomId = () => roomId;
+            }
+
+            if (typeof event.getSender !== 'function' && event.sender) {
+              event.getSender = () => event.sender;
+            }
+
+            if (typeof event.getContent !== 'function' && event.content) {
+              event.getContent = () => event.content;
+            }
+
+            newParentEvents[eventId] = event;
+            logger.info(`[TelegramChatView] Successfully fetched parent event: ${eventId}`);
+            return { eventId, event };
           }
 
-          // If we still don't have contacts, show a placeholder
-          if (contacts.length === 0) {
-            const placeholderContact = {
-              id: 'telegram_placeholder',
-              name: 'Telegram',
-              avatar: null,
-              lastMessage: 'Connected to Telegram',
-              timestamp: Date.now(),
-              unreadCount: 0,
-              isGroup: false,
-              isTelegram: true,
-              members: 1,
-              isPlaceholder: true
-            };
+          // If we couldn't find the event, create a fallback event
+          // This prevents repeated warnings and provides a better UX
+          const fallbackEvent = {
+            id: eventId,
+            sender: 'unknown',
+            senderName: 'Unknown User',
+            content: { body: 'Original message not found' },
+            timestamp: Date.now(),
+            getRoomId: () => roomId,
+            getSender: () => 'unknown',
+            getContent: () => ({ body: 'Original message not found' })
+          };
 
-            setContacts([placeholderContact]);
-            setFilteredContacts([placeholderContact]);
-            setLoading(false);
+          newParentEvents[eventId] = fallbackEvent;
+          logger.warn(`[TelegramChatView] Created fallback for parent event: ${eventId}`);
+          return { eventId, event: fallbackEvent };
+        } catch (error) {
+          logger.warn(`[TelegramChatView] Error fetching parent event ${eventId}:`, error);
+
+          // Create a fallback event even on error
+          const fallbackEvent = {
+            id: eventId,
+            sender: 'unknown',
+            senderName: 'Unknown User',
+            content: { body: 'Original message not found' },
+            timestamp: Date.now(),
+            getRoomId: () => roomId,
+            getSender: () => 'unknown',
+            getContent: () => ({ body: 'Original message not found' })
+          };
+
+          newParentEvents[eventId] = fallbackEvent;
+          return { eventId, event: fallbackEvent };
+        }
+      });
+
+      try {
+        const results = await Promise.all(fetchPromises);
+        const successCount = results.filter(r => r.event).length;
+        logger.info(`[TelegramChatView] Fetched ${successCount} out of ${eventIdsToFetch.length} parent events`);
+
+        // Cache the parent events for future use
+        try {
+          // Get existing cached events
+          const existingCacheStr = localStorage.getItem(`parent_events_${roomId}`) || '{}';
+          const existingCache = JSON.parse(existingCacheStr);
+
+          // Add new events to cache
+          const updatedCache = { ...existingCache, ...newParentEvents };
+
+          // Store back in localStorage
+          localStorage.setItem(`parent_events_${roomId}`, JSON.stringify(updatedCache));
+          logger.info(`[TelegramChatView] Cached ${Object.keys(newParentEvents).length} parent events`);
+        } catch (cacheError) {
+          logger.warn('[TelegramChatView] Error caching parent events:', cacheError);
+        }
+      } catch (error) {
+        logger.error('[TelegramChatView] Error processing parent events:', error);
+      }
+    }
+
+    setParentEvents(newParentEvents);
+    return newParentEvents;
+  };
+
+  // Load messages using our enhanced MatrixTimelineManager for reliable message loading
+  const loadMessages = async () => {
+    if (!selectedContact || !client) {
+      logger.error('[TelegramChatView] Cannot load messages: selectedContact or client is null');
+      return;
+    }
+
+    logger.info(`[TelegramChatView] Loading messages for contact: ${selectedContact.name} (${selectedContact.id})`);
+    setLoading(true);
+    setError(null);
+
+    try {
+      // If the selected contact is a placeholder, show a welcome message
+      if (selectedContact.isPlaceholder) {
+        logger.info('[TelegramChatView] Selected contact is a placeholder, showing welcome message');
+        showWelcomeMessages();
+        return;
+      }
+
+      // Check if the room exists
+      const room = client.getRoom(selectedContact.id);
+      if (!room) {
+        logger.warn(`[TelegramChatView] Room not found for ID: ${selectedContact.id}`);
+        showWelcomeMessages('Room not found. Please try again later.');
+        return;
+      }
+
+      // Initialize MatrixTimelineManager
+      if (!matrixTimelineManager.initialized) {
+        logger.info('[TelegramChatView] Initializing MatrixTimelineManager');
+        try {
+          const initialized = matrixTimelineManager.initialize(client);
+
+          if (!initialized) {
+            logger.error('[TelegramChatView] Failed to initialize MatrixTimelineManager');
+            showWelcomeMessages('Error initializing message loader. Please try again later.');
+            return;
+          }
+        } catch (error) {
+          logger.error('[TelegramChatView] Error initializing MatrixTimelineManager:', error);
+          showWelcomeMessages('Error initializing message loader. Please try again later.');
+          return;
+        }
+      }
+
+      // Use a multi-stage loading approach to ensure we get ALL messages
+      // Stage 1: Load messages using MatrixTimelineManager with a higher limit
+      logger.info('[TelegramChatView] Stage 1: Loading messages with MatrixTimelineManager');
+      const loadedMessages = await matrixTimelineManager.loadMessages(selectedContact.id, {
+        limit: 500, // Much higher limit to ensure we get ALL messages
+        forceRefresh: true // Force refresh to get the latest messages
+      });
+
+      // Stage 2: If we have very few messages, try a direct room sync to get the latest
+      if (loadedMessages.length < 20) {
+        logger.info('[TelegramChatView] Stage 2: Few messages found, trying direct room sync');
+        try {
+          // Force a room sync to get the latest messages
+          await client.roomInitialSync(selectedContact.id, 100);
+
+          // Try loading messages again after sync
+          const syncedMessages = await matrixTimelineManager.loadMessages(selectedContact.id, {
+            limit: 500,
+            forceRefresh: true
+          });
+
+          if (syncedMessages.length > loadedMessages.length) {
+            logger.info(`[TelegramChatView] Room sync successful, found ${syncedMessages.length} messages`);
+            // Use the synced messages instead
+            loadedMessages.length = 0; // Clear the array
+            loadedMessages.push(...syncedMessages); // Add the new messages
+          }
+        } catch (syncError) {
+          logger.warn('[TelegramChatView] Error during room sync:', syncError);
+          // Continue with the messages we already have
+        }
+      }
+
+      // Log the message count by type for debugging
+      const messageTypeCount = {};
+      loadedMessages.forEach(msg => {
+        const type = msg.eventType || 'unknown';
+        messageTypeCount[type] = (messageTypeCount[type] || 0) + 1;
+      });
+      logger.info(`[TelegramChatView] Message type counts: ${JSON.stringify(messageTypeCount)}`);
+
+      // Mark all messages as read
+      try {
+        // Get the latest event in the room
+        const timeline = room.getLiveTimeline();
+        if (timeline) {
+          const events = timeline.getEvents();
+          if (events && events.length > 0) {
+            const latestEvent = events[events.length - 1];
+            // Send read receipt for the latest event
+            client.sendReadReceipt(latestEvent);
+            logger.info(`[TelegramChatView] Sent read receipt for latest event in room ${selectedContact.id}`);
           }
         }
-      }, 8000);
+      } catch (error) {
+        logger.warn(`[TelegramChatView] Error sending read receipt:`, error);
+      }
 
-      return () => clearTimeout(directLoadTimer);
+      // If no messages were found, show welcome message
+      if (!loadedMessages || loadedMessages.length === 0) {
+        logger.warn('[TelegramChatView] No messages found, showing welcome message');
+        showWelcomeMessages('No messages found. Start a conversation!');
+        return;
+      }
+
+      logger.info(`[TelegramChatView] Successfully loaded ${loadedMessages.length} messages`);
+
+      // Fetch parent events for replies
+      await fetchParentEvents(loadedMessages);
+
+      // Update state with loaded messages
+      setMessages(loadedMessages);
+
+      // Store the oldest event ID for pagination
+      if (loadedMessages.length > 0) {
+        // Find the oldest message by timestamp
+        const oldestMessage = [...loadedMessages].sort((a, b) => a.timestamp - b.timestamp)[0];
+        if (oldestMessage && oldestMessage.id) {
+          setOldestEventId(oldestMessage.id);
+        }
+
+        // Determine if there might be more messages
+        setHasMoreMessages(loadedMessages.length >= 200);
+
+        // Update the contact's last message in the contact list
+        // This ensures the contact list shows the latest message
+        try {
+          // Find the latest text message
+          const latestMessages = [...loadedMessages].sort((a, b) => b.timestamp - a.timestamp);
+          const latestTextMessage = latestMessages.find(msg =>
+            msg.content && (typeof msg.content === 'string' || msg.content.body || msg.content.msgtype === 'm.text')
+          );
+
+          if (latestTextMessage && window.roomListManager) {
+            // Format the message content
+            let formattedContent = '';
+
+            if (typeof latestTextMessage.content === 'string') {
+              formattedContent = latestTextMessage.content;
+            } else if (latestTextMessage.content.msgtype === 'm.image') {
+              formattedContent = '📷 Image';
+            } else if (latestTextMessage.content.msgtype === 'm.video') {
+              formattedContent = '🎥 Video';
+            } else if (latestTextMessage.content.msgtype === 'm.audio') {
+              formattedContent = '🔊 Audio message';
+            } else if (latestTextMessage.content.msgtype === 'm.file') {
+              formattedContent = '📎 File';
+            } else if (latestTextMessage.content.body) {
+              formattedContent = latestTextMessage.content.body;
+            }
+
+            // Notify the room list manager about the updated message
+            if (window.roomListManager.notifyMessagesUpdated) {
+              window.roomListManager.notifyMessagesUpdated(
+                client.getUserId(),
+                selectedContact.id,
+                [{
+                  id: latestTextMessage.id,
+                  sender: latestTextMessage.sender,
+                  senderName: latestTextMessage.senderName,
+                  content: formattedContent,
+                  timestamp: latestTextMessage.timestamp,
+                  type: latestTextMessage.content.msgtype || 'text',
+                  isFromMe: latestTextMessage.isFromMe
+                }]
+              );
+            }
+          }
+        } catch (updateError) {
+          logger.warn('[TelegramChatView] Error updating contact list with latest message:', updateError);
+          // Non-critical error, continue
+        }
+      } else {
+        setHasMoreMessages(false);
+      }
+
+      // Set up real-time updates
+      setupRealTimeUpdates(selectedContact.id);
+    } catch (error) {
+      logger.error('[TelegramChatView] Error loading messages:', error);
+      setError('Failed to load messages');
+      showWelcomeMessages('Error loading messages. Please try again later.');
+    } finally {
+      setLoading(false);
     }
-  }, [loading, client, contacts]);
+  };
 
-  if (loading) {
+  // Note: We're using MatrixTimelineManager to process events into messages
+  // The implementation is in matrixTimelineManager.js
+
+  // Set up real-time updates for a room using MatrixTimelineManager
+  const setupRealTimeUpdates = (roomId) => {
+    if (!roomId || !client) return;
+
+    logger.info(`[TelegramChatView] Setting up real-time updates for room ${roomId}`);
+
+    // First, remove any existing listeners to avoid duplicates
+    try {
+      // Remove existing listeners for this room specifically without reinitializing
+      // the entire timeline manager, which would cause message reloading
+      matrixTimelineManager.removeRoomListeners(roomId);
+    } catch (error) {
+      logger.warn('[TelegramChatView] Error removing existing listeners:', error);
+    }
+
+    // Set up real-time updates using MatrixTimelineManager
+    const listenerId = matrixTimelineManager.addRoomListener(roomId, 'timeline', (event, room) => {
+      // Skip events that aren't message events
+      if (event.getType && event.getType() !== 'm.room.message') return;
+
+      // Check if this is a message we just sent (to avoid duplicate processing)
+      const eventId = event.getId?.() || event.event_id;
+
+      // Skip processing if this is our own sent message that we're already tracking
+      if (window.lastSentEventId && eventId === window.lastSentEventId) {
+        logger.info(`[TelegramChatView] Skipping processing of our own sent message: ${eventId}`);
+        return;
+      }
+
+      // Also check if the sender is the current user (additional check for duplicates)
+      const senderId = event.getSender?.() || event.sender;
+      if (senderId === client.getUserId()) {
+        // Check if we already have an optimistic message with similar content
+        const eventContent = event.getContent?.() || event.content;
+        const messageBody = eventContent?.body || '';
+
+        // Check if we have a similar optimistic message
+        const hasOptimisticVersion = messages.some(msg =>
+          msg.isOptimistic &&
+          msg.sender === senderId &&
+          msg.content?.body === messageBody
+        );
+
+        if (hasOptimisticVersion) {
+          logger.info(`[TelegramChatView] Found optimistic version of message ${eventId}, will update instead of adding new`);
+          // Update the optimistic message instead of adding a new one
+          setMessages(prevMessages => {
+            return prevMessages.map(msg => {
+              if (msg.isOptimistic && msg.sender === senderId && msg.content?.body === messageBody) {
+                return {
+                  ...msg,
+                  id: eventId,
+                  isOptimistic: false
+                };
+              }
+              return msg;
+            });
+          });
+          return;
+        }
+      }
+
+      // Process the event into a message
+      const newMessage = matrixTimelineManager._createMessageFromEvent(event, room);
+
+      // Skip if we couldn't create a valid message
+      if (!newMessage || !newMessage.id) return;
+
+      logger.info(`[TelegramChatView] Received new message: ${newMessage.id}`);
+
+      // When a new message is received, add it to the messages state
+      try {
+        setMessages(prevMessages => {
+          try {
+            // Check if the message already exists
+            const exists = prevMessages.some(msg => msg.id === newMessage.id);
+            if (exists) {
+              logger.debug(`[TelegramChatView] Message ${newMessage.id} already exists, skipping`);
+              return prevMessages;
+            }
+
+            logger.info(`[TelegramChatView] Adding new message ${newMessage.id} to state`);
+
+            // Add the new message and sort by timestamp
+            const updatedMessages = [...prevMessages, newMessage];
+            return updatedMessages.sort((a, b) => a.timestamp - b.timestamp);
+          } catch (innerError) {
+            logger.error('[TelegramChatView] Error processing message update:', innerError);
+            return prevMessages; // Return unchanged messages on error
+          }
+        });
+      } catch (outerError) {
+        logger.error('[TelegramChatView] Error updating messages state:', outerError);
+      }
+
+      // If the message is a reply, fetch the parent event
+      if (newMessage.rawEvent) {
+        const parentId = getParentEventId(newMessage.rawEvent);
+        if (parentId && parentId !== 'fallback_format') {
+          logger.info(`[TelegramChatView] New message is a reply to ${parentId}, fetching parent`);
+          fetchParentEvents([newMessage]);
+        }
+      }
+
+      // Automatically scroll to bottom for new messages
+      if (messagesEndRef.current) {
+        messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+      }
+
+      // Mark the message as read if it's not from the current user
+      if (!newMessage.isFromMe) {
+        try {
+          // Send read receipt for the event
+          client.sendReadReceipt(event);
+          logger.info(`[TelegramChatView] Sent read receipt for new message ${newMessage.id}`);
+        } catch (error) {
+          logger.warn(`[TelegramChatView] Error sending read receipt for new message:`, error);
+        }
+      }
+    });
+
+    // Store the listener ID for cleanup
+    logger.info(`[TelegramChatView] Set up real-time updates with listener ID: ${listenerId}`);
+
+    // Also set up a listener for state events (like member changes)
+    matrixTimelineManager.addRoomListener(roomId, 'state', (event) => {
+      // If it's a member event, it might affect sender names in messages
+      if (event.getType && event.getType() === 'm.room.member') {
+        // Refresh messages to update sender names
+        logger.info(`[TelegramChatView] Room member changed, refreshing messages`);
+        loadMessages();
+      }
+    });
+  };
+
+  // Load more messages (older messages) with enhanced reliability
+  const loadMoreMessages = async () => {
+    if (!selectedContact || !client || !oldestEventId || loadingMore || !hasMoreMessages) {
+      return;
+    }
+
+    setLoadingMore(true);
+    try {
+      logger.info(`[TelegramChatView] Loading more messages before ${oldestEventId}`);
+
+      // Initialize MatrixTimelineManager if not already initialized
+      if (!matrixTimelineManager.initialized) {
+        logger.info('[TelegramChatView] Initializing MatrixTimelineManager');
+        try {
+          const initialized = matrixTimelineManager.initialize(client);
+
+          if (!initialized) {
+            logger.error('[TelegramChatView] Failed to initialize MatrixTimelineManager');
+            return;
+          }
+        } catch (error) {
+          logger.error('[TelegramChatView] Error initializing MatrixTimelineManager:', error);
+          return;
+        }
+      }
+
+      // Multi-stage approach to load older messages
+      // Stage 1: Use MatrixTimelineManager to load more messages
+      logger.info('[TelegramChatView] Stage 1: Loading older messages with MatrixTimelineManager');
+      const olderMessages = await matrixTimelineManager.loadMessages(selectedContact.id, {
+        limit: 200, // Increased limit for better pagination
+        direction: 'b', // backwards to get historical messages
+        from: oldestEventId
+      });
+
+      // Stage 2: If we got very few messages, try direct pagination
+      let additionalMessages = [];
+      if (olderMessages.length < 20) {
+        logger.info('[TelegramChatView] Stage 2: Few older messages found, trying direct pagination');
+        try {
+          // Get the room
+          const room = client.getRoom(selectedContact.id);
+          if (room) {
+            // Try to use the client's roomMessages API directly
+            const response = await client.roomMessages(selectedContact.id, oldestEventId, 100, 'b');
+
+            if (response && response.chunk && response.chunk.length > 0) {
+              logger.info(`[TelegramChatView] Direct pagination found ${response.chunk.length} messages`);
+
+              // Process these events into messages
+              for (const event of response.chunk) {
+                // Add necessary methods if they don't exist
+                if (typeof event.isLiveEvent !== 'function') {
+                  event.isLiveEvent = () => false;
+                }
+
+                // Create a message from the event
+                const message = matrixTimelineManager._createMessageFromEvent(event, room);
+                if (message && message.id) {
+                  additionalMessages.push(message);
+                }
+              }
+
+              logger.info(`[TelegramChatView] Processed ${additionalMessages.length} additional messages`);
+            }
+          }
+        } catch (paginationError) {
+          logger.warn('[TelegramChatView] Error during direct pagination:', paginationError);
+          // Continue with the messages we already have
+        }
+      }
+
+      // Combine all messages
+      const allOlderMessages = [...olderMessages, ...additionalMessages];
+
+      if (!allOlderMessages || allOlderMessages.length === 0) {
+        logger.info('[TelegramChatView] No more older messages found');
+        setHasMoreMessages(false);
+        return;
+      }
+
+      logger.info(`[TelegramChatView] Loaded ${allOlderMessages.length} older messages in total`);
+
+      // Fetch parent events for replies
+      await fetchParentEvents(allOlderMessages);
+
+      // Merge with existing messages, avoiding duplicates
+      const existingIds = new Set(messages.map(msg => msg.id));
+      const newMessages = allOlderMessages.filter(msg => !existingIds.has(msg.id));
+
+      if (newMessages.length === 0) {
+        logger.info('[TelegramChatView] No new messages found');
+        setHasMoreMessages(false);
+        return;
+      }
+
+      logger.info(`[TelegramChatView] Adding ${newMessages.length} new older messages`);
+
+      // Update messages state
+      setMessages(prevMessages => {
+        const combinedMessages = [...newMessages, ...prevMessages];
+        // Sort by timestamp
+        return combinedMessages.sort((a, b) => a.timestamp - b.timestamp);
+      });
+
+      // Update oldest event ID
+      const oldestNewMessage = [...newMessages].sort((a, b) => a.timestamp - b.timestamp)[0];
+      if (oldestNewMessage && oldestNewMessage.id) {
+        setOldestEventId(oldestNewMessage.id);
+      }
+
+      // Determine if there might be more messages
+      setHasMoreMessages(newMessages.length >= 50);
+    } catch (error) {
+      logger.error('[TelegramChatView] Error loading more messages:', error);
+      toast.error('Failed to load more messages');
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  // Note: We're using MatrixTimelineManager for real-time updates and message loading
+  // The implementation is in matrixTimelineManager.js
+
+  const handleSendMessage = async (e) => {
+    e.preventDefault();
+    if (!inputMessage.trim() || !selectedContact || !client || sending) return;
+
+    setSending(true);
+    try {
+      logger.info(`[TelegramChatView] Sending message to ${selectedContact.name}`);
+
+      // Initialize MatrixTimelineManager if not already initialized
+      if (!matrixTimelineManager.initialized) {
+        logger.info('[TelegramChatView] Initializing MatrixTimelineManager for sending message');
+        try {
+          const initialized = matrixTimelineManager.initialize(client);
+
+          if (!initialized) {
+            throw new Error('Failed to initialize MatrixTimelineManager');
+          }
+        } catch (error) {
+          logger.error('[TelegramChatView] Error initializing MatrixTimelineManager:', error);
+          throw new Error('Failed to initialize MatrixTimelineManager');
+        }
+      }
+
+      // Check if the room exists and we have permission to send messages
+      const room = client.getRoom(selectedContact.id);
+      if (!room) {
+        throw new Error(`Room ${selectedContact.id} not found`);
+      }
+
+      // Check if we're joined to the room
+      const membership = room.getMyMembership();
+      if (membership !== 'join') {
+        logger.warn(`[TelegramChatView] Not joined to room ${selectedContact.id}, current membership: ${membership}`);
+
+        // Try to join the room if we're invited
+        if (membership === 'invite') {
+          logger.info(`[TelegramChatView] Attempting to join room ${selectedContact.id}`);
+          await client.joinRoom(selectedContact.id);
+
+          // Wait a moment for the room state to update
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        } else {
+          throw new Error(`Cannot send message: Not joined to room (membership: ${membership})`);
+        }
+      }
+
+      // Prepare message content
+      let messageContent;
+
+      // If it's a simple text message
+      if (!replyToEvent) {
+        // Create a proper content object for better compatibility
+        messageContent = {
+          msgtype: 'm.text',
+          body: inputMessage,
+          format: 'org.matrix.custom.html',  // Support HTML formatting if present
+          formatted_body: inputMessage.replace(/\n/g, '<br/>')  // Convert newlines to <br/>
+        };
+      } else {
+        // If replying to a message, add reply information
+        logger.info(`[TelegramChatView] Sending reply to event ${replyToEvent.getId?.() || replyToEvent.id}`);
+
+        // Create content object with reply information
+        messageContent = {
+          msgtype: 'm.text',
+          body: inputMessage,
+          format: 'org.matrix.custom.html',
+          formatted_body: inputMessage.replace(/\n/g, '<br/>')
+        };
+
+        // Add reply relation
+        addReplyToMessageContent(messageContent, replyToEvent);
+      }
+
+      // Create an optimistic message to show immediately
+      const optimisticMessage = {
+        id: `temp_${Date.now()}`,
+        sender: client.getUserId(),
+        senderName: 'You',
+        content: messageContent,
+        body: inputMessage,
+        timestamp: Date.now(),
+        isFromMe: true,
+        eventType: 'm.room.message',
+        roomId: selectedContact.id,
+        isOptimistic: true // Mark as optimistic update
+      };
+
+      // Add the optimistic message to the state BEFORE sending
+      // This ensures the user sees their message immediately
+      try {
+        setMessages(prevMessages => {
+          try {
+            return [...prevMessages, optimisticMessage].sort((a, b) => a.timestamp - b.timestamp);
+          } catch (innerError) {
+            logger.error('[TelegramChatView] Error adding optimistic message:', innerError);
+            return prevMessages; // Return unchanged messages on error
+          }
+        });
+      } catch (outerError) {
+        logger.error('[TelegramChatView] Error updating messages state with optimistic message:', outerError);
+      }
+
+      // Clear input and reply state immediately for better UX
+      setInputMessage('');
+      setReplyToEvent(null);
+
+      // Scroll to bottom immediately
+      if (messagesEndRef.current) {
+        messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+      }
+
+      // Now send the actual message in the background
+      logger.info(`[TelegramChatView] Sending message with content:`, JSON.stringify(messageContent).substring(0, 100) + '...');
+      const eventId = await matrixTimelineManager.sendMessage(selectedContact.id, messageContent);
+
+      if (eventId) {
+        logger.info(`[TelegramChatView] Message sent successfully with event ID: ${eventId}`);
+        toast.success('Message sent');
+
+        // Replace the optimistic message with the real one
+        try {
+          setMessages(prevMessages => {
+            try {
+              // Find and replace the optimistic message with the real one
+              return prevMessages.map(msg => {
+                if (msg.isOptimistic && msg.body === optimisticMessage.body) {
+                  // Return a new message with the real event ID but keep the same content
+                  return {
+                    ...msg,
+                    id: eventId,
+                    isOptimistic: false
+                  };
+                }
+                return msg;
+              });
+            } catch (innerError) {
+              logger.error('[TelegramChatView] Error replacing optimistic message:', innerError);
+              return prevMessages; // Return unchanged messages on error
+            }
+          });
+        } catch (outerError) {
+          logger.error('[TelegramChatView] Error updating messages state after send:', outerError);
+        }
+
+        // Store the event ID to prevent duplicate processing when it comes through the timeline
+        // This is crucial to prevent duplicate messages
+        window.lastSentEventId = eventId;
+
+        // Don't reload messages after sending - this causes duplicates
+        // The real-time updates will handle any necessary updates
+
+        // Clear the ID after a short delay to allow for processing
+        setTimeout(() => {
+          window.lastSentEventId = null;
+        }, 5000);
+      } else {
+        logger.warn('[TelegramChatView] Message sent but no event ID returned');
+        // We'll keep the optimistic message as is
+      }
+    } catch (err) {
+      logger.error('[TelegramChatView] Error sending message:', err);
+      toast.error(`Failed to send message: ${err.message || 'Please try again'}`);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  // Handle starting a reply to a message
+  const handleReplyToMessage = (message) => {
+    if (!message || !message.rawEvent) return;
+
+    logger.info(`[TelegramChatView] Setting up reply to message: ${message.id}`);
+    setReplyToEvent(message.rawEvent);
+  };
+
+  // Handle canceling a reply
+  const handleCancelReply = () => {
+    setReplyToEvent(null);
+  };
+
+  // Show message if no contact is selected
+  if (!selectedContact) {
     return (
-      <div className="p-6 h-full flex flex-col">
-        <div className="flex justify-between items-center mb-6">
-          <div className="flex items-center">
-            <FaTelegram className="text-[#0088cc] text-2xl mr-2" />
-            <h2 className="text-xl font-semibold text-white">Telegram</h2>
-          </div>
-          <div className="w-5 h-5 rounded-full border-2 border-t-transparent border-[#0088cc] animate-spin"></div>
-        </div>
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center p-6 max-w-md">
-            <div className="relative w-16 h-16 mx-auto mb-6">
-              <div className="absolute inset-0 rounded-full border-4 border-t-transparent border-[#0088cc] animate-spin"></div>
-              <div className="absolute inset-3 rounded-full border-2 border-t-transparent border-[#0088cc] animate-spin animation-delay-150"></div>
-              <FaTelegram className="absolute inset-0 m-auto text-[#0088cc] text-2xl" />
+      <div className="flex flex-col h-full bg-gradient-to-b from-neutral-900 to-neutral-950 text-white">
+        <div className="flex-1 flex items-center justify-center p-6">
+          <div className="text-center p-8 max-w-md bg-neutral-800/30 rounded-xl border border-white/5 shadow-lg">
+            <div className="w-20 h-20 rounded-full bg-[#0088cc]/10 flex items-center justify-center mx-auto mb-6">
+              <FiMessageCircle className="text-[#0088cc] text-4xl" />
             </div>
-            <h3 className="text-xl font-medium text-white mb-2">Loading Conversations</h3>
-            <p className="text-gray-400 mb-6">Setting up your Telegram connection</p>
-            <button
-              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-md text-sm text-white transition-colors"
-              onClick={() => {
-                // Try to refresh contacts
-                logger.info('[TelegramContactList] Manual refresh requested');
-                loadContacts();
-
-                // If we've been loading for too long, show a placeholder
-                setTimeout(() => {
-                  if (loading) {
-                    logger.warn('[TelegramContactList] Still loading after manual refresh, showing placeholder');
-
-                    const placeholderContact = {
-                      id: 'telegram_placeholder',
-                      name: 'Telegram',
-                      avatar: null,
-                      lastMessage: 'Connected to Telegram',
-                      timestamp: Date.now(),
-                      unreadCount: 0,
-                      isGroup: false,
-                      isTelegram: true,
-                      members: 1,
-                      isPlaceholder: true
-                    };
-                    setContacts([placeholderContact]);
-                    setFilteredContacts([placeholderContact]);
-                    setLoading(false);
-                  }
-                }, 5000);
-              }}
-            >
-              Refresh
-            </button>
+            <h3 className="text-2xl font-medium text-white mb-3">Select a conversation</h3>
+            <p className="text-gray-400 mb-6">Choose a contact from the list to start chatting</p>
+            <div className="flex justify-center space-x-2 text-xs text-gray-500">
+              <span className="px-2 py-1 bg-neutral-800 rounded-full">Telegram</span>
+              <span className="px-2 py-1 bg-neutral-800 rounded-full">Matrix</span>
+              <span className="px-2 py-1 bg-neutral-800 rounded-full">End-to-End Encrypted</span>
+            </div>
           </div>
         </div>
       </div>
     );
   }
 
-  if (error) {
-    return (
-      <div className="p-6 h-full flex flex-col">
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-xl font-semibold text-white">Telegram</h2>
-          <button
-            className="p-2 bg-neutral-800 rounded-full w-auto text-gray-400 hover:text-white transition-colors"
-            onClick={handleRefresh}
-          >
-            <FiRefreshCw className="w-5 h-5" />
-          </button>
-        </div>
-
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center max-w-md">
-            <div className="bg-red-500 bg-opacity-10 p-6 rounded-full mb-6 inline-block">
-              <FiAlertCircle className="text-red-500 text-4xl" />
-            </div>
-            <h3 className="text-xl font-medium text-white mb-2">Something went wrong</h3>
-            <p className="text-gray-400 mb-6">{error}</p>
-            <button
-              onClick={loadContacts}
-              className="px-6 py-3 bg-[#0088cc] text-white rounded-lg hover:bg-[#0099dd] transition-colors flex items-center justify-center mx-auto"
-            >
-              <FiRefreshCw className="mr-2" />
-              Try Again
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Render loading state if client is loading
+  // Show loading if client is not available
   if (clientLoading) {
     return (
-      <div className="flex flex-col h-full bg-gray-900 text-white">
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center p-6 max-w-md">
-            <div className="relative w-16 h-16 mx-auto mb-6">
-              <div className="absolute inset-0 rounded-full border-4 border-t-transparent border-[#0088cc] animate-spin"></div>
-              <div className="absolute inset-3 rounded-full border-2 border-t-transparent border-[#0088cc] animate-spin animation-delay-150"></div>
-              <FaTelegram className="absolute inset-0 m-auto text-[#0088cc] text-2xl" />
-            </div>
-            <h3 className="text-xl font-medium text-white mb-2">Loading Telegram</h3>
-            <p className="text-gray-400 mb-4">Setting up your secure connection</p>
-            <button
-              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-md text-sm text-white transition-colors"
-              onClick={() => {
-                // Refresh the page as a last resort
-                window.location.reload();
-              }}
-            >
-              Refresh
-            </button>
+      <div className="h-full flex items-center justify-center bg-gradient-to-b from-neutral-900 to-neutral-950 p-6">
+        <div className="text-center bg-neutral-800/30 p-8 rounded-xl border border-white/5 shadow-lg max-w-md">
+          <div className="w-16 h-16 border-4 border-t-[#0088cc] border-r-transparent border-b-[#0088cc]/30 border-l-[#0088cc]/60 rounded-full animate-spin mx-auto mb-6"></div>
+          <h3 className="text-xl font-medium text-white mb-3">Connecting to Matrix</h3>
+          <p className="text-gray-400 mb-4">Please wait while we establish a connection...</p>
+          <div className="w-full bg-neutral-700/30 h-1.5 rounded-full overflow-hidden">
+            <div className="h-full bg-[#0088cc] rounded-full animate-pulse" style={{ width: '60%' }}></div>
           </div>
         </div>
       </div>
+    );
+  }
+
+  // Show confirmation UI if needed
+  if (needsConfirmation) {
+    return (
+      <ChatConfirmation
+        contact={selectedContact}
+        onConfirm={handleConfirmViewChat}
+        isJoining={isJoining}
+        error={joinError}
+      />
     );
   }
 
   return (
-    <div className="contact-list-container telegram-contact-list p-6 h-full flex flex-col">
-      <div className="flex justify-between items-center mb-6">
-        <div className="flex items-center">
-          <FaTelegram className="text-[#0088cc] text-2xl mr-2" />
-          <h2 className="text-xl font-semibold text-white">Telegram</h2>
+    <div className="chat-view-container telegram-chat-view h-full flex flex-col bg-neutral-900 relative">
+      {/* Room Members Panel */}
+      {showMemberList && (
+        <div className="absolute inset-0 z-20">
+          <RoomMemberList
+            roomId={selectedContact.id}
+            onClose={() => setShowMemberList(false)}
+          />
         </div>
-        <div className="flex items-center space-x-2">
-          <button
-            className="p-2 w-auto bg-neutral-800 rounded-full text-gray-400 hover:text-white transition-colors"
-            onClick={() => setShowArchived(!showArchived)}
-            title={showArchived ? 'Hide archived' : 'Show archived'}
-          >
-            <FiSettings className="w-5 h-5" />
-          </button>
-          {contacts.some(contact => contact.needsRefresh) ? (
-            <button
-              className="p-2 px-4 bg-yellow-600 text-white rounded-lg shadow-lg hover:bg-yellow-500 transition-all duration-300 transform hover:scale-105 animate-pulse flex items-center"
-              onClick={handleRefresh}
-              disabled={refreshing}
-              title="Refresh conversations"
-            >
-              <FiRefreshCw className={`w-5 h-5 ${refreshing ? 'animate-spin' : ''} mr-1`} />
-              <span className="font-medium">Refresh Now</span>
-            </button>
+      )}
+
+      {/* AI Feature Tour */}
+      {showAITour && (
+        <AIFeatureTour onClose={() => setShowAITour(false)} />
+      )}
+      {/* Chat header */}
+      <div className="py-3 px-4 border-b border-white/10 bg-neutral-900 flex items-center sticky top-0 z-10 shadow-sm">
+        <div className="mr-3 relative">
+          {selectedContact.avatar ? (
+            <img
+              src={selectedContact.avatar}
+              alt={selectedContact.name}
+              className="w-10 h-10 rounded-full object-cover border-2 border-transparent hover:border-[#0088cc] transition-colors"
+            />
           ) : (
-            <button
-              className="p-2 w-auto bg-neutral-800 rounded-full text-gray-400 hover:text-white transition-colors"
-              onClick={handleRefresh}
-              disabled={refreshing}
-            >
-              <FiRefreshCw className={`w-5 h-5 ${refreshing ? 'animate-spin' : ''}`} />
-            </button>
+            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#0088cc] to-[#0077b6] flex items-center justify-center shadow-md hover:shadow-lg transition-all duration-200">
+              {selectedContact.isGroup ? (
+                <FiUsers className="text-white" />
+              ) : (
+                <FiUser className="text-white" />
+              )}
+            </div>
           )}
+          <div className="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-green-500 border-2 border-neutral-900"></div>
         </div>
-      </div>
 
-      <div className="relative mb-6">
-        <input
-          type="text"
-          placeholder="Search conversations..."
-          className="w-full bg-neutral-800 text-white rounded-lg pl-10 pr-4 py-2 focus:outline-none focus:ring-2 focus:ring-[#0088cc] transition-all duration-200"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-        />
-        <FiSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-      </div>
-
-      {filteredContacts.length === 0 ? (
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center max-w-md">
-            <div className="bg-gray-800 p-6 rounded-full mb-4 inline-block">
-              <FiMessageCircle className="w-8 h-8 text-[#0088cc] mx-auto" />
-            </div>
-            <h3 className="text-xl font-medium text-white mb-2">No conversations found</h3>
-            <p className="text-gray-400">
-              {searchQuery
-                ? `No results for "${searchQuery}". Try a different search term.`
-                : 'Connect with Telegram to start messaging.'}
-            </p>
-          </div>
+        <div className="flex-1 min-w-0">
+          <h3 className="font-medium text-white truncate text-base">{selectedContact.name}</h3>
+          <p className="text-xs text-gray-400 truncate flex items-center">
+            <span className="inline-block w-2 h-2 rounded-full bg-green-500 mr-1"></span>
+            {selectedContact.isGroup
+              ? `${selectedContact.members || 'Multiple'} members`
+              : 'Online now'}
+          </p>
         </div>
-      ) : (
-        <div className="flex-1 overflow-y-auto">
-          <div className="space-y-4">
-            {/* Filter controls */}
-            <div className="flex items-center justify-between px-2 py-2 bg-neutral-800 rounded-md">
-              <div className="flex items-center space-x-2">
-                <FiFilter className="text-gray-400" />
-                <span className="text-sm text-white">Filter</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <button
-                  className={`px-2 py-1 text-xs rounded-md transition-colors ${activeFilter === 'all' ? 'bg-[#0088cc] text-white' : 'bg-neutral-700 text-gray-300'}`}
-                  onClick={() => setActiveFilter('all')}
-                >
-                  All
-                </button>
-                <button
-                  className={`px-2 py-1 text-xs rounded-md transition-colors ${activeFilter === 'unread' ? 'bg-[#0088cc] text-white' : 'bg-neutral-700 text-gray-300'}`}
-                  onClick={() => setActiveFilter('unread')}
-                >
-                  Unread
-                </button>
-                {/* <button
-                  className={`px-2 py-1 text-xs rounded-md transition-colors ${showMuted ? 'bg-neutral-700 text-gray-300' : 'bg-red-500 text-white'}`}
-                  onClick={() => setShowMuted(!showMuted)}
-                >
-                  {showMuted ? 'Hide Muted' : 'Show Muted'}
-                </button> */}
-              </div>
-            </div>
 
-            {/* Organized contacts by category - ALWAYS show key categories */}
-            {Object.keys(ContactCategories).map(categoryKey => {
-              const category = ContactCategories[categoryKey];
-              const categoryContacts = organizedContacts[category] || [];
+        <div className="flex items-center gap-2" id="header-buttons">
+          {/* Refresh button */}
+          <button
+            onClick={async () => {
+              // Show a loading indicator without clearing messages
+              const refreshIndicator = toast.loading('Refreshing messages...');
 
-              // Always show DIRECT_MESSAGES, GROUPS, and CHANNELS categories even if empty
-              const isKeyCategory =
-                category === ContactCategories.DIRECT_MESSAGES ||
-                category === ContactCategories.GROUPS ||
-                category === ContactCategories.CHANNELS;
+              try {
+                // Load new messages in the background
+                const newMessages = await matrixTimelineManager.loadMessages(selectedContact.id, {
+                  limit: 50,
+                  forceRefresh: true
+                });
 
-              // Skip empty categories unless they're key categories
-              if (categoryContacts.length === 0 && !isKeyCategory) return null;
+                // Fetch parent events for replies
+                await fetchParentEvents(newMessages);
 
-              // Skip categories based on filter
-              if (activeFilter === 'unread' &&
-                  category !== ContactCategories.UNREAD &&
-                  category !== ContactCategories.MENTIONS &&
-                  category !== ContactCategories.PRIORITY) {
-                return null;
+                // Merge with existing messages, avoiding duplicates
+                const existingIds = new Set(messages.map(msg => msg.id));
+                const uniqueNewMessages = newMessages.filter(msg => !existingIds.has(msg.id));
+
+                if (uniqueNewMessages.length > 0) {
+                  // Update messages state with the new messages
+                  setMessages(prevMessages => {
+                    const combinedMessages = [...prevMessages, ...uniqueNewMessages];
+                    // Sort by timestamp
+                    return combinedMessages.sort((a, b) => a.timestamp - b.timestamp);
+                  });
+                  toast.success(`Loaded ${uniqueNewMessages.length} new messages`, { id: refreshIndicator });
+                } else {
+                  toast.success('You\'re all caught up!', { id: refreshIndicator });
+                }
+              } catch (error) {
+                logger.error('[TelegramChatView] Error refreshing messages:', error);
+                toast.error('Failed to refresh messages', { id: refreshIndicator });
               }
+            }}
+            className="p-2 bg-[#0088CC] text-gray-300 hover:text-white hover:bg-neutral-800 rounded-full transition-colors"
+            title="Refresh messages"
+            disabled={loading}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={loading ? 'animate-spin' : ''}>
+              <path d="M23 4v6h-6"/>
+              <path d="M1 20v-6h6"/>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+          </button>
 
-              return (
-                <ContactCategory
-                  key={category}
-                  category={category}
-                  contacts={categoryContacts}
-                  onContactSelect={onContactSelect}
-                  selectedContactId={selectedContactId}
-                  isExpanded={true}
-                  onPinContact={togglePinContact}
-                  onMuteContact={toggleMuteContact}
-                  onArchiveContact={toggleArchiveContact}
-                />
-              );
-            })}
+          {/* Room members button */}
+          <button
+            onClick={() => setShowMemberList(true)}
+            className="p-2 bg-[#0088CC] text-gray-300 hover:text-white hover:bg-neutral-800 rounded-full transition-colors"
+            title="View room members"
+          >
+            <FiUsers className="w-4 h-4" />
+          </button>
 
-            {/* If no organized contacts are shown, show all contacts */}
-            {Object.values(organizedContacts).flat().length === 0 && (
-              <div className="space-y-2">
-                {filteredContacts.map(contact => (
-                  <div
-                    key={contact.id}
-                    className={`flex items-center p-3 rounded-lg cursor-pointer transition-all duration-200 ${
-                      selectedContactId === contact.id
-                        ? 'bg-[#0088cc] bg-opacity-20 border-l-4 border-[#0088cc]'
-                        : 'hover:bg-neutral-800 border-l-4 border-transparent'
-                    }`}
-                    onClick={() => onContactSelect(contact)}
-                  >
-                    <div className="relative ml-2">
-                      {contact.avatar ? (
-                        <img
-                          src={contact.avatar}
-                          alt={contact.name}
-                          className={`w-12 h-12 rounded-full object-cover transition-all duration-200 ${
-                            selectedContactId === contact.id ? 'ring-2 ring-[#0088cc]' : ''
-                          }`}
-                          onError={(e) => {
-                            e.target.onerror = null;
-                            e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(contact.name)}&background=0088cc&color=fff`;
-                          }}
-                        />
-                      ) : (
-                        <div className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-200 ${
-                          selectedContactId === contact.id
-                            ? 'bg-[#0088cc]'
-                            : 'bg-gray-700 hover:bg-[#0088cc] hover:bg-opacity-70'
-                        }`}>
-                          {contact.isGroup ? (
-                            <FiUsers className="text-white text-lg" />
-                          ) : (
-                            <span className="text-white text-lg font-medium">
-                              {contact.telegramContact?.firstName?.charAt(0) || contact.name.charAt(0).toUpperCase()}
-                            </span>
-                          )}
-                        </div>
-                      )}
+          {/* AI Assistant button */}
+          <AIAssistantButton
+            client={client}
+            selectedContact={selectedContact}
+            className="bg-[#0088CC] hover:bg-[#0077BB] ai-assistant-button"
+          />
 
-                      {contact.unreadCount > 0 && !contact.isPlaceholder && (
-                        <div className="absolute -top-1 -right-1 bg-green-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center shadow-md">
-                          {contact.unreadCount > 9 ? '9+' : contact.unreadCount}
-                        </div>
-                      )}
+          {/* Help/Tour button */}
+          <button
+            onClick={() => setShowAITour(true)}
+            className="p-2 rounded-full bg-[#0088CC] text-white hover:bg-[#0077BB] transition-colors relative overflow-visible"
+            title="Take AI Assistant Tour"
+          >
+            <FiHelpCircle className="w-4 h-4" />
+            <span className="absolute inset-0 rounded-full bg-white/20 animate-ping"></span>
+          </button>
 
-                      {contact.isPlaceholder && (
-                        <div className="absolute bottom-0 right-0 bg-[#0088cc] text-white text-xs rounded-full w-5 h-5 flex items-center justify-center shadow-md">
-                          <FiPlus />
-                        </div>
-                      )}
-                    </div>
+          {/* Call button */}
+          <button
+            className="p-2 bg-[#0088CC] text-gray-400 hover:text-white hover:bg-neutral-800 rounded-full transition-colors"
+            title="Call"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
+            </svg>
+          </button>
 
-                    <div className="ml-3 flex-1 min-w-0">
-                      <div className="flex justify-between items-center">
-                        <h3 className="font-medium truncate text-white">
-                          {contact.telegramContact?.firstName || contact.name}
-                          {contact.telegramContact?.lastName && ` ${contact.telegramContact.lastName}`}
-                          {contact.isPlaceholder && contact.isError && " (Error)"}
-                        </h3>
-                        {contact.timestamp && (
-                          <span className="text-xs text-gray-400">
-                            {formatTimestamp(contact.timestamp)}
-                          </span>
-                        )}
-                      </div>
+          {/* Menu button */}
+          <button
+            className="p-2 bg-[#0088CC] text-gray-300 hover:text-white hover:bg-neutral-800 rounded-full transition-colors"
+            title="More options"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="1"></circle>
+              <circle cx="19" cy="12" r="1"></circle>
+              <circle cx="5" cy="12" r="1"></circle>
+            </svg>
+          </button>
+        </div>
+      </div>
 
-                      <div className="flex items-center">
-                        {contact.telegramContact?.username && (
-                          <span className="text-[#0088cc] text-xs mr-2">@{contact.telegramContact.username}</span>
-                        )}
-                        <p className="text-sm truncate text-gray-400">
-                          {contact.lastMessage ||
-                           (contact.isGroup ? `${contact.members} members` :
-                            (contact.isPlaceholder ? 'Tap to view messages' :
-                             (contact.room ? 'Loading messages...' : 'Tap to view conversation')))}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+      {/* Messages area */}
+      <div className="messages-container flex-1 overflow-y-auto p-4 space-y-4 bg-gradient-to-b from-neutral-900 to-neutral-950">
+        {loading ? (
+          <div className="flex flex-col items-center justify-center h-full">
+            <div className="w-10 h-10 border-4 border-t-[#0088cc] border-r-transparent border-b-[#0088cc]/30 border-l-[#0088cc]/60 rounded-full animate-spin mb-4"></div>
+            <p className="text-gray-400 animate-pulse">Loading messages...</p>
+          </div>
+        ) : error ? (
+          <div className="flex items-center justify-center h-full">
+            <div className="text-center bg-neutral-800/50 p-6 rounded-xl shadow-lg max-w-md mx-auto border border-red-500/20">
+              <div className="w-16 h-16 rounded-full bg-red-500/10 flex items-center justify-center mx-auto mb-4">
+                <FiMessageCircle className="text-red-500 text-2xl" />
+              </div>
+              <h3 className="text-white font-medium text-lg mb-2">Unable to load messages</h3>
+              <p className="text-gray-400 mb-4 text-sm">{error}</p>
+              <button
+                onClick={loadMessages}
+                className="px-4 py-2 bg-[#0088cc] text-white rounded-lg hover:bg-[#0077b6] transition-all duration-200 shadow-md hover:shadow-lg transform hover:-translate-y-0.5"
+              >
+                Try Again
+              </button>
+            </div>
+          </div>
+        ) : messages.length === 0 ? (
+          <div className="h-full flex items-center justify-center">
+            <div className="text-center bg-neutral-800/50 p-8 rounded-xl max-w-md mx-auto border border-[#0088cc]/10">
+              <div className="w-16 h-16 rounded-full bg-[#0088cc]/10 flex items-center justify-center mx-auto mb-4">
+                <FiMessageCircle className="text-[#0088cc] text-2xl" />
+              </div>
+              <h3 className="text-xl font-medium text-white mb-2">No messages yet</h3>
+              <p className="text-gray-400 mb-4">Start the conversation by sending a message</p>
+              <div className="text-xs text-gray-500 mt-4 flex items-center justify-center">
+                <div className="w-1.5 h-1.5 bg-green-500 rounded-full mr-1.5"></div>
+                <span>{selectedContact.name} is online</span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Load More Messages button */}
+            {hasMoreMessages && (
+              <div className="flex justify-center py-3">
+                <button
+                  onClick={loadMoreMessages}
+                  disabled={loadingMore}
+                  className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-white rounded-full transition-colors flex items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {loadingMore ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-white mr-2"></div>
+                      <span>Loading...</span>
+                    </>
+                  ) : (
+                    <span>Load More Messages</span>
+                  )}
+                </button>
               </div>
             )}
-          </div>
+
+            {/* Group messages by date and add date separators */}
+            {(() => {
+              // Group messages by date
+              const messagesByDate = {};
+              messages.forEach(message => {
+                const date = new Date(message.timestamp);
+                const dateString = date.toDateString();
+                if (!messagesByDate[dateString]) {
+                  messagesByDate[dateString] = [];
+                }
+                messagesByDate[dateString].push(message);
+              });
+
+              // Render messages with date separators
+              return Object.entries(messagesByDate)
+                .sort(([dateA], [dateB]) => new Date(dateA) - new Date(dateB))
+                .map(([dateString, messagesForDate]) => (
+                  <React.Fragment key={dateString}>
+                    <DateSeparator date={new Date(dateString)} />
+                    {messagesForDate.map((message, index) => (
+                      <div
+                        key={message.id || `${dateString}-${index}`}
+                        className={`message-container ${message.isFromMe ? 'message-container-sent' : 'message-container-received'} group`}
+                      >
+                {/* Avatar for received messages */}
+                {!message.isFromMe && (
+                  <div className="message-avatar message-avatar-received">
+                    {message.sender && message.sender.includes('telegram_') && message.content && message.content.sender_avatar ? (
+                      // If we have a sender avatar URL, use it
+                      <div className="w-8 h-8 rounded-full overflow-hidden border-2 border-transparent hover:border-[#0088cc] transition-colors">
+                        <img
+                          src={getFallbackAvatarUrl(message.senderName || 'T', '#0088cc')}
+                          data-mxc-url={message.content.sender_avatar}
+                          alt="Avatar"
+                          className="w-full h-full object-cover"
+                          onLoad={(e) => {
+                            // If this is a fallback avatar and we have a real avatar URL, load it asynchronously
+                            if (message.content.sender_avatar && client && e.target.src.startsWith('data:')) {
+                              (async () => {
+                                try {
+                                  // We need to use the synchronous version for now since we haven't updated all callers
+                                  // In a future update, we should make getMediaUrl fully async
+                                  const mediaUrl = getMediaUrl(client, message.content.sender_avatar, {
+                                    type: 'thumbnail',
+                                    width: 80,
+                                    height: 80,
+                                    method: 'crop',
+                                    fallbackUrl: getFallbackAvatarUrl(message.senderName || 'T', '#0088cc')
+                                  });
+                                  if (mediaUrl && !mediaUrl.startsWith('data:')) {
+                                    e.target.src = mediaUrl;
+                                  }
+                                } catch (error) {
+                                  logger.warn('[TelegramChatView] Error loading avatar:', error);
+                                }
+                              })();
+                            }
+                          }}
+                          onError={(e) => {
+                            // If image fails to load, show a fallback
+                            e.target.parentNode.innerHTML = `<div class="w-8 h-8 rounded-full bg-gradient-to-br from-[#0088cc] to-[#0077b6] flex items-center justify-center shadow-md">${
+                              message.senderName ? message.senderName.charAt(0).toUpperCase() : 'T'
+                            }</div>`;
+                          }}
+                        />
+                      </div>
+                    ) : (
+                      // Otherwise, show the default avatar with initial
+                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#0088cc] to-[#0077b6] flex items-center justify-center text-sm font-medium text-white overflow-hidden shadow-md">
+                        {(() => {
+                          // First check if we have a senderName in the message
+                          if (message.senderName) {
+                            return message.senderName.charAt(0).toUpperCase();
+                          }
+
+                          // Try to get the first letter of the sender's name
+                          if (message.sender && client) {
+                            const roomId = selectedContact.id;
+                            const room = client.getRoom(roomId);
+
+                            if (room) {
+                              const member = room.getMember(message.sender);
+                              if (member && member.name) {
+                                return member.name.charAt(0).toUpperCase();
+                              }
+                            }
+
+                            // For Telegram users, try to get a better initial
+                            if (message.sender.includes('telegram_')) {
+                              // Try to get the name from the message content
+                              if (message.content && message.content.sender_name) {
+                                return message.content.sender_name.charAt(0).toUpperCase();
+                              }
+
+                              // If we have a Telegram ID, use 'T'
+                              return 'T';
+                            }
+
+                            // Fallback to first character of Matrix ID
+                            return message.sender.charAt(0).toUpperCase();
+                          }
+                          return '?';
+                        })()}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Message bubble with action wheel - don't show action wheel for welcome messages */}
+                {message.id && message.id.startsWith('welcome-') ? (
+                  <div className="message-bubble message-bubble-received">
+                    <div className="message-content">
+                      {message.content && message.content.body ? message.content.body : 'Welcome message'}
+                    </div>
+                    <div className="message-timestamp message-timestamp-received">
+                      <span>{new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <MessageBubbleWithWheel
+                    message={message}
+                    client={client}
+                    selectedContact={selectedContact}
+                    parentEvents={parentEvents}
+                    onReply={handleReplyToMessage}
+                    onDelete={() => toast.error('Delete functionality coming soon')}
+                    onPin={() => toast.error('Pin functionality coming soon')}
+                    onReact={() => toast.error('React functionality coming soon')}
+                  />
+                )}
+                <div className="hidden">
+                  {/* Sender name - Hidden but kept for reference */}
+                  {!message.isFromMe && (
+                    <div className="text-xs font-medium text-blue-300 mb-1">
+                      {(() => {
+                        // First check if we have a senderName in the message object
+                        // This would have been set by matrixTimelineManager._createMessageFromEvent
+                        if (message.senderName && message.senderName !== message.sender) {
+                          return message.senderName;
+                        }
+
+                        // Get proper display name from room member
+                        if (message.sender && client) {
+                          const roomId = selectedContact.id;
+                          const room = client.getRoom(roomId);
+
+                          if (room) {
+                            const member = room.getMember(message.sender);
+                            if (member && member.name) {
+                              return member.name;
+                            }
+                          }
+
+                          // Fallback: For Telegram users, try to get a better name
+                          if (message.sender.includes('telegram_')) {
+                            // Try to extract a more user-friendly name from the room state
+                            const telegramId = message.sender.match(/telegram_(\d+)/);
+                            if (telegramId && telegramId[1]) {
+                              // Look for a display name in the room state
+                              const room = client.getRoom(selectedContact.id);
+                              if (room && room.currentState) {
+                                // Try to get from room state events
+                                try {
+                                  const stateEvents = room.currentState.getStateEvents('m.room.member');
+                                  for (const event of stateEvents) {
+                                    const content = event.getContent();
+                                    const userId = event.getStateKey();
+                                    if (userId === message.sender && content.displayname) {
+                                      return content.displayname;
+                                    }
+                                  }
+                                } catch (error) {
+                                  logger.warn('[TelegramChatView] Error getting state events:', error);
+                                }
+
+                                // Try to get directly from the member state
+                                try {
+                                  const memberEvent = room.currentState.getStateEvents('m.room.member', message.sender);
+                                  if (memberEvent && typeof memberEvent.getContent === 'function') {
+                                    const memberContent = memberEvent.getContent();
+                                    if (memberContent.displayname) {
+                                      return memberContent.displayname;
+                                    }
+                                  }
+                                } catch (error) {
+                                  logger.warn('[TelegramChatView] Error getting member state:', error);
+                                }
+                              }
+
+                              // Try to get the name from the message content
+                              if (message.content && message.content.sender_name) {
+                                return message.content.sender_name;
+                              }
+
+                              // If we still don't have a name, use a friendly Telegram user name
+                              return `Telegram User ${telegramId[1]}`;
+                            }
+                          }
+
+                          // For other users, just use the first part of the Matrix ID
+                          return message.sender.split(':')[0].replace('@', '');
+                        }
+                        return 'Unknown';
+                      })()}
+                    </div>
+                  )}
+
+                  {/* Reply preview if this message is a reply */}
+                  {message.rawEvent && getParentEventId(message.rawEvent) && parentEvents[getParentEventId(message.rawEvent)] && (
+                    <MessageReply
+                      replyToEvent={parentEvents[getParentEventId(message.rawEvent)]}
+                      client={client}
+                    />
+                  )}
+
+                  {/* Message content */}
+                  <div className="break-words text-sm leading-relaxed">
+                    {(() => {
+                      // Handle different message content types
+                      if (!message.content) {
+                        return 'Message content unavailable';
+                      }
+
+                      if (typeof message.content === 'string') {
+                        return message.content;
+                      }
+
+                      if (typeof message.content === 'object') {
+                        // Handle text messages
+                        if (message.content.body) {
+                          return message.content.body;
+                        }
+
+                        // Handle text messages with msgtype
+                        if (message.content.msgtype === 'm.text' && message.content.text) {
+                          return message.content.text;
+                        }
+
+                        // Handle image messages
+                        if (message.content.msgtype === 'm.image') {
+                          // Get the image URL
+                          let imageUrl = message.content.url;
+
+                          // Handle mxc:// URLs
+                          if (imageUrl && imageUrl.startsWith('mxc://') && client) {
+                            // Use our media utility to get the URL with proper caching and error handling
+                            const isLargeImage = message.content.info &&
+                                (message.content.info.w > 800 || message.content.info.h > 800);
+
+                            imageUrl = getMediaUrl(client, imageUrl, {
+                              type: isLargeImage ? 'thumbnail' : 'download',
+                              width: 800,
+                              height: 800,
+                              method: 'scale',
+                              fallbackUrl: '/images/image-placeholder.png'
+                            });
+                          }
+
+                          if (imageUrl) {
+                            return (
+                              <div className="mt-1">
+                                <img
+                                  src={imageUrl}
+                                  alt={message.content.body || 'Image'}
+                                  className="max-w-full rounded-md max-h-[200px] object-contain bg-neutral-950/50"
+                                  onError={(e) => {
+                                    // If image fails to load, try using the thumbnail
+                                    if (message.content.info && message.content.info.thumbnail_url) {
+                                      let thumbUrl = message.content.info.thumbnail_url;
+                                      if (thumbUrl.startsWith('mxc://') && client) {
+                                        thumbUrl = client.mxcUrlToHttp(thumbUrl);
+                                      }
+                                      e.target.src = thumbUrl;
+                                    } else {
+                                      // If no thumbnail, show a placeholder
+                                      e.target.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgZmlsbD0iIzMzMzMzMyIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LXNpemU9IjI0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBhbGlnbm1lbnQtYmFzZWxpbmU9Im1pZGRsZSIgZmlsbD0id2hpdGUiPkltYWdlIHVuYXZhaWxhYmxlPC90ZXh0Pjwvc3ZnPg==';
+                                    }
+                                  }}
+                                />
+                                {message.content.body && message.content.body !== 'Image' && (
+                                  <div className="mt-1 text-xs text-gray-400">{message.content.body}</div>
+                                )}
+                              </div>
+                            );
+                          }
+                        }
+
+                        // Handle file messages
+                        if (message.content.msgtype === 'm.file') {
+                          // Get the file URL
+                          let fileUrl = message.content.url;
+
+                          // Handle mxc:// URLs
+                          if (fileUrl && fileUrl.startsWith('mxc://') && client) {
+                            try {
+                              // Extract the server name and media ID from the mxc URL
+                              // Format: mxc://<server-name>/<media-id>
+                              const [, serverName, mediaId] = fileUrl.match(/^mxc:\/\/([^/]+)\/(.+)$/) || [];
+
+                              if (serverName && mediaId) {
+                                // Use the correct Matrix media API endpoint for files
+                                const accessToken = client.getAccessToken();
+                                fileUrl = `${client.baseUrl}/_matrix/media/r0/download/${serverName}/${mediaId}?access_token=${encodeURIComponent(accessToken)}`;
+                              } else {
+                                // Fallback to the SDK's method
+                                fileUrl = client.mxcUrlToHttp(fileUrl);
+                              }
+                            } catch (error) {
+                              console.error('Error parsing file mxc URL:', error);
+                              // Fallback to the SDK's method
+                              fileUrl = client.mxcUrlToHttp(fileUrl);
+                            }
+                          }
+
+                          if (fileUrl) {
+                            return (
+                              <div className="flex items-center mt-1 bg-neutral-800/50 p-2 rounded-md">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                </svg>
+                                <div>
+                                  <div className="text-sm">{message.content.body || 'File'}</div>
+                                  <a href={fileUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-400 hover:underline">Download</a>
+                                  {message.content.info && message.content.info.size && (
+                                    <span className="text-xs text-gray-400 ml-2">
+                                      {Math.round(message.content.info.size / 1024)} KB
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          }
+                        }
+
+                        // Handle video messages
+                        if (message.content.msgtype === 'm.video') {
+                          // Get the video URL
+                          let videoUrl = message.content.url;
+
+                          // Handle mxc:// URLs
+                          if (videoUrl && videoUrl.startsWith('mxc://') && client) {
+                            // Use our media utility to get the URL with proper caching and error handling
+                            videoUrl = getMediaUrl(client, videoUrl, {
+                              type: 'download',
+                              fallbackUrl: '/images/video-placeholder.png'
+                            });
+                          }
+
+                          if (videoUrl) {
+                            return (
+                              <div className="mt-1">
+                                <video
+                                  controls
+                                  className="max-w-full rounded-md max-h-[200px] bg-neutral-950/50"
+                                  poster={message.content.info?.thumbnail_url && client ?
+                                    getMediaUrl(client, message.content.info.thumbnail_url, {
+                                      type: 'thumbnail',
+                                      width: 800,
+                                      height: 600,
+                                      method: 'scale',
+                                      fallbackUrl: '/images/video-placeholder.png'
+                                    }) :
+                                    '/images/video-placeholder.png'}
+                                >
+                                  <source src={videoUrl} type={message.content.info?.mimetype || 'video/mp4'} />
+                                  Your browser does not support the video tag.
+                                </video>
+                                {message.content.body && message.content.body !== 'Video' && (
+                                  <div className="mt-1 text-xs text-gray-400">{message.content.body}</div>
+                                )}
+                              </div>
+                            );
+                          }
+                        }
+
+                        // Handle audio messages
+                        if (message.content.msgtype === 'm.audio') {
+                          // Get the audio URL
+                          let audioUrl = message.content.url;
+
+                          // Handle mxc:// URLs
+                          if (audioUrl && audioUrl.startsWith('mxc://') && client) {
+                            try {
+                              // Extract the server name and media ID from the mxc URL
+                              // Format: mxc://<server-name>/<media-id>
+                              const [, serverName, mediaId] = audioUrl.match(/^mxc:\/\/([^/]+)\/(.+)$/) || [];
+
+                              if (serverName && mediaId) {
+                                // Use the correct Matrix media API endpoint for audio
+                                const accessToken = client.getAccessToken();
+                                audioUrl = `${client.baseUrl}/_matrix/media/r0/download/${serverName}/${mediaId}?access_token=${encodeURIComponent(accessToken)}`;
+                              } else {
+                                // Fallback to the SDK's method
+                                audioUrl = client.mxcUrlToHttp(audioUrl);
+                              }
+                            } catch (error) {
+                              console.error('Error parsing audio mxc URL:', error);
+                              // Fallback to the SDK's method
+                              audioUrl = client.mxcUrlToHttp(audioUrl);
+                            }
+                          }
+
+                          if (audioUrl) {
+                            return (
+                              <div className="mt-1 bg-neutral-800/50 p-2 rounded-md">
+                                <div className="flex items-center mb-1">
+                                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                                  </svg>
+                                  <div className="text-sm">{message.content.body || 'Audio'}</div>
+                                </div>
+                                <audio controls className="w-full">
+                                  <source src={audioUrl} type={message.content.info?.mimetype || 'audio/mpeg'} />
+                                  Your browser does not support the audio element.
+                                </audio>
+                              </div>
+                            );
+                          }
+                        }
+                      }
+
+                      return 'Message content unavailable';
+                    })()}
+                  </div>
+
+                  {/* Timestamp */}
+                  <div
+                    className={`text-[10px] mt-1 ${
+                      message.isFromMe ? 'text-blue-200' : 'text-gray-400'
+                    } text-right flex items-center justify-end`}
+                  >
+                    <span>{new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                  </div>
+                </div>
+
+                {/* Avatar for sent messages */}
+                {message.isFromMe && (
+                  <div className="message-avatar message-avatar-sent">
+                    {client?.getUserId() ? client.getUserId().charAt(0).toUpperCase() : 'Me'}
+                  </div>
+                )}
+              </div>
+                    ))}
+                  </React.Fragment>
+                ));
+            })()}
+            <div ref={messagesEndRef} />
+          </>
+        )}
+      </div>
+
+      {/* AI Action Buttons */}
+      {client && selectedContact && !selectedContact.isPlaceholder && (
+        <div className="px-3 pt-3">
+          <AIActionButtons
+            roomId={selectedContact.id}
+            client={client}
+            messages={messages}
+          />
         </div>
       )}
 
-      {/* Refresh button at the bottom */}
-      {!loading && filteredContacts.length > 0 && (
-        <div className="pt-4 mt-auto">
-          {contacts.some(contact => contact.needsRefresh) ? (
+      {/* Message input */}
+      <div className="p-3 border-t border-white/10 bg-neutral-900">
+        {/* Reply preview */}
+        {replyToEvent && (
+          <ReplyPreview
+            replyToEvent={replyToEvent}
+            onCancelReply={handleCancelReply}
+            client={client}
+          />
+        )}
+        {/* Attachment options */}
+        <div className="flex items-center justify-between mb-4 px-1">
+          <div className="flex space-x-4">
             <button
-              className={`w-full flex items-center justify-center py-3 px-4 rounded-lg transition-all duration-300 ${
-                refreshing
-                  ? 'bg-yellow-700 text-white'
-                  : 'bg-yellow-600 hover:bg-yellow-500 text-white shadow-lg hover:shadow-xl animate-pulse'
-              }`}
-              onClick={handleRefresh}
-              disabled={refreshing}
+              type="button"
+              className="text-gray-400 bg-neutral-800 hover:text-[#0088cc] transition-colors p-1 rounded-full hover:bg-neutral-800"
+              title="Attach files"
             >
-              {refreshing ? (
-                <>
-                  <div className="animate-spin rounded-full h-5 w-5 border-2 border-t-transparent border-white mr-2"></div>
-                  <span className="font-medium">Refreshing Contacts...</span>
-                </>
-              ) : (
-                <>
-                  <FiRefreshCw className="mr-2 h-5 w-5" />
-                  <span className="font-medium">⚠️ Refresh Contacts Now</span>
-                </>
-              )}
+              <FiPaperclip className="w-5 h-5" />
             </button>
-          ) : (
             <button
-              className={`w-full flex items-center justify-center py-2 px-4 rounded-lg transition-all duration-200 ${
-                refreshing
-                  ? 'bg-gray-700 text-gray-400'
-                  : 'bg-[#0088cc] hover:bg-[#0099dd] text-white shadow-md hover:shadow-lg'
-              }`}
-              onClick={handleRefresh}
-              disabled={refreshing}
+              type="button"
+              className="text-gray-400 bg-neutral-800 hover:text-[#0088cc] transition-colors p-1 rounded-full hover:bg-neutral-800"
+              title="Send images"
             >
-              {refreshing ? (
-                <>
-                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-t-transparent border-white mr-2"></div>
-                  <span>Refreshing...</span>
-                </>
-              ) : (
-                <>
-                  <FiRefreshCw className="mr-2" />
-                  <span>Refresh Conversations</span>
-                </>
-              )}
+              <FiImage className="w-5 h-5" />
             </button>
-          )}
+            {/* AI Assistant Button */}
+            <div className="ai-button-container relative">
+              <AIAssistantButton
+                client={client}
+                selectedContact={selectedContact}
+                className="bg-neutral-800 hover:bg-[#0088CC]/20 ai-assistant-button-composer"
+              />
+            </div>
+          </div>
+          <div>
+            <button
+              type="button"
+              className="text-gray-400 bg-neutral-800 hover:text-[#0088cc] transition-colors p-1 rounded-full hover:bg-neutral-800"
+              title="Format text"
+            >
+              <span className="font-bold text-sm">Aa</span>
+            </button>
+          </div>
         </div>
-      )}
+
+        {/* Message composer */}
+        <form onSubmit={handleSendMessage} className="flex items-center">
+          <div className="relative flex-1 items-center">
+            <div className="absolute bottom-2 left-2">
+              <button
+                type="button"
+                className="text-gray-400 bg-neutral-800 hover:text-[#0088cc] transition-colors p-1 rounded-full hover:bg-neutral-800"
+                title="Add emoji"
+              >
+                <FiSmile className="w-5 h-5" />
+              </button>
+            </div>
+            <textarea
+              value={inputMessage}
+              onChange={(e) => setInputMessage(e.target.value)}
+              placeholder="Type a message..."
+              rows={1}
+              className="w-full bg-neutral-800 text-white rounded-2xl pl-10 pr-4 py-3 focus:outline-none focus:ring-1 focus:ring-[#0088cc] resize-none min-h-[44px] max-h-[120px] overflow-auto"
+              style={{ scrollbarWidth: 'thin', scrollbarColor: '#555 #333' }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  if (inputMessage.trim()) {
+                    handleSendMessage(e);
+                  }
+                }
+              }}
+            />
+            <div className="absolute bottom-2 right-2">
+              <button
+                type="button"
+                className="text-gray-400 bg-neutral-800 hover:text-[#0088cc] transition-colors p-1 rounded-full hover:bg-neutral-800"
+                title="Voice message"
+              >
+                <FiMic className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+          <button
+            type="submit"
+            disabled={!inputMessage.trim() || sending}
+            className={`p-3 w-auto rounded-full ml-2 flex-shrink-0 transition-all duration-200 ${
+              inputMessage.trim() && !sending
+                ? 'bg-[#0088cc] text-white shadow-md hover:bg-[#0077b6]'
+                : 'bg-neutral-800 text-gray-400'
+            }`}
+            title="Send message"
+          >
+            <FiSend className="w-5 h-5" />
+          </button>
+        </form>
+      </div>
     </div>
   );
 };
 
-export default TelegramContactList;
+export default TelegramChatView;

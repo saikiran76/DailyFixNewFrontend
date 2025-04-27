@@ -1,6 +1,6 @@
 import * as matrixSdk from 'matrix-js-sdk';
 import logger from './logger';
-import { saveToIndexedDB } from './indexedDBHelper';
+import { saveToIndexedDB, getFromIndexedDB } from './indexedDBHelper';
 import { MATRIX_CREDENTIALS_KEY } from '../constants';
 
 /**
@@ -17,13 +17,91 @@ const matrixDirectConnect = {
     try {
       logger.info('[matrixDirectConnect] Connecting to Matrix for user:', userId);
 
-      // Check if we're connecting for Telegram
+      // Check if we're connecting for Telegram, but only for initial connections, not refreshes
       const connectingToTelegram = sessionStorage.getItem('connecting_to_telegram') === 'true';
-      if (!connectingToTelegram) {
-        logger.warn('[matrixDirectConnect] Not connecting to Telegram, aborting Matrix connection');
-        throw new Error('Matrix connection is only needed for Telegram');
+      const isTokenRefresh = sessionStorage.getItem('matrix_token_refreshing') === 'true';
+
+      // Skip the check if this is a token refresh operation
+      if (!connectingToTelegram && !isTokenRefresh) {
+        // Check if we have an existing Matrix client that needs refreshing
+        const existingClient = window.matrixClient;
+        if (existingClient && existingClient.getUserId()) {
+          // If we have an existing client, this is likely a refresh operation
+          logger.info('[matrixDirectConnect] Existing Matrix client found, proceeding with refresh');
+          // Set the refresh flag to avoid future checks during this refresh operation
+          sessionStorage.setItem('matrix_token_refreshing', 'true');
+        } else {
+          logger.warn('[matrixDirectConnect] Not connecting to Telegram and not refreshing, aborting Matrix connection');
+          throw new Error('Matrix connection is only needed for Telegram');
+        }
       }
 
+      // First, try to get existing credentials from localStorage or IndexedDB
+      let existingCredentials = null;
+
+      // Try to get from localStorage (custom key)
+      try {
+        const localStorageKey = `dailyfix_connection_${userId}`;
+        const localStorageData = localStorage.getItem(localStorageKey);
+        if (localStorageData) {
+          const parsedData = JSON.parse(localStorageData);
+          if (parsedData.matrix_credentials &&
+              parsedData.matrix_credentials.userId &&
+              parsedData.matrix_credentials.accessToken) {
+            existingCredentials = parsedData.matrix_credentials;
+            logger.info('[matrixDirectConnect] Found existing credentials in localStorage (custom key)');
+          }
+        }
+      } catch (e) {
+        logger.warn('[matrixDirectConnect] Failed to get credentials from localStorage (custom key):', e);
+      }
+
+      // If not found in localStorage, try IndexedDB
+      if (!existingCredentials) {
+        try {
+          const indexedDBData = await getFromIndexedDB(userId);
+          if (indexedDBData &&
+              indexedDBData[MATRIX_CREDENTIALS_KEY] &&
+              indexedDBData[MATRIX_CREDENTIALS_KEY].userId &&
+              indexedDBData[MATRIX_CREDENTIALS_KEY].accessToken) {
+            existingCredentials = indexedDBData[MATRIX_CREDENTIALS_KEY];
+            logger.info('[matrixDirectConnect] Found existing credentials in IndexedDB');
+          }
+        } catch (e) {
+          logger.warn('[matrixDirectConnect] Failed to get credentials from IndexedDB:', e);
+        }
+      }
+
+      // If we found existing credentials, try to use them directly
+      if (existingCredentials) {
+        logger.info('[matrixDirectConnect] Attempting to use existing credentials');
+
+        try {
+          // Create a Matrix client with the existing credentials
+          const client = matrixSdk.createClient({
+            baseUrl: existingCredentials.homeserver || 'https://dfix-hsbridge.duckdns.org',
+            accessToken: existingCredentials.accessToken,
+            userId: existingCredentials.userId,
+            deviceId: existingCredentials.deviceId,
+            timelineSupport: true,
+            useAuthorizationHeader: true
+          });
+
+          // Validate the credentials with a simple API call
+          try {
+            await client.whoami();
+            logger.info('[matrixDirectConnect] Existing credentials are valid, using them');
+            return client;
+          } catch (validationError) {
+            // If validation fails, we'll fall back to login/registration
+            logger.warn('[matrixDirectConnect] Existing credentials are invalid, falling back to login/registration:', validationError);
+          }
+        } catch (clientError) {
+          logger.warn('[matrixDirectConnect] Error creating client with existing credentials, falling back to login/registration:', clientError);
+        }
+      }
+
+      // If we couldn't use existing credentials, proceed with login/registration
       // Generate a unique username based on the user ID
       // This ensures we create a fresh account with a secure password
       const username = `user${userId.replace(/-/g, '')}matrixttestkoracatwo`;
@@ -43,9 +121,13 @@ const matrixDirectConnect = {
       logger.info('[matrixDirectConnect] Attempting login with username:', username);
 
       try {
-        // Try to login with the consistent password
-        const loginResponse = await tempClient.login('m.login.password', {
-          user: username,
+        // Try to login with the consistent password using non-deprecated signature
+        const loginResponse = await tempClient.login({
+          type: 'm.login.password',
+          identifier: {
+            type: 'm.id.user',
+            user: username
+          },
           password: password,
           initial_device_display_name: `DailyFix Web ${new Date().toISOString()}`
         });
@@ -106,13 +188,17 @@ const matrixDirectConnect = {
         logger.warn('[matrixDirectConnect] Login failed, attempting registration:', loginError);
 
         try {
-          // Try to register a new account
+          // Try to register a new account using modern API
           const registerResponse = await tempClient.register(
             username,
             password,
-            null, // device ID (auto-generated)
-            { type: 'm.login.dummy' }, // auth
-            { initial_device_display_name: `DailyFix Web ${new Date().toISOString()}` } // extra params
+            undefined, // device ID (auto-generated)
+            {
+              type: 'm.login.dummy'
+            },
+            {
+              initial_device_display_name: `DailyFix Web ${new Date().toISOString()}`
+            }
           );
 
           if (!registerResponse || !registerResponse.access_token) {
@@ -177,13 +263,17 @@ const matrixDirectConnect = {
             const altUsername = `user${userId.replace(/-/g, '')}matrixttestkoraca${Date.now()}`;
 
             try {
-              // Try to register with the alternative username
+              // Try to register with the alternative username using modern API
               const altRegisterResponse = await tempClient.register(
                 altUsername,
                 password,
-                null, // device ID (auto-generated)
-                { type: 'm.login.dummy' }, // auth
-                { initial_device_display_name: `DailyFix Web ${new Date().toISOString()}` } // extra params
+                undefined, // device ID (auto-generated)
+                {
+                  type: 'm.login.dummy'
+                },
+                {
+                  initial_device_display_name: `DailyFix Web ${new Date().toISOString()}`
+                }
               );
 
               if (!altRegisterResponse || !altRegisterResponse.access_token) {

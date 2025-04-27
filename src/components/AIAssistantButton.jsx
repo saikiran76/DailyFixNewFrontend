@@ -2,12 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { FiLoader } from 'react-icons/fi';
 import { toast } from 'react-hot-toast';
 import logger from '../utils/logger';
+import api from '../utils/api';
 import AIAssistantWelcome from './AIAssistantWelcome';
-import AIResponseMessage from './AIResponseMessage';
-import AITypingIndicator from './AITypingIndicator';
 import AIChatInterface from './AIChatInterface';
 import DFLogo from '../images/DF.png';
-import { ENDPOINTS, CONFIG } from '../config/aiService';
+import { CONFIG } from '../config/aiService';
 import '../styles/aiAssistant.css';
 
 /**
@@ -18,12 +17,13 @@ import '../styles/aiAssistant.css';
  */
 const AIAssistantButton = ({ client, selectedContact, className = "" }) => {
   const [isProcessing, setIsProcessing] = useState(false);
-  const [showTooltip, setShowTooltip] = useState(false);
-  const [tooltipTimer, setTooltipTimer] = useState(null);
+  // State for UI elements
   const [showWelcome, setShowWelcome] = useState(false);
   const [hasSeenWelcome, setHasSeenWelcome] = useState(true); // Default to true, will check in useEffect
   const [showNewBadge, setShowNewBadge] = useState(true); // Show the "New" badge by default
   const [showInitialTooltip, setShowInitialTooltip] = useState(false); // Show initial tooltip to draw attention
+  // We'll use this state for manual tooltip display in the future
+  const [showTooltip, setShowTooltip] = useState(false);
   const [showChatInterface, setShowChatInterface] = useState(false); // Show the chat interface
   const [recentQueries, setRecentQueries] = useState([]); // Store recent queries
 
@@ -62,8 +62,10 @@ const AIAssistantButton = ({ client, selectedContact, className = "" }) => {
 
     // Show initial tooltip after a delay to grab attention
     const initialTooltipShown = localStorage.getItem('ai_assistant_initial_tooltip_shown');
+    let tooltipTimer = null;
+
     if (initialTooltipShown !== 'true') {
-      const timer = setTimeout(() => {
+      tooltipTimer = setTimeout(() => {
         setShowInitialTooltip(true);
         // Auto-hide after 5 seconds
         setTimeout(() => {
@@ -71,15 +73,13 @@ const AIAssistantButton = ({ client, selectedContact, className = "" }) => {
           localStorage.setItem('ai_assistant_initial_tooltip_shown', 'true');
         }, 5000);
       }, 2000); // Show 2 seconds after component mounts
-
-      return () => clearTimeout(timer);
     }
 
     // Clean up tooltip timer when component unmounts
     return () => {
       if (tooltipTimer) clearTimeout(tooltipTimer);
     };
-  }, [tooltipTimer]);
+  }, []);
 
   /**
    * Handle asking the AI assistant
@@ -105,9 +105,12 @@ const AIAssistantButton = ({ client, selectedContact, className = "" }) => {
 
   /**
    * Process the AI query with the given input
+   * @param {string} query - The query to process
+   * @param {boolean} sendToRoom - Whether to send the response to the room (default: true)
+   * @returns {Promise<object|null>} - The response data or null if error
    */
-  const processAIQuery = async (query) => {
-    if (!client || !selectedContact || isProcessing || !query) return;
+  const processAIQuery = async (query, sendToRoom = true) => {
+    if (!client || !selectedContact || isProcessing || !query) return null;
 
     let typingMsgId = null;
 
@@ -131,17 +134,19 @@ const AIAssistantButton = ({ client, selectedContact, className = "" }) => {
         position: 'bottom-center'
       });
 
-      // Send a typing indicator message
-      typingMsgId = await client.sendMessage(roomId, {
-        msgtype: 'm.room.message',
-        body: 'AI Assistant is thinking...',
-        format: 'org.matrix.custom.html',
-        formatted_body: `<div class="ai-typing-indicator">AI Assistant is thinking...</div>`,
-        'm.relates_to': {
-          rel_type: 'm.replace',
-          event_id: null // Will be filled in later
-        }
-      });
+      // Send a typing indicator message only if we're sending to room
+      if (sendToRoom) {
+        typingMsgId = await client.sendMessage(roomId, {
+          msgtype: 'm.room.message',
+          body: 'AI Assistant is thinking...',
+          format: 'org.matrix.custom.html',
+          formatted_body: `<div class="ai-typing-indicator">AI Assistant is thinking...</div>`,
+          'm.relates_to': {
+            rel_type: 'm.replace',
+            event_id: null // Will be filled in later
+          }
+        });
+      }
 
       // Get recent messages from timeline
       const timeline = room.getLiveTimeline();
@@ -175,23 +180,16 @@ const AIAssistantButton = ({ client, selectedContact, className = "" }) => {
 
       logger.info('[AIAssistant] Sending query to AI assistant API');
 
-      // Send request to AI assistant API
-      const response = await fetch(ENDPOINTS.QUERY, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query,
-          messages,
-          room_context: roomContext,
-          user_context: userContext
-        })
+      // Send request to AI assistant API through the API gateway
+      const response = await api.post('/api/v1/ai-bot/query', {
+        query,
+        messages,
+        room_context: roomContext,
+        user_context: userContext,
+        user_id: userContext.user_id // Add the user_id field explicitly
       });
 
-      if (!response.ok) {
-        throw new Error(`API request failed: ${response.statusText}`);
-      }
-
-      const result = await response.json();
+      const result = response.data;
 
       // Update toast with success message
       toast.success('AI assistant has responded', { id: toastId });
@@ -215,72 +213,158 @@ const AIAssistantButton = ({ client, selectedContact, className = "" }) => {
         logger.error('[AIAssistant] Error saving recent queries:', storageError);
       }
 
-      // Create a React element with our custom component
-      const responseElement = (
-        <AIResponseMessage
-          response={result.response}
-          sources={result.sources || []}
-          query={query}
-          timestamp={Date.now()}
-        />
-      );
-
-      // Convert the React element to HTML
+      // Prepare the HTML content for the message
+      // For Matrix messages, we need to create HTML that can be sent directly
       const tempDiv = document.createElement('div');
-      // We'd normally use ReactDOM.render here, but in this context we'll use a simpler approach
+
+      // Format sources if available with detailed visualization
+      let sourcesHtml = '';
+      if (result.sources && result.sources.length > 0) {
+        const sourcesList = result.sources.map((source) => {
+          const formattedTime = source.formatted_time || new Date(source.timestamp).toLocaleString();
+          const relevancePercentage = Math.round((source.similarity || 0) * 100);
+          const relevanceClass = relevancePercentage > 80 ? 'high-relevance' :
+                               relevancePercentage > 60 ? 'medium-relevance' : 'low-relevance';
+
+          return `
+            <div class="ai-source-item ${relevanceClass}">
+              <div class="ai-source-header">
+                <span class="ai-source-sender">${source.sender}</span>
+                <span class="ai-source-time">${formattedTime}</span>
+                <span class="ai-source-relevance" title="${relevancePercentage}% relevant">🔍 ${relevancePercentage}%</span>
+              </div>
+              <div class="ai-source-content">${source.content}</div>
+            </div>
+          `;
+        }).join('');
+
+        sourcesHtml = `
+          <div class="ai-sources">
+            <div class="ai-sources-header">
+              <h4>Sources (${result.sources.length})</h4>
+              <span class="ai-sources-toggle">👁️ Show/Hide</span>
+            </div>
+            <div class="ai-sources-list">${sourcesList}</div>
+          </div>
+        `;
+      }
+
+      // Format suggested actions if available
+      const actionsHtml = result.suggested_actions && result.suggested_actions.length > 0
+        ? `<div class="ai-actions">
+            <p><strong>Quick Actions:</strong></p>
+            <div class="ai-actions-buttons">
+              ${result.suggested_actions.map(action =>
+                `<button class="ai-action-button" data-action="${action.action_type}" data-params='${JSON.stringify(action.parameters)}'>
+                  ${action.display_text}
+                </button>`
+              ).join('')}
+            </div>
+          </div>`
+        : '';
+
+      // Add gamification elements
+      const gamificationHtml = `
+        <div class="ai-gamification">
+          <div class="ai-points">🏆 +10 points</div>
+          <div class="ai-streak">🔥 3 day streak</div>
+          <div class="ai-achievement">🎯 Insight Master <span class="ai-achievement-badge">NEW</span></div>
+        </div>
+      `;
+
+      // Create HTML content
       tempDiv.innerHTML = `
         <div class="ai-response-container">
           <div class="ai-response-header">
-            <span class="ai-icon">🤖</span>
-            <span class="ai-title">AI Assistant</span>
+            <img src="${DFLogo}" alt="DailyFix AI" class="ai-logo" width="24" height="24" />
+            <span class="ai-title">DailyFix AI</span>
           </div>
           <div class="ai-response-content">
             ${result.response}
           </div>
+          ${sourcesHtml}
+          ${actionsHtml}
+          ${gamificationHtml}
         </div>
       `;
 
-      // Send AI response to the room with HTML formatting
-      // If we have a typing indicator, replace it; otherwise send a new message
-      if (typingMsgId) {
-        await client.sendMessage(roomId, {
-          msgtype: 'm.room.message',
-          body: `🤖 AI Assistant: ${result.response}`,
-          format: 'org.matrix.custom.html',
-          formatted_body: tempDiv.innerHTML,
-          'm.relates_to': {
-            rel_type: 'm.replace',
-            event_id: typingMsgId
+      // Only send to room if sendToRoom is true
+      if (sendToRoom) {
+        // Note: We can't include scripts in Matrix messages, so we'll use DOM manipulation after sending
+        const fullHtml = tempDiv.innerHTML;
+
+        // Send AI response to the room with HTML formatting
+        // If we have a typing indicator, replace it; otherwise send a new message
+        if (typingMsgId) {
+          await client.sendMessage(roomId, {
+            msgtype: 'm.room.message',
+            body: `🤖 AI Assistant: ${result.response}`,
+            format: 'org.matrix.custom.html',
+            formatted_body: fullHtml,
+            'm.relates_to': {
+              rel_type: 'm.replace',
+              event_id: typingMsgId
+            }
+          });
+        } else {
+          await client.sendHtmlMessage(
+            roomId,
+            `🤖 AI Assistant: ${result.response}`,
+            fullHtml
+          );
+        }
+
+        // After sending, find the message in the DOM and attach event listeners
+        setTimeout(() => {
+          try {
+            const messages = document.querySelectorAll('.ai-sources-toggle');
+            messages.forEach(toggle => {
+              if (!toggle.hasAttribute('data-listener-attached')) {
+                toggle.setAttribute('data-listener-attached', 'true');
+                toggle.addEventListener('click', (e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const sourcesList = toggle.closest('.ai-sources').querySelector('.ai-sources-list');
+                  if (sourcesList) {
+                    if (sourcesList.style.display === 'none') {
+                      sourcesList.style.display = 'flex';
+                      toggle.textContent = '👁️ Hide';
+                    } else {
+                      sourcesList.style.display = 'none';
+                      toggle.textContent = '👁️ Show';
+                    }
+                  }
+                });
+
+                // Hide sources by default
+                const sourcesList = toggle.closest('.ai-sources').querySelector('.ai-sources-list');
+                if (sourcesList) {
+                  sourcesList.style.display = 'none';
+                }
+              }
+            });
+          } catch (error) {
+            logger.error('[AIAssistant] Error attaching event listeners:', error);
           }
-        });
-      } else {
-        await client.sendHtmlMessage(
-          roomId,
-          `🤖 AI Assistant: ${result.response}`,
-          tempDiv.innerHTML
-        );
+        }, 500);
       }
 
       // Index messages in the background
       try {
         // Send batch of messages to be indexed
-        fetch(ENDPOINTS.BATCH_INDEX, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            messages: messages.map(msg => ({
-              id: msg.id,
-              sender: msg.sender,
-              senderName: room.getMember(msg.sender)?.name || 'Unknown',
-              content: msg.content,
-              timestamp: msg.timestamp,
-              roomId: msg.room_id,
-              eventType: 'm.room.message',
-              isFromMe: msg.sender === client.getUserId()
-            })),
-            room_id: roomId,
-            user_id: client.getUserId()
-          })
+        api.post('/api/v1/ai-bot/indexeddb/batch', {
+          messages: messages.map(msg => ({
+            id: msg.id,
+            sender: msg.sender,
+            senderName: room.getMember(msg.sender)?.name || 'Unknown',
+            content: msg.content,
+            timestamp: msg.timestamp,
+            roomId: msg.room_id,
+            eventType: 'm.room.message',
+            isFromMe: msg.sender === client.getUserId()
+          })),
+          room_id: roomId,
+          user_id: client.getUserId() // This was already correct
         }).catch(error => {
           logger.error('[AIAssistant] Error indexing messages:', error);
         });
@@ -288,12 +372,15 @@ const AIAssistantButton = ({ client, selectedContact, className = "" }) => {
         logger.error('[AIAssistant] Error preparing messages for indexing:', indexError);
       }
 
+      // Return the result for use in the chat interface
+      return result;
+
     } catch (error) {
       logger.error('[AIAssistant] Error querying AI assistant:', error);
       toast.error('Sorry, the AI assistant encountered an error');
 
-      // If we have a typing indicator, replace it with an error message
-      if (typingMsgId) {
+      // If we have a typing indicator and we're sending to room, replace it with an error message
+      if (typingMsgId && sendToRoom) {
         try {
           await client.sendMessage(roomId, {
             msgtype: 'm.room.message',
@@ -319,13 +406,15 @@ const AIAssistantButton = ({ client, selectedContact, className = "" }) => {
           logger.error('[AIAssistant] Error sending error message:', sendError);
         }
       }
+
+      // Return null to indicate error
+      return null;
     } finally {
       setIsProcessing(false);
-      // Don't automatically close the chat interface on error
-      // This allows the user to try again without reopening
-      if (!error) {
-        setShowChatInterface(false); // Close the chat interface only on success
-      }
+
+      // Don't automatically close the chat interface
+      // This allows the user to see the response or error in the interface
+      // and try again without reopening if needed
     }
   };
 

@@ -65,12 +65,17 @@ const matrixTokenRefresher = {
     try {
       logger.info('[matrixTokenRefresher] Refreshing Matrix client');
 
+      // Set a flag to indicate we're refreshing the token
+      sessionStorage.setItem('matrix_token_refreshing', 'true');
+
       // Prevent multiple simultaneous refresh attempts
       if (this._refreshInProgress) {
         logger.warn('[matrixTokenRefresher] Refresh already in progress, waiting...');
         try {
           await this._refreshPromise;
           logger.info('[matrixTokenRefresher] Previous refresh completed, returning client');
+          // Clear the refresh flag
+          sessionStorage.removeItem('matrix_token_refreshing');
           return window.matrixClient;
         } catch (e) {
           logger.warn('[matrixTokenRefresher] Previous refresh failed, continuing with new refresh');
@@ -81,6 +86,9 @@ const matrixTokenRefresher = {
       this._refreshInProgress = true;
       this._refreshPromise = (async () => {
         try {
+          // Store the old client's user ID before stopping it
+          const oldUserId = window.matrixClient ? window.matrixClient.getUserId() : null;
+
           // Stop the existing client if it exists
           if (window.matrixClient) {
             try {
@@ -94,6 +102,7 @@ const matrixTokenRefresher = {
           }
 
           // Connect to Matrix using our direct connect utility
+          logger.info('[matrixTokenRefresher] Connecting to Matrix for token refresh');
           const newClient = await matrixDirectConnect.connectToMatrix(userId);
 
           // Set the global Matrix client
@@ -102,10 +111,19 @@ const matrixTokenRefresher = {
           // Start the client
           await matrixDirectConnect.startClient(newClient);
 
+          // If this was for Telegram, make sure the flag is still set
+          // This ensures future refreshes will work
+          if (oldUserId && oldUserId.includes('@telegram_')) {
+            logger.info('[matrixTokenRefresher] Preserving Telegram connection flag for future refreshes');
+            sessionStorage.setItem('connecting_to_telegram', 'true');
+          }
+
           logger.info('[matrixTokenRefresher] Successfully refreshed Matrix client');
           return newClient;
         } finally {
           this._refreshInProgress = false;
+          // Clear the refresh flag
+          sessionStorage.removeItem('matrix_token_refreshing');
         }
       })();
 
