@@ -18,54 +18,54 @@ import { FiRefreshCw } from "react-icons/fi";
 import ContactAvatar from './ContactAvatar';
 import '../styles/ShakeAnimation.css';
 
-const AcknowledgmentModal = ({ isOpen, onClose }) => {
-  const modalRef = React.useRef();
+// const AcknowledgmentModal = ({ isOpen, onClose }) => {
+//   const modalRef = React.useRef();
 
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (modalRef.current && !modalRef.current.contains(event.target)) {
-        onClose();
-      }
-    };
+//   useEffect(() => {
+//     const handleClickOutside = (event) => {
+//       if (modalRef.current && !modalRef.current.contains(event.target)) {
+//         onClose();
+//       }
+//     };
 
-    if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
+//     if (isOpen) {
+//       document.addEventListener('mousedown', handleClickOutside);
+//     }
 
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [isOpen, onClose]);
+//     return () => {
+//       document.removeEventListener('mousedown', handleClickOutside);
+//     };
+//   }, [isOpen, onClose]);
 
-  if (!isOpen) return null;
+//   if (!isOpen) return null;
 
-  return (
-    <div className="fixed inset-0 bg-black/75 flex items-center justify-center z-50">
-      <div
-        ref={modalRef}
-        className="bg-[#24283b] rounded-lg p-6 max-w-md w-full mx-4"
-      >
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-xl font-medium text-white">WhatsApp Sync Started</h3>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-white transition-colors"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-        <div className='flex justify-center mt-2 mb-2'>
-          <img className='size-10' src="https://media0.giphy.com/media/jU9PVpqUvR0aNc3nvX/giphy.gif?cid=6c09b952prsvlhpto7g95cgdkxbeyvjja133739m5398bj2o&ep=v1_stickers_search&rid=giphy.gif&ct=s" alt="whatsappLoad"/>
-        </div>
-        <p className="text-gray-300">
-          Application started syncing your WhatsApp contacts. If there is a new message for any contact, it will be fetched automatically here.
-        </p>
-      </div>
-    </div>
-  );
-};
+//   return (
+//     <div className="fixed inset-0 bg-black/75 flex items-center justify-center z-50">
+//       <div
+//         ref={modalRef}
+//         className="bg-[#24283b] rounded-lg p-6 max-w-md w-full mx-4"
+//       >
+//         <div className="flex justify-between items-center mb-4">
+//           <h3 className="text-xl font-medium text-white">WhatsApp Sync Started</h3>
+//           <button
+//             onClick={onClose}
+//             className="text-gray-400 hover:text-white transition-colors"
+//           >
+//             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+//               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+//             </svg>
+//           </button>
+//         </div>
+//         <div className='flex justify-center mt-2 mb-2'>
+//           <img className='size-10' src="https://media0.giphy.com/media/jU9PVpqUvR0aNc3nvX/giphy.gif?cid=6c09b952prsvlhpto7g95cgdkxbeyvjja133739m5398bj2o&ep=v1_stickers_search&rid=giphy.gif&ct=s" alt="whatsappLoad"/>
+//         </div>
+//         <p className="text-gray-300">
+//           Application started syncing your WhatsApp contacts. If there is a new message for any contact, it will be fetched automatically here.
+//         </p>
+//       </div>
+//     </div>
+//   );
+// };
 
 const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY = 1000;
@@ -206,6 +206,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
   const [refreshCooldown, setRefreshCooldown] = useState(false);
   const [refreshTooltip, setRefreshTooltip] = useState('');
   const refreshButtonRef = useRef(null);
+  const syncStatusPollingRef = useRef(null);
 
   const loadContactsWithRetry = useCallback(async (retryCount = 0) => {
     try {
@@ -273,7 +274,7 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
 
     // CRITICAL FIX: Set a timeout to ensure we don't get stuck
     const syncTimeout = setTimeout(() => {
-      if (syncProgress.state === SYNC_STATES.SYNCING) {
+      if (syncProgress && syncProgress.state === SYNC_STATES.SYNCING) {
         logger.warn('[WhatsAppContactList] Sync timeout reached, forcing completion');
         setRefreshCooldown(false);
         setIsRefreshing(false);
@@ -379,6 +380,9 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
     const pollInterval = setInterval(async () => {
       try {
         pollCount++;
+
+        // Store the interval reference
+        syncStatusPollingRef.current = pollInterval;
 
         // Get sync status from API
         const response = await api.get(`/api/v1/whatsapp/syncStatus?requestId=${requestId}`);
@@ -751,10 +755,10 @@ const WhatsAppContactList = ({ onContactSelect, selectedContactId }) => {
 
   return (
     <>
-      <AcknowledgmentModal
+      {/* <AcknowledgmentModal
         isOpen={showAcknowledgment}
         onClose={() => setShowAcknowledgment(false)}
-      />
+      /> */}
 
       <div className="contact-list-container whatsapp-contact-list flex flex-col h-full w-[100%] md:w-full bg-white">
         {/* Header */}

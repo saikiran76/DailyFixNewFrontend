@@ -3,7 +3,7 @@
  */
 
 // API endpoints
-export const API_BASE_URL = 'http://localhost:4000';
+export const API_BASE_URL = 'https://dailyfix-apigate.duckdns.org';
 export const WHATSAPP_API_PREFIX = '/api/v1/whatsapp';
 export const TELEGRAM_API_PREFIX = '/api/v1/telegram';
 export const MATRIX_API_PREFIX = '/api/v1/matrix';
