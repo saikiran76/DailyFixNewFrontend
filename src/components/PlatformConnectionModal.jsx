@@ -12,8 +12,9 @@ import { useDispatch, useSelector } from 'react-redux';
 import { setWhatsappConnected, updateAccounts } from '../store/slices/onboardingSlice';
 import { fetchContacts } from '../store/slices/contactSlice';
 import { toast } from 'react-toastify';
-import { saveToIndexedDB } from '../utils/indexedDBHelper';
+import { saveToIndexedDB, getFromIndexedDB } from '../utils/indexedDBHelper';
 import matrixTokenManager from '../utils/matrixTokenManager';
+import matrixRegistration from '../utils/matrixRegistration';
 import '../styles/platformButtons.css';
 
 // Constants
