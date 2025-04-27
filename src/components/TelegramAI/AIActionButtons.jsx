@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { FiCalendar, FiClock, FiAlertCircle, FiChevronDown, FiChevronUp } from 'react-icons/fi';
 import toast from 'react-hot-toast';
 import api from '../../utils/api';
-import logger from '../utils/logger';
+import logger from '../../utils/logger';
 import '../../styles/aiAssistant.css'
 
 /**
