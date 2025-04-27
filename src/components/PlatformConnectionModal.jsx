@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FaTimes, FaWhatsapp, FaLock, FaCheck } from 'react-icons/fa';
 import { FaTelegram } from 'react-icons/fa6';
@@ -263,7 +263,7 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
   // This is called only when window.platformToConnect === 'whatsapp' is true (from useEffect)
   // It provides a more comprehensive initialization with fallbacks and direct client creation
   // DO NOT REMOVE: This function is needed for the pre-selection flow
-  const initializeMatrixForWhatsApp = async () => {
+  const initializeMatrixForWhatsApp = useCallback(async () => {
     return new Promise(async (resolve, reject) => {
       try {
         // If Matrix client is already initialized, just return
@@ -524,7 +524,7 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
         reject(error);
       }
     });
-  };
+  }, [session.user.id]);
 
   // Handle WhatsApp connection completion
   const handleWhatsAppComplete = () => {
@@ -563,6 +563,58 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
     setStep('success');
   };
 
+  // Initialize Matrix for Telegram
+  const initializeMatrixForTelegram = useCallback((telegramLoading) => {
+    // Get credentials and create client using matrixTokenManager
+    matrixTokenManager.getCredentials(session.user.id)
+      .then(async (credentials) => {
+        // If no credentials, register a new Matrix account
+        if (!credentials || !credentials.accessToken) {
+          logger.info('[PlatformConnectionModal] No valid Matrix credentials found for Telegram, registering new account');
+
+          try {
+            logger.info('[PlatformConnectionModal] Starting Matrix account registration for Telegram user:', session.user.id);
+
+            // Register a new Matrix account using the imported utility
+            credentials = await matrixRegistration.registerMatrixAccount(session.user.id);
+
+            if (!credentials || !credentials.accessToken) {
+              throw new Error('Registration completed but no valid credentials returned');
+            }
+
+            logger.info('[PlatformConnectionModal] Successfully registered new Matrix account for Telegram');
+          } catch (registrationError) {
+            logger.error('[PlatformConnectionModal] Error registering Matrix account for Telegram:', registrationError);
+            toast.error('Failed to register Matrix account. Please try again.', { id: 'telegram-init' });
+            throw new Error('Could not register Matrix account: ' + registrationError.message);
+          }
+        }
+
+        // Create a new client with the credentials
+        const client = matrixTokenManager.createClient(credentials);
+
+        // Set the global Matrix client
+        window.matrixClient = client;
+
+        // Set up refresh listeners
+        matrixTokenManager.setupRefreshListeners(client, session.user.id);
+
+        // Start the client
+        return matrixTokenManager.startClient(client);
+      })
+      .then(() => {
+        logger.info('[PlatformConnectionModal] Matrix initialized successfully for Telegram');
+        toast.success('Ready to connect Telegram', { id: 'telegram-init' });
+        setStep('telegram-setup');
+      })
+      .catch(error => {
+        logger.error('[PlatformConnectionModal] Error initializing Matrix for Telegram:', error);
+        toast.error('Failed to prepare Telegram connection. Please try again.', { id: 'telegram-init' });
+
+        if (telegramLoading) telegramLoading.classList.remove('loading');
+      });
+  }, [session.user.id]);
+
   // Handle component mount and check for pre-selected platform
   // This handles the case where a platform is pre-selected before the modal is opened
   // For WhatsApp, it uses initializeMatrixForWhatsApp (not the regular initializeMatrix)
@@ -581,37 +633,8 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
         // Use our direct connect utility with the new username pattern
         toast.loading('Connecting to Telegram...', { id: 'telegram-init' });
 
-        // Connect to Matrix using our token manager
-        matrixTokenManager.getCredentials(session.user.id).then(credentials => {
-          if (!credentials) {
-            throw new Error('No valid Matrix credentials found');
-          }
-
-          // Create a new client with the credentials
-          const client = matrixTokenManager.createClient(credentials);
-
-          // Set the global Matrix client
-          window.matrixClient = client;
-
-          // Set up refresh listeners
-          matrixTokenManager.setupRefreshListeners(client, session.user.id);
-
-          // Start the client
-          return matrixTokenManager.startClient(client);
-        }).then(() => {
-          logger.info('[PlatformConnectionModal] Matrix initialized successfully for Telegram');
-          toast.success('Ready to connect Telegram', { id: 'telegram-init' });
-          setStep('telegram-setup');
-
-          // Automatically close the modal after a short delay
-          setTimeout(() => {
-            setShowModal(false);
-          }, 1000);
-        }).catch(error => {
-          logger.error('[PlatformConnectionModal] Error initializing Matrix for Telegram:', error);
-          toast.error('Failed to prepare Telegram connection. Please try again.', { id: 'telegram-init' });
-          setStep('intro');
-        });
+        // Use the new initializeMatrixForTelegram function
+        initializeMatrixForTelegram(null);
 
         // Clear the selection after using it
         window.platformToConnect = null;
@@ -636,7 +659,7 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
         setStep('intro');
       }
     }
-  }, [isOpen]);
+  }, [isOpen, initializeMatrixForTelegram, initializeMatrixForWhatsApp, session.user.id]);
 
   // Render different steps
   const renderStep = () => {
@@ -712,35 +735,8 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
 
                         toast.loading('Connecting to Telegram...', { id: 'telegram-init' });
 
-                        // Get credentials and create client using matrixTokenManager
-                        matrixTokenManager.getCredentials(session.user.id).then(credentials => {
-                          if (!credentials) {
-                            throw new Error('No valid Matrix credentials found');
-                          }
-
-                          // Create a new client with the credentials
-                          const client = matrixTokenManager.createClient(credentials);
-
-                          // Set the global Matrix client
-                          window.matrixClient = client;
-
-                          // Set up refresh listeners
-                          matrixTokenManager.setupRefreshListeners(client, session.user.id);
-
-                          // Start the client
-                          return matrixTokenManager.startClient(client);
-                        }).then(() => {
-                          logger.info('[PlatformConnectionModal] Matrix initialized successfully for Telegram');
-                          toast.success('Ready to connect Telegram', { id: 'telegram-init' });
-                          setStep('telegram-setup');
-
-                          // No need to set a timeout here
-                        }).catch(error => {
-                          logger.error('[PlatformConnectionModal] Error initializing Matrix for Telegram:', error);
-                          toast.error('Failed to prepare Telegram connection. Please try again.', { id: 'telegram-init' });
-
-                          if (telegramLoading) telegramLoading.classList.remove('loading');
-                        });
+                        // Initialize Matrix for Telegram using client-side approach
+                        initializeMatrixForTelegram(telegramLoading);
                       }}
                     >
                       <div className="w-20 h-20 rounded-full bg-blue-500/20 flex items-center justify-center">
