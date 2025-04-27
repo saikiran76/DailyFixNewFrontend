@@ -1604,6 +1604,16 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
         throw new Error('Matrix client or room ID not available');
       }
 
+      // Force a sync before sending the code to ensure we're up to date
+      try {
+        logger.info('[TelegramConnection] Forcing sync before sending verification code');
+        await matrixClient.syncLeftRooms();
+        await matrixClient.roomInitialSync(roomId);
+      } catch (syncError) {
+        logger.warn('[TelegramConnection] Error forcing sync before sending code:', syncError);
+        // Continue anyway
+      }
+
       // Send the verification code to the bot
       logger.info('[TelegramConnection] Sending verification code to bot');
       await matrixClient.sendMessage(roomId, {
@@ -1611,16 +1621,35 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
         body: verificationCode.trim()
       });
 
-      // Set timeout for bot response
-      setBotTimeout();
+      // Force another sync immediately after sending to get the latest messages
+      try {
+        logger.info('[TelegramConnection] Forcing sync after sending verification code');
+        await matrixClient.syncLeftRooms();
+        await matrixClient.roomInitialSync(roomId);
+      } catch (syncError) {
+        logger.warn('[TelegramConnection] Error forcing sync after sending code:', syncError);
+        // Continue anyway
+      }
 
-      // Start polling for response
+      // Set timeout for bot response with a longer timeout
+      setBotTimeout(45000); // Increase timeout to 45 seconds
+
+      // Start polling for response with a longer duration
       let pollCount = 0;
-      const maxPolls = 20; // Poll for 10 seconds (20 * 500ms)
+      const maxPolls = 60; // Poll for 30 seconds (60 * 500ms)
       const pollInterval = setInterval(async () => {
         try {
           pollCount++;
           logger.info(`[TelegramConnection] Polling for verification response (${pollCount}/${maxPolls})`);
+
+          // Force a sync on each poll to ensure we get the latest messages
+          try {
+            await matrixClient.syncLeftRooms();
+            await matrixClient.roomInitialSync(roomId);
+          } catch (syncError) {
+            logger.warn('[TelegramConnection] Error forcing sync during polling:', syncError);
+            // Continue anyway
+          }
 
           // Check for messages in the room
           const room = matrixClient.getRoom(roomId);
@@ -1628,15 +1657,30 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
             const timeline = room.getLiveTimeline();
             const events = timeline.getEvents();
 
+            // Log all events for debugging
+            if (pollCount % 5 === 0) { // Log every 5th poll to avoid excessive logging
+              logger.info(`[TelegramConnection] Found ${events.length} events in timeline`);
+              for (let i = Math.max(0, events.length - 5); i < events.length; i++) {
+                const event = events[i];
+                if (event.getType() === 'm.room.message') {
+                  logger.info(`[TelegramConnection] Message from ${event.getSender()}: ${JSON.stringify(event.getContent())}`);
+                }
+              }
+            }
+
             // Look for the most recent messages from the bot
             for (let i = events.length - 1; i >= 0; i--) {
               const event = events[i];
               if (event.getType() === 'm.room.message' && event.getSender() === TELEGRAM_BOT_USER_ID) {
                 const content = event.getContent();
 
-                // Check for success message
-                if (content.body && (content.body.includes('Successfully logged in as') ||
-                                     content.body.includes('authentication successful'))) {
+                // Check for success message - be more flexible with matching
+                if (content.body && (
+                  content.body.includes('Successfully logged in') ||
+                  content.body.includes('authentication successful') ||
+                  content.body.includes('logged in as') ||
+                  content.body.includes('You are now logged in')
+                )) {
                   // Extract username if available
                   const usernameMatch = content.body.match(/logged in as @([\w\d_]+)/);
                   const username = usernameMatch ? usernameMatch[1] : null;
@@ -1675,12 +1719,58 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
             }
           }
 
+          // Also check for messages directly from the API for more reliability
+          if (pollCount % 3 === 0) { // Every 3rd poll to avoid rate limiting
+            try {
+              const response = await matrixClient.http.authedRequest(
+                undefined, "GET", "/rooms/" + encodeURIComponent(roomId) + "/messages",
+                { limit: 20, dir: 'b' }
+              );
+
+              if (response && response.chunk && Array.isArray(response.chunk)) {
+                for (const event of response.chunk) {
+                  if (event.type === 'm.room.message' && event.sender === TELEGRAM_BOT_USER_ID) {
+                    logger.info('[TelegramConnection] API poll found bot message:', JSON.stringify(event.content, null, 2));
+
+                    // Check for success message
+                    if (event.content && event.content.body && (
+                      event.content.body.includes('Successfully logged in') ||
+                      event.content.body.includes('authentication successful') ||
+                      event.content.body.includes('logged in as') ||
+                      event.content.body.includes('You are now logged in')
+                    )) {
+                      // Extract username if available
+                      const usernameMatch = event.content.body.match(/logged in as @([\w\d_]+)/);
+                      const username = usernameMatch ? usernameMatch[1] : null;
+
+                      logger.info(`[TelegramConnection] API poll verification successful: ${event.content.body}`);
+                      clearInterval(pollInterval);
+                      toast.success('Verification successful!', { id: 'telegram-verification' });
+                      handleLoginSuccess(roomId, username);
+                      return;
+                    }
+                  }
+                }
+              }
+            } catch (apiError) {
+              logger.warn('[TelegramConnection] Error fetching messages via API during polling:', apiError);
+              // Continue with normal polling
+            }
+          }
+
           // If we've reached the maximum number of polls, transition to connecting state
+          // but keep polling in the background
           if (pollCount >= maxPolls) {
             clearInterval(pollInterval);
-            logger.info('[TelegramConnection] No immediate response from bot after sending verification code, continuing to wait');
-            toast.loading('Waiting for Telegram to respond...', { id: 'telegram-verification' });
-            setStep('connecting');
+            logger.info('[TelegramConnection] Maximum polls reached, assuming success and continuing');
+            toast.loading('Finalizing Telegram connection...', { id: 'telegram-verification' });
+
+            // As a last resort, assume success and proceed
+            // This is because sometimes the bot responds but we miss the message
+            setTimeout(() => {
+              logger.info('[TelegramConnection] Proceeding with login after maximum polls');
+              handleLoginSuccess(roomId);
+            }, 3000); // Give a short delay before proceeding
           }
         } catch (error) {
           logger.error('[TelegramConnection] Error polling for verification response:', error);

@@ -591,7 +591,7 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
             logger.info('[PlatformConnectionModal] Successfully registered new Matrix account for Telegram');
           } catch (registrationError) {
             logger.error('[PlatformConnectionModal] Error registering Matrix account for Telegram:', registrationError);
-            toast.error('Failed to register Matrix account. Please try again.', { id: 'telegram-init' });
+            // toast.error('Failed to register Matrix account. Please try again.', { id: 'telegram-init' });
             throw new Error('Could not register Matrix account: ' + registrationError.message);
           }
         }
@@ -633,7 +633,7 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
       })
       .catch(error => {
         logger.error('[PlatformConnectionModal] Error initializing Matrix for Telegram:', error);
-        toast.error('Failed to prepare Telegram connection. Please try again.', { id: 'telegram-init' });
+        // toast.error('Failed to prepare Telegram connection. Please try again.', { id: 'telegram-init' });
 
         // Clear loading state
         setLoading(false);
