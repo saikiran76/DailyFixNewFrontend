@@ -13,8 +13,7 @@ import { setWhatsappConnected, updateAccounts } from '../store/slices/onboarding
 import { fetchContacts } from '../store/slices/contactSlice';
 import { toast } from 'react-toastify';
 import { saveToIndexedDB } from '../utils/indexedDBHelper';
-import matrixDirectConnect from '../utils/matrixDirectConnect';
-import matrixTokenRefresher from '../utils/matrixTokenRefresher';
+import matrixTokenManager from '../utils/matrixTokenManager';
 import '../styles/platformButtons.css';
 
 // Constants
@@ -22,10 +21,101 @@ const MATRIX_CREDENTIALS_KEY = 'matrix_credentials';
 
 const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
   const dispatch = useDispatch();
-  const { accounts } = useSelector(state => state.onboarding);
+  const { accounts, whatsappConnected } = useSelector(state => state.onboarding);
   const { session } = useSelector(state => state.auth);
   const [step, setStep] = useState('intro'); // intro, matrix-setup, whatsapp-setup, telegram-setup, success
   const [loading, setLoading] = useState(false); // Add loading state for UI feedback
+  const [connectedPlatforms, setConnectedPlatforms] = useState([]);
+
+  // CRITICAL FIX: Check multiple sources for connected platforms
+  useEffect(() => {
+    const checkConnectedPlatforms = async () => {
+      if (!session?.user?.id) return;
+
+      const userId = session.user.id;
+      const platformStatus = { whatsapp: false, telegram: false };
+
+      // 1. Check accounts array from Redux
+      accounts.forEach(account => {
+        if (account.platform === 'whatsapp' && (account.status === 'active' || account.status === 'pending')) {
+          platformStatus.whatsapp = true;
+        }
+        if (account.platform === 'telegram' && (account.status === 'active' || account.status === 'pending')) {
+          platformStatus.telegram = true;
+        }
+      });
+
+      // 2. Check whatsappConnected from Redux
+      if (whatsappConnected) {
+        platformStatus.whatsapp = true;
+      }
+
+      // 3. Check localStorage connection_status
+      try {
+        const connectionStatus = JSON.parse(localStorage.getItem('dailyfix_connection_status') || '{}');
+        if (connectionStatus.whatsapp === true) platformStatus.whatsapp = true;
+        if (connectionStatus.telegram === true) platformStatus.telegram = true;
+      } catch (error) {
+        logger.error('[PlatformConnectionModal] Error checking localStorage connection_status:', error);
+      }
+
+      // 4. Check dailyfix_auth in localStorage
+      try {
+        const authDataStr = localStorage.getItem('dailyfix_auth');
+        if (authDataStr) {
+          const authData = JSON.parse(authDataStr);
+          if (authData.whatsappConnected === true) platformStatus.whatsapp = true;
+          if (authData.telegramConnected === true) platformStatus.telegram = true;
+        }
+      } catch (error) {
+        logger.error('[PlatformConnectionModal] Error checking dailyfix_auth:', error);
+      }
+
+      // 5. Check connected_platforms in localStorage
+      try {
+        const connectedPlatformsStr = localStorage.getItem('connected_platforms');
+        if (connectedPlatformsStr) {
+          const platforms = JSON.parse(connectedPlatformsStr);
+          if (Array.isArray(platforms)) {
+            if (platforms.includes('whatsapp')) platformStatus.whatsapp = true;
+            if (platforms.includes('telegram')) platformStatus.telegram = true;
+          }
+        }
+      } catch (error) {
+        logger.error('[PlatformConnectionModal] Error checking connected_platforms:', error);
+      }
+
+      // 6. Check IndexedDB for WhatsApp
+      try {
+        const isWhatsAppConnectedDB = await import('../utils/connectionStorageDB').then(m => m.isWhatsAppConnectedDB);
+        const whatsappConnectedInDB = await isWhatsAppConnectedDB(userId);
+        if (whatsappConnectedInDB) platformStatus.whatsapp = true;
+      } catch (error) {
+        logger.error('[PlatformConnectionModal] Error checking WhatsApp in IndexedDB:', error);
+      }
+
+      // 7. Check Telegram using helper
+      try {
+        const isTelegramConnected = await import('../utils/telegramHelper').then(m => m.isTelegramConnected);
+        const telegramConnectedHelper = await isTelegramConnected(userId);
+        if (telegramConnectedHelper) platformStatus.telegram = true;
+      } catch (error) {
+        logger.error('[PlatformConnectionModal] Error checking Telegram with helper:', error);
+      }
+
+      // Update connected platforms state
+      const connected = [];
+      if (platformStatus.whatsapp) connected.push('whatsapp');
+      if (platformStatus.telegram) connected.push('telegram');
+      setConnectedPlatforms(connected);
+
+      logger.info('[PlatformConnectionModal] Connected platforms:', connected);
+    };
+
+    if (isOpen) {
+      checkConnectedPlatforms();
+    }
+  }, [isOpen, accounts, whatsappConnected, session]);
 
   // Enhanced onClose handler that cleans up Matrix resources
   const handleClose = () => {
@@ -490,16 +580,23 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
         // Use our direct connect utility with the new username pattern
         toast.loading('Connecting to Telegram...', { id: 'telegram-init' });
 
-        // Connect to Matrix using our direct connect utility
-        matrixDirectConnect.connectToMatrix(session.user.id).then(client => {
+        // Connect to Matrix using our token manager
+        matrixTokenManager.getCredentials(session.user.id).then(credentials => {
+          if (!credentials) {
+            throw new Error('No valid Matrix credentials found');
+          }
+
+          // Create a new client with the credentials
+          const client = matrixTokenManager.createClient(credentials);
+
           // Set the global Matrix client
           window.matrixClient = client;
 
-          // Set up token refresh listeners
-          matrixTokenRefresher.setupRefreshListeners(client, session.user.id);
+          // Set up refresh listeners
+          matrixTokenManager.setupRefreshListeners(client, session.user.id);
 
           // Start the client
-          return matrixDirectConnect.startClient(client);
+          return matrixTokenManager.startClient(client);
         }).then(() => {
           logger.info('[PlatformConnectionModal] Matrix initialized successfully for Telegram');
           toast.success('Ready to connect Telegram', { id: 'telegram-init' });
@@ -545,103 +642,131 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
     switch (step) {
       case 'intro':
         return (
-          <div className="text-center">
-            <h3 className="text-xl font-semibold mb-6">Connect a Messaging Platform</h3>
-            <p className="text-gray-300 mb-8">You need to connect a messaging platform to start using DailyFix.</p>
-
-            <div className="flex justify-center space-x-10 mb-8" style={{ background: 'transparent' }}>
-              {/* WhatsApp Button - Completely Redesigned */}
-              <div className="platform-icon-container">
-                {accounts.some(acc => acc.platform === 'whatsapp' && (acc.status === 'active' || acc.status === 'pending')) ? (
-                  <div className="platform-icon disabled">
-                    <div className="icon-circle bg-green-600">
-                      <FaWhatsapp className="text-white text-4xl" />
-                      <span className="badge">Connected</span>
-                    </div>
-                    <span className="icon-label">Already Connected</span>
-                  </div>
-                ) : (
-                  <div
-                    className={`platform-icon ${loading ? 'loading' : ''}`}
-                    onClick={() => {
-                      if (loading) return;
-                      sessionStorage.removeItem('whatsapp_initializing');
-                      initializeMatrix();
-                    }}
-                  >
-                    <div className="icon-circle bg-green-600">
-                      {loading ? (
-                        <div className="animate-spin">
-                          <FaWhatsapp className="text-white text-4xl opacity-70" />
-                        </div>
-                      ) : (
-                        <FaWhatsapp className="text-white text-4xl" />
-                      )}
-                    </div>
-                    <span className="icon-label">{loading ? 'Connecting...' : 'Connect WhatsApp'}</span>
-                  </div>
-                )}
+          <div>
+            {/* Content */}
+            <div className="p-6">
+              <div className="flex flex-col items-center text-center mb-6">
+                <h4 className="text-xl font-medium text-white mb-4">Connect a Messaging Platform</h4>
+                <p className="text-gray-300 mb-6">You need to connect a messaging platform to start using DailyFix.</p>
               </div>
 
-              {/* Telegram Button - Completely Redesigned */}
-              <div className="platform-icon-container">
-                {accounts.some(acc => acc.platform === 'telegram' && (acc.status === 'active' || acc.status === 'pending')) ? (
-                  <div className="platform-icon disabled">
-                    <div className="icon-circle bg-blue-500">
-                      <FaTelegram className="text-white text-4xl" />
-                      <span className="badge">Connected</span>
+              <div className="flex justify-center space-x-10 mb-8" style={{ background: 'transparent' }}>
+                {/* WhatsApp Button - Redesigned to match AIAssistantWelcome */}
+                <div className="platform-icon-container">
+                  {(accounts.some(acc => acc.platform === 'whatsapp' && (acc.status === 'active' || acc.status === 'pending')) || connectedPlatforms.includes('whatsapp')) ? (
+                    <div className="platform-icon disabled">
+                      <div className="w-20 h-20 rounded-full bg-green-500/20 flex items-center justify-center relative">
+                        <FaWhatsapp className="text-green-500 text-4xl" />
+                      </div>
+                      <div className="mt-2 flex flex-col items-center">
+                        <span className="text-xs text-gray-300">Already Connected</span>
+                        <span className="badge-small bg-green-600 text-white text-xs px-2 py-0.5 rounded-full mt-1">Connected</span>
+                      </div>
                     </div>
-                    <span className="icon-label">Already Connected</span>
-                  </div>
-                ) : (
-                  <div
-                    className="platform-icon"
-                    onClick={() => {
-                      const telegramLoading = document.querySelector('.platform-icon .icon-circle.bg-blue-500');
-                      if (telegramLoading) telegramLoading.classList.add('loading');
-
-                      toast.loading('Preparing Telegram connection...', { id: 'telegram-init' });
-                      sessionStorage.setItem('connecting_to_telegram', 'true');
-                      logger.info('[PlatformConnectionModal] Set connecting_to_telegram flag');
-
-                      toast.loading('Connecting to Telegram...', { id: 'telegram-init' });
-
-                      matrixDirectConnect.connectToMatrix(session.user.id).then(client => {
-                        window.matrixClient = client;
-                        matrixTokenRefresher.setupRefreshListeners(client, session.user.id);
-                        return matrixDirectConnect.startClient(client);
-                      }).then(() => {
-                        logger.info('[PlatformConnectionModal] Matrix initialized successfully for Telegram');
-                        toast.success('Ready to connect Telegram', { id: 'telegram-init' });
-                        setStep('telegram-setup');
-
-                        setTimeout(() => {
-                          setShowModal(false);
-                        }, 1000);
-                      }).catch(error => {
-                        logger.error('[PlatformConnectionModal] Error initializing Matrix for Telegram:', error);
-                        toast.error('Failed to prepare Telegram connection. Please try again.', { id: 'telegram-init' });
-
-                        if (telegramLoading) telegramLoading.classList.remove('loading');
-                      });
-                    }}
-                  >
-                    <div className="icon-circle bg-blue-500">
-                      <FaTelegram className="text-white text-4xl" />
+                  ) : (
+                    <div
+                      className={`platform-icon ${loading ? 'loading' : ''}`}
+                      onClick={() => {
+                        if (loading) return;
+                        sessionStorage.removeItem('whatsapp_initializing');
+                        initializeMatrix();
+                      }}
+                    >
+                      <div className="w-20 h-20 rounded-full bg-green-500/20 flex items-center justify-center">
+                        {loading ? (
+                          <div className="animate-spin">
+                            <FaWhatsapp className="text-green-500 text-4xl opacity-70" />
+                          </div>
+                        ) : (
+                          <FaWhatsapp className="text-green-500 text-4xl" />
+                        )}
+                      </div>
+                      <span className="mt-2 text-xs text-gray-300">{loading ? 'Connecting...' : 'Connect WhatsApp'}</span>
                     </div>
-                    <span className="icon-label">Connect Telegram</span>
-                  </div>
-                )}
+                  )}
+                </div>
+
+                {/* Telegram Button - Redesigned to match AIAssistantWelcome */}
+                <div className="platform-icon-container">
+                  {(accounts.some(acc => acc.platform === 'telegram' && (acc.status === 'active' || acc.status === 'pending')) || connectedPlatforms.includes('telegram')) ? (
+                    <div className="platform-icon disabled">
+                      <div className="w-20 h-20 rounded-full bg-blue-500/20 flex items-center justify-center relative">
+                        <FaTelegram className="text-blue-500 text-4xl" />
+                      </div>
+                      <div className="mt-2 flex flex-col items-center">
+                        <span className="text-xs text-gray-300">Already Connected</span>
+                        <span className="badge-small bg-blue-500 text-white text-xs px-2 py-0.5 rounded-full mt-1">Connected</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div
+                      className="platform-icon"
+                      onClick={() => {
+                        const telegramLoading = document.querySelector('.platform-icon .icon-circle.bg-blue-500');
+                        if (telegramLoading) telegramLoading.classList.add('loading');
+
+                        toast.loading('Preparing Telegram connection...', { id: 'telegram-init' });
+                        sessionStorage.setItem('connecting_to_telegram', 'true');
+                        logger.info('[PlatformConnectionModal] Set connecting_to_telegram flag');
+
+                        toast.loading('Connecting to Telegram...', { id: 'telegram-init' });
+
+                        // Get credentials and create client using matrixTokenManager
+                        matrixTokenManager.getCredentials(session.user.id).then(credentials => {
+                          if (!credentials) {
+                            throw new Error('No valid Matrix credentials found');
+                          }
+
+                          // Create a new client with the credentials
+                          const client = matrixTokenManager.createClient(credentials);
+
+                          // Set the global Matrix client
+                          window.matrixClient = client;
+
+                          // Set up refresh listeners
+                          matrixTokenManager.setupRefreshListeners(client, session.user.id);
+
+                          // Start the client
+                          return matrixTokenManager.startClient(client);
+                        }).then(() => {
+                          logger.info('[PlatformConnectionModal] Matrix initialized successfully for Telegram');
+                          toast.success('Ready to connect Telegram', { id: 'telegram-init' });
+                          setStep('telegram-setup');
+
+                          // No need to set a timeout here
+                        }).catch(error => {
+                          logger.error('[PlatformConnectionModal] Error initializing Matrix for Telegram:', error);
+                          toast.error('Failed to prepare Telegram connection. Please try again.', { id: 'telegram-init' });
+
+                          if (telegramLoading) telegramLoading.classList.remove('loading');
+                        });
+                      }}
+                    >
+                      <div className="w-20 h-20 rounded-full bg-blue-500/20 flex items-center justify-center">
+                        <FaTelegram className="text-blue-500 text-4xl" />
+                      </div>
+                      <span className="mt-2 text-xs text-gray-300">Connect Telegram</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Progress dots - similar to AIAssistantWelcome */}
+              <div className="flex justify-center space-x-2 mb-6">
+                <div className="w-2 h-2 rounded-full bg-[#0088CC]" />
+                <div className="w-2 h-2 rounded-full bg-gray-600" />
+                <div className="w-2 h-2 rounded-full bg-gray-600" />
               </div>
             </div>
 
-            <div className="mt-8 border-t border-gray-700 pt-6 text-left">
+            {/* Footer with info */}
+            <div className="p-5 border-t text-xs border-white/10">
               <div className="flex items-start mb-3">
-                <FaLock className="text-gray-500 mt-1 mr-2" />
+                <FaLock className="text-gray-400 mt-1 mr-2" />
                 <p className="text-gray-300">Your messages are end-to-end encrypted and secure.</p>
               </div>
               <div className="flex items-start">
-                <FaCheck className="text-green-500 mt-1 mr-2" />
+                <FaCheck className="text-[#0088CC] mt-1 mr-2" />
                 <p className="text-gray-300">Connect your messaging platforms to manage all your conversations in one place.</p>
               </div>
             </div>
@@ -651,44 +776,121 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
       case 'whatsapp-setup':
         return (
           <div>
-            <h3 className="text-xl font-semibold mb-4 text-center">Scan QR Code</h3>
-            <p className="text-gray-600 mb-6 text-center">
-              Scan this QR code with your WhatsApp app to connect your account.
-            </p>
-            <WhatsAppBridgeSetup
-              onComplete={handleWhatsAppComplete}
-              onCancel={() => setStep('intro')}
-            />
+            {/* Content */}
+            <div className="p-6">
+              <div className="flex flex-col items-center text-center mb-6">
+                <div className="w-24 h-24 rounded-full bg-green-500/20 flex items-center justify-center mb-4">
+                  <FaWhatsapp className="w-12 h-12 text-green-500" />
+                </div>
+                <h4 className="text-xl font-medium text-white mb-2">Scan QR Code</h4>
+                <p className="text-gray-300">
+                  Scan this QR code with your WhatsApp app to connect your account.
+                </p>
+              </div>
+
+              <WhatsAppBridgeSetup
+                onComplete={handleWhatsAppComplete}
+                onCancel={() => setStep('intro')}
+              />
+
+              {/* Progress dots */}
+              <div className="flex justify-center space-x-2 mt-6 mb-2">
+                <div className="w-2 h-2 rounded-full bg-gray-600" />
+                <div className="w-2 h-2 rounded-full bg-[#0088CC]" />
+                <div className="w-2 h-2 rounded-full bg-gray-600" />
+              </div>
+            </div>
+
+            {/* Footer with buttons */}
+            <div className="p-4 border-t border-white/10 flex justify-between">
+              <button
+                onClick={() => setStep('intro')}
+                className="px-4 py-2 text-gray-300 hover:text-white transition-colors"
+              >
+                Back
+              </button>
+            </div>
           </div>
         );
 
       case 'telegram-setup':
         return (
           <div>
-            <h3 className="text-xl font-semibold mb-4 text-center">Connect Telegram</h3>
-            <TelegramConnection
-              onComplete={handleTelegramComplete}
-              onCancel={() => setStep('intro')}
-            />
+            {/* Content */}
+            <div className="p-6">
+              <div className="flex flex-col items-center text-center mb-6">
+                <div className="w-24 h-24 rounded-full bg-blue-500/20 flex items-center justify-center mb-4">
+                  <FaTelegram className="w-12 h-12 text-blue-500" />
+                </div>
+                <h4 className="text-xl font-medium text-white mb-2">Connect Telegram</h4>
+                <p className="text-gray-300">
+                  Follow the steps to connect your Telegram account.
+                </p>
+              </div>
+
+              <TelegramConnection
+                onComplete={handleTelegramComplete}
+                onCancel={() => setStep('intro')}
+              />
+
+              {/* Progress dots */}
+              <div className="flex justify-center space-x-2 mt-6 mb-2">
+                <div className="w-2 h-2 rounded-full bg-gray-600" />
+                <div className="w-2 h-2 rounded-full bg-[#0088CC]" />
+                <div className="w-2 h-2 rounded-full bg-gray-600" />
+              </div>
+            </div>
+
+            {/* Footer with buttons */}
+            <div className="p-4 border-t border-white/10 flex justify-between">
+              <button
+                onClick={() => setStep('intro')}
+                className="px-4 py-2 text-gray-300 hover:text-white transition-colors"
+              >
+                Back
+              </button>
+            </div>
           </div>
         );
 
       case 'success':
         return (
-          <div className="text-center">
-            <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <FaCheck className="text-green-500 text-2xl" />
+          <div>
+            {/* Content */}
+            <div className="p-6">
+              <div className="flex flex-col items-center text-center mb-6">
+                <div className="w-24 h-24 rounded-full bg-green-500/20 flex items-center justify-center mb-4">
+                  <FaCheck className="w-12 h-12 text-green-500" />
+                </div>
+                <h4 className="text-xl font-medium text-white mb-2">Connection Successful!</h4>
+                <p className="text-gray-300">
+                  Your account has been successfully connected to DailyFix.
+                </p>
+              </div>
+
+              {/* Progress dots */}
+              <div className="flex justify-center space-x-2 mb-6">
+                <div className="w-2 h-2 rounded-full bg-gray-600" />
+                <div className="w-2 h-2 rounded-full bg-gray-600" />
+                <div className="w-2 h-2 rounded-full bg-[#0088CC]" />
+              </div>
             </div>
-            <h3 className="text-xl font-semibold mb-2">Connection Successful!</h3>
-            <p className="text-gray-600 mb-6">
-              Your account has been successfully connected to DailyFix.
-            </p>
-            <button
-              onClick={handleComplete}
-              className="w-full py-3 rounded-lg bg-purple-600 hover:bg-purple-700 text-white font-medium"
-            >
-              Continue to Dashboard
-            </button>
+
+            {/* Footer with buttons */}
+            <div className="p-4 border-t border-white/10 flex justify-between">
+              <button
+                onClick={() => setStep('intro')}
+                className="px-4 py-2 text-gray-300 hover:text-white transition-colors"
+              >
+                Back
+              </button>
+              <button
+                onClick={handleComplete}
+                className="px-6 py-2 bg-[#0088CC] hover:bg-[#0077BB] text-white rounded-md flex items-center transition-colors"
+              >
+                Continue to Dashboard <FaCheck className="ml-2" />
+              </button>
+            </div>
           </div>
         );
 
@@ -704,23 +906,25 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 flex items-center justify-center z-50 bg-black bg-opacity-90 p-4 overflow-auto"
-          style={{ backdropFilter: 'blur(2px)' }}
+          className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
         >
           <motion.div
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.9, opacity: 0 }}
-            className="bg-gradient-to-r bg-black/75 transition-opacity duration-200 ease-in-out rounded-lg shadow-xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto"
+            className="bg-neutral-900 rounded-xl shadow-2xl max-w-md w-full overflow-hidden border border-white/10 animate-fadeIn max-h-[90vh] overflow-y-auto"
           >
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-2xl font-bold">Platform Connection</h2>
+            {/* Header with close button */}
+            <div className="flex justify-between items-center p-2 border-b border-white/10">
+              {/* <h3 className="text-xl font-medium text-white">
+                Platform Connection
+              </h3> */}
               <button
                 onClick={handleClose}
-                className="text-gray-300 hover:text-gray-600 w-auto bg-transparent"
+                className="text-gray-400 w-auto hover:text-white transition-colors"
                 aria-label="Close"
               >
-                <FaTimes />
+                <FaTimes className="w-5 h-5" />
               </button>
             </div>
 
