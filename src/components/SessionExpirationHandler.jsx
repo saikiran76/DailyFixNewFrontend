@@ -88,9 +88,8 @@ const SessionExpirationHandler = () => {
 
       // Check if this is a Supabase auth endpoint with a 403 error
       if (
-        typeof resource === 'string' &&
-        resource.includes('supabase.co/auth/v1') &&
-        response.status === 403 &&
+        // typeof resource === 'string' &&
+        resource.includes('supabase') &&
         !isExpiring
       ) {
         logger.warn('[SessionExpirationHandler] Detected Supabase auth 403 error, session likely expired');

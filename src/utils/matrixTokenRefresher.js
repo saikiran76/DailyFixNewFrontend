@@ -8,6 +8,12 @@ import { MATRIX_CREDENTIALS_KEY } from '../constants';
  * Utility for refreshing Matrix tokens
  */
 const matrixTokenRefresher = {
+  // Track refresh attempts to prevent 429 errors
+  _refreshAttempts: 0,
+  _maxRefreshAttempts: 3, // Limit to 3 attempts
+  _resetRefreshAttemptsTimeout: null,
+  _lastRefreshAttempt: 0,
+  _refreshCooldown: 5000, // 5 seconds between refresh attempts
   /**
    * Check if the Matrix client is valid and refresh if needed
    * @param {Object} client - The Matrix client to check
@@ -65,6 +71,37 @@ const matrixTokenRefresher = {
     try {
       logger.info('[matrixTokenRefresher] Refreshing Matrix client');
 
+      // Check if we've exceeded the maximum number of attempts
+      if (this._refreshAttempts >= this._maxRefreshAttempts) {
+        logger.warn(`[matrixTokenRefresher] Maximum refresh attempts (${this._maxRefreshAttempts}) reached, waiting for cooldown`);
+
+        // Show a toast notification to the user
+        try {
+          // Using dynamic import to avoid circular dependencies
+          const { toast } = await import('react-hot-toast');
+          toast.error('Too many connection attempts. Please try again in a minute.');
+        } catch (toastError) {
+          logger.warn('[matrixTokenRefresher] Could not show toast notification:', toastError);
+        }
+
+        // Set a longer cooldown period after max attempts
+        if (!this._resetRefreshAttemptsTimeout) {
+          this._resetRefreshAttemptsTimeout = setTimeout(() => {
+            this._refreshAttempts = 0;
+            this._resetRefreshAttemptsTimeout = null;
+            logger.info('[matrixTokenRefresher] Reset refresh attempts counter');
+          }, 60000); // 1 minute cooldown
+        }
+
+        // Clear the refresh flag
+        sessionStorage.removeItem('matrix_token_refreshing');
+        return null;
+      }
+
+      // Increment the attempts counter
+      this._refreshAttempts++;
+      logger.info(`[matrixTokenRefresher] Refresh attempt ${this._refreshAttempts}/${this._maxRefreshAttempts}`);
+
       // Set a flag to indicate we're refreshing the token
       sessionStorage.setItem('matrix_token_refreshing', 'true');
 
@@ -77,8 +114,8 @@ const matrixTokenRefresher = {
           // Clear the refresh flag
           sessionStorage.removeItem('matrix_token_refreshing');
           return window.matrixClient;
-        } catch (e) {
-          logger.warn('[matrixTokenRefresher] Previous refresh failed, continuing with new refresh');
+        } catch (error) {
+          logger.warn('[matrixTokenRefresher] Previous refresh failed, continuing with new refresh:', error);
         }
       }
 
@@ -119,6 +156,14 @@ const matrixTokenRefresher = {
           }
 
           logger.info('[matrixTokenRefresher] Successfully refreshed Matrix client');
+
+          // Reset the refresh attempts counter on successful refresh
+          this._refreshAttempts = 0;
+          if (this._resetRefreshAttemptsTimeout) {
+            clearTimeout(this._resetRefreshAttemptsTimeout);
+            this._resetRefreshAttemptsTimeout = null;
+          }
+
           return newClient;
         } finally {
           this._refreshInProgress = false;
@@ -159,8 +204,8 @@ const matrixTokenRefresher = {
     this._refreshInProgress = false;
     this._refreshPromise = null;
     this._errorSuppressed = false;
+    // Reset the last refresh attempt time
     this._lastRefreshAttempt = 0;
-    this._refreshCooldown = 5000; // 5 seconds between refresh attempts
 
     // Remove any existing listeners
     client.removeAllListeners('Session.logged_out');
