@@ -7,6 +7,8 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# need to ignore pushing backend folder to the repo (backend is for local usage which has a seperate repo)
+backend
 node_modules
 dist
 dist-ssr

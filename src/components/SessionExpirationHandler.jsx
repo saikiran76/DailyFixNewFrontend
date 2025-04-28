@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
@@ -20,8 +20,8 @@ const SessionExpirationHandler = () => {
   const { session } = useSelector(state => state.auth);
   const [isExpiring, setIsExpiring] = useState(false);
 
-  // Handle session expiration
-  const handleSessionExpiration = (reason = 'unknown') => {
+  // Handle session expiration - wrapped in useCallback to avoid dependency issues
+  const handleSessionExpiration = useCallback((reason = 'unknown') => {
     if (isExpiring) return; // Prevent multiple handlers from firing
 
     logger.warn(`[SessionExpirationHandler] Handling session expiration, reason: ${reason}`);
@@ -70,7 +70,7 @@ const SessionExpirationHandler = () => {
           navigate('/login');
         });
     }, 2000);
-  };
+  }, [dispatch, navigate, isExpiring]);
 
   // Set up global fetch interceptor to detect 403 errors
   useEffect(() => {
@@ -83,21 +83,28 @@ const SessionExpirationHandler = () => {
 
     // Create our interceptor function
     window.fetch = async function(resource, options) {
-      // Call the original fetch
-      const response = await originalFetch(resource, options);
+      try {
+        // Call the original fetch
+        const response = await originalFetch(resource, options);
 
-      // Check if this is a Supabase auth endpoint with a 403 error
-      if (
-        // typeof resource === 'string' &&
-        resource.includes('supabase') &&
-        !isExpiring
-      ) {
-        logger.warn('[SessionExpirationHandler] Detected Supabase auth 403 error, session likely expired');
-        handleSessionExpiration('403-error');
+        // Check if this is a Supabase auth endpoint with a 403 error
+        // CRITICAL FIX: Properly check if resource is a string before calling includes
+        if (
+          typeof resource === 'string' &&
+          resource.includes('supabase') &&
+          !isExpiring
+        ) {
+          logger.warn('[SessionExpirationHandler] Detected Supabase auth 403 error, session likely expired');
+          handleSessionExpiration('403-error');
+        }
+
+        // Return the original response
+        return response;
+      } catch (error) {
+        // If there's an error in the fetch, log it and rethrow
+        logger.error('[SessionExpirationHandler] Error in fetch interceptor:', error);
+        throw error;
       }
-
-      // Return the original response
-      return response;
     };
 
     // Listen for the custom event from TokenManager
@@ -115,7 +122,7 @@ const SessionExpirationHandler = () => {
         for (const controller of window._pendingRequests) {
           try {
             controller.abort();
-          } catch (e) {
+          } catch {
             // Ignore errors
           }
         }
@@ -128,7 +135,7 @@ const SessionExpirationHandler = () => {
         for (const socket of window._socketConnections) {
           try {
             socket.close();
-          } catch (e) {
+          } catch {
             // Ignore errors
           }
         }
@@ -152,7 +159,7 @@ const SessionExpirationHandler = () => {
       window.removeEventListener('dailyfix-global-cleanup', handleGlobalCleanup);
       logger.info('[SessionExpirationHandler] Cleaned up session expiration handler');
     };
-  }, [session, dispatch, navigate, isExpiring]);
+  }, [session, dispatch, navigate, isExpiring, handleSessionExpiration]);
 
   // This component doesn't render anything
   return null;

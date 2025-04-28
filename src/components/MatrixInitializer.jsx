@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
-import * as matrixSdk from 'matrix-js-sdk';
 import { supabase } from '../utils/supabase';
 import logger from '../utils/logger';
 import { saveToIndexedDB, getFromIndexedDB } from '../utils/indexedDBHelper';
 import { setClientInitialized, setSyncState } from '../store/slices/matrixSlice';
-import matrixRegistration from '../utils/matrixRegistration';
+import { patchMatrixFetch } from '../utils/matrixFetchUtils';
+import matrixClientSingleton from '../utils/matrixClientSingleton';
 
 // Constants
 const MATRIX_CREDENTIALS_KEY = 'matrix_credentials';
@@ -63,13 +63,70 @@ const MatrixInitializer = ({ children, forceInitialize: initialForceInitialize =
     logger.info('[MatrixInitializer] Starting Matrix initialization');
     setInitializing(true);
 
-    // Define the Matrix initialization function
+    // Global initialization lock to prevent multiple simultaneous initializations
+    if (!window._matrixInitLock) {
+      window._matrixInitLock = {
+        inProgress: false,
+        promise: null,
+        timestamp: 0
+      };
+    }
+
+    // Implement session persistence
+    const persistClientState = (client) => {
+      try {
+        // Save essential client state
+        localStorage.setItem('matrix_client_state', JSON.stringify({
+          userId: client.getUserId(),
+          deviceId: client.getDeviceId(),
+          syncState: client.getSyncState(),
+          lastActivity: Date.now()
+        }));
+
+        // Also save in sessionStorage for tab-specific state
+        sessionStorage.setItem('matrix_client_active', 'true');
+
+        logger.info('[MatrixInitializer] Persisted client state to storage');
+      } catch (e) {
+        logger.warn('[MatrixInitializer] Error persisting client state:', e);
+      }
+    };
+
+    // Set up periodic state persistence
+    let stateInterval = null;
+
+    // Define the Matrix initialization function with lock protection
     const initializeMatrixClient = async () => {
+      // Check if we have a valid session
       if (!session?.user?.id) {
         logger.info('[MatrixInitializer] No user session, skipping Matrix initialization');
         setInitializing(false);
-        return;
+        return null;
       }
+
+      // Check if initialization is already in progress
+      if (window._matrixInitLock.inProgress) {
+        logger.info('[MatrixInitializer] Initialization already in progress, waiting...');
+        try {
+          await window._matrixInitLock.promise;
+          logger.info('[MatrixInitializer] Using existing initialization result');
+          return window.matrixClient;
+        } catch (error) {
+          // If the previous initialization failed more than 10 seconds ago, try again
+          if (Date.now() - window._matrixInitLock.timestamp > 10000) {
+            logger.warn('[MatrixInitializer] Previous initialization failed, continuing with new attempt');
+          } else {
+            logger.error('[MatrixInitializer] Recent initialization failed, aborting to prevent rapid retries:', error);
+            setError('Matrix initialization failed. Please try again in a few seconds.');
+            setInitializing(false);
+            return null;
+          }
+        }
+      }
+
+      // Set lock
+      window._matrixInitLock.inProgress = true;
+      window._matrixInitLock.timestamp = Date.now();
 
       try {
         logger.info('[MatrixInitializer] Initializing Matrix client for user:', session.user.id);
@@ -176,16 +233,53 @@ const MatrixInitializer = ({ children, forceInitialize: initialForceInitialize =
 
         // Final check to ensure we have valid credentials
         if (!credentials || !credentials.accessToken) {
-          logger.info('[MatrixInitializer] No valid Matrix credentials found, attempting to register new account');
+          logger.info('[MatrixInitializer] No valid Matrix credentials found, attempting to get credentials from backend API');
 
           try {
-            // Register a new Matrix account using the imported utility
-            credentials = await matrixRegistration.registerMatrixAccount(session.user.id);
+            // Import the API utility to ensure proper authentication headers
+            const api = (await import('../utils/api')).default;
 
-            logger.info('[MatrixInitializer] Successfully registered new Matrix account');
-          } catch (registrationError) {
-            logger.error('[MatrixInitializer] Error registering Matrix account:', registrationError);
-            setError('Could not register Matrix account: ' + registrationError.message);
+            // Call the Matrix status API to get or create credentials using the API utility
+            const { data, error } = await api.get('/api/v1/matrix/status');
+
+            if (error) {
+              throw new Error(`API error: ${error}`);
+            }
+
+            if (!data) {
+              throw new Error('API returned empty response');
+            }
+
+            if (!data.credentials) {
+              throw new Error('API response did not contain credentials');
+            }
+
+            // Convert backend credentials format to our format
+            credentials = {
+              userId: data.credentials.userId,
+              accessToken: data.credentials.accessToken,
+              deviceId: data.credentials.deviceId,
+              homeserver: data.credentials.homeserver,
+              password: data.credentials.password,
+              expires_at: data.credentials.expires_at
+            };
+
+            // Save credentials to IndexedDB and localStorage for future use
+            await saveToIndexedDB(session.user.id, {
+              [MATRIX_CREDENTIALS_KEY]: credentials
+            });
+
+            // Also save to our custom localStorage
+            const localStorageKey = `dailyfix_connection_${session.user.id}`;
+            const existingData = localStorage.getItem(localStorageKey);
+            const parsedData = existingData ? JSON.parse(existingData) : {};
+            parsedData.matrix_credentials = credentials;
+            localStorage.setItem(localStorageKey, JSON.stringify(parsedData));
+
+            logger.info('[MatrixInitializer] Successfully retrieved Matrix credentials from backend API');
+          } catch (apiError) {
+            logger.error('[MatrixInitializer] Error getting Matrix credentials from API:', apiError);
+            setError('Could not get Matrix credentials: ' + apiError.message);
             setInitializing(false);
             return;
           }
@@ -218,27 +312,25 @@ const MatrixInitializer = ({ children, forceInitialize: initialForceInitialize =
 
         logger.info('[MatrixInitializer] Creating Matrix client with valid credentials');
 
-        // Create Matrix client directly (Element-web style)
-        const clientOpts = {
-          baseUrl: homeserverUrl,
+        // Patch global fetch method to handle Matrix errors gracefully
+        patchMatrixFetch();
+
+        // Prepare client configuration
+        const clientConfig = {
+          homeserver: homeserverUrl,
           userId: userId,
           deviceId: deviceId || `DFIX_WEB_${Date.now()}`,
-          accessToken: accessToken,
-          timelineSupport: true,
-          store: new matrixSdk.MemoryStore({ localStorage: window.localStorage }),
-          verificationMethods: ['m.sas.v1'],
-          unstableClientRelationAggregation: true,
-          useAuthorizationHeader: true
+          accessToken: accessToken
         };
 
         // Log the client options (without the full access token)
-        logger.info('[MatrixInitializer] Client options:', {
-          ...clientOpts,
+        logger.info('[MatrixInitializer] Client config:', {
+          ...clientConfig,
           accessToken: accessToken ? `${accessToken.substring(0, 5)}...${accessToken.substring(accessToken.length - 5)}` : 'missing'
         });
 
-        // Create the client
-        const client = matrixSdk.createClient(clientOpts);
+        // Get client from singleton to ensure we only have one instance
+        const client = await matrixClientSingleton.getClient(clientConfig, userId);
 
         // Verify the access token is set
         if (!client.getAccessToken()) {
@@ -370,19 +462,48 @@ const MatrixInitializer = ({ children, forceInitialize: initialForceInitialize =
         // Also expose client globally for direct access (Element does this)
         window.matrixClient = client;
 
+        // Set up periodic state persistence
+        stateInterval = setInterval(() => {
+          if (client) {
+            persistClientState(client);
+          }
+        }, 30000); // Every 30 seconds
+
+        // Initial persistence
+        persistClientState(client);
+
         logger.info('[MatrixInitializer] Matrix client started successfully');
+
+        // Release the lock
+        window._matrixInitLock.inProgress = false;
+
+        return client;
       } catch (err) {
         logger.error('[MatrixInitializer] Error initializing Matrix client:', err);
         setError(err.message || 'Failed to initialize Matrix client');
+
+        // Release the lock on error
+        window._matrixInitLock.inProgress = false;
+
+        throw err;
       } finally {
         setInitializing(false);
       }
     };
 
-    initializeMatrixClient();
+    // Start initialization
+    initializeMatrixClient().catch(err => {
+      logger.error('[MatrixInitializer] Unhandled error during initialization:', err);
+    });
 
     // Cleanup on unmount
     return () => {
+      // Clear the state persistence interval
+      if (stateInterval) {
+        clearInterval(stateInterval);
+        stateInterval = null;
+      }
+
       // Properly clean up Matrix client
       const cleanupMatrixClient = () => {
         if (matrixClient) {
@@ -407,6 +528,11 @@ const MatrixInitializer = ({ children, forceInitialize: initialForceInitialize =
             // Clear any session flags
             sessionStorage.removeItem('connecting_to_telegram');
 
+            // Clear the initialization lock if it's ours
+            if (window._matrixInitLock && window._matrixInitLock.inProgress) {
+              window._matrixInitLock.inProgress = false;
+            }
+
             logger.info('[MatrixInitializer] Matrix client stopped successfully');
           } catch (e) {
             logger.error('[MatrixInitializer] Error stopping Matrix client:', e);
@@ -417,7 +543,7 @@ const MatrixInitializer = ({ children, forceInitialize: initialForceInitialize =
       // Execute cleanup
       cleanupMatrixClient();
     };
-  }, [session, dispatch, forceInitialize]);
+  }, [session, dispatch, forceInitialize, matrixClient]);
 
   // Make client available to components that need it
   useEffect(() => {
@@ -435,6 +561,58 @@ const MatrixInitializer = ({ children, forceInitialize: initialForceInitialize =
       getClient: () => window.matrixClient
     };
   }
+
+  // Add global error handler for Matrix-related errors if not already installed
+  useEffect(() => {
+    if (!window._matrixErrorHandlerInstalled) {
+      const handleGlobalError = (event) => {
+        // Check if error is Matrix-related
+        if (event.error &&
+            (event.error.name && event.error.name.includes('Matrix') ||
+             event.error.message && (
+               event.error.message.includes('matrix') ||
+               event.error.message.includes('sync') ||
+               event.error.message.includes('token')
+             ))) {
+
+          logger.warn('[MatrixInitializer] Caught Matrix-related error:', event.error);
+
+          // Prevent the error from showing in console
+          event.preventDefault();
+
+          // Try to recover the client if possible
+          if (window.matrixClient && window.matrixClient.getUserId()) {
+            // Log the user ID for debugging
+            logger.info('[MatrixInitializer] Attempting recovery for user:',
+              window.matrixClient.getUserId().split(':')[0].substring(1));
+
+            // Attempt recovery by forcing a sync
+            try {
+              if (window.matrixClient.clientRunning) {
+                window.matrixClient.retryImmediately();
+                logger.info('[MatrixInitializer] Forced sync after error');
+              } else {
+                window.matrixClient.startClient().catch(e => {
+                  logger.error('[MatrixInitializer] Error restarting client after error:', e);
+                });
+              }
+            } catch (recoveryError) {
+              logger.error('[MatrixInitializer] Error during recovery attempt:', recoveryError);
+            }
+          }
+
+          return true;
+        }
+      };
+
+      window.addEventListener('error', handleGlobalError);
+      window._matrixErrorHandlerInstalled = true;
+
+      return () => {
+        window.removeEventListener('error', handleGlobalError);
+      };
+    }
+  }, []);
 
   // Show toast notification for errors instead of modal
   useEffect(() => {
@@ -455,7 +633,7 @@ const MatrixInitializer = ({ children, forceInitialize: initialForceInitialize =
                   <div className="ml-3 flex-1">
                     <p className="text-sm font-medium text-white">Background sync issue</p>
                     <p className="mt-1 text-sm text-gray-300">
-                      We're having trouble syncing your messages in the background. Some features may be limited.
+                      We&apos;re having trouble syncing your messages in the background. Some features may be limited.
                     </p>
                   </div>
                 </div>

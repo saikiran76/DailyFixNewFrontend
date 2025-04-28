@@ -2,6 +2,7 @@ import * as matrixSdk from 'matrix-js-sdk';
 import logger from './logger';
 import { saveToIndexedDB, getFromIndexedDB } from './indexedDBHelper';
 import { MATRIX_CREDENTIALS_KEY } from '../constants';
+import matrixCredentialValidator from './matrixCredentialValidator';
 
 /**
  * Utility for managing Matrix tokens following Element Web's practices
@@ -31,10 +32,21 @@ const matrixTokenManager = {
 
       // Try a simple API call to validate the token
       logger.info('[matrixTokenManager] Validating Matrix credentials');
-      await tempClient.getProfileInfo(credentials.userId);
+      try {
+        await tempClient.getProfileInfo(credentials.userId);
+        logger.info('[matrixTokenManager] Matrix credentials are valid');
+        return credentials;
+      } catch (validationError) {
+        // Handle specific validation errors
+        if (validationError.name === 'ConnectionError') {
+          // Network error - don't invalidate credentials, just return them
+          logger.warn('[matrixTokenManager] Network error during validation, assuming credentials are valid:', validationError);
+          return credentials;
+        }
 
-      logger.info('[matrixTokenManager] Matrix credentials are valid');
-      return credentials;
+        // For other errors, continue with token refresh
+        throw validationError;
+      }
     } catch (error) {
       // Check if the error is due to an expired token
       if (error.errcode === 'M_UNKNOWN_TOKEN' ||
@@ -51,6 +63,11 @@ const matrixTokenManager = {
             return refreshedCredentials;
           } catch (refreshError) {
             logger.error('[matrixTokenManager] Failed to refresh token with password:', refreshError);
+            // If refresh fails due to network error, return original credentials
+            if (refreshError.name === 'ConnectionError') {
+              logger.warn('[matrixTokenManager] Network error during refresh, returning original credentials');
+              return credentials;
+            }
           }
         }
 
@@ -63,6 +80,11 @@ const matrixTokenManager = {
             return refreshedCredentials;
           } catch (refreshError) {
             logger.error('[matrixTokenManager] Failed to refresh token with refresh token:', refreshError);
+            // If refresh fails due to network error, return original credentials
+            if (refreshError.name === 'ConnectionError') {
+              logger.warn('[matrixTokenManager] Network error during refresh, returning original credentials');
+              return credentials;
+            }
           }
         }
 
@@ -74,12 +96,27 @@ const matrixTokenManager = {
           return refreshedCredentials;
         } catch (loginError) {
           logger.error('[matrixTokenManager] Failed to re-login with stored credentials:', loginError);
+          // If login fails due to network error, return original credentials
+          if (loginError.name === 'ConnectionError') {
+            logger.warn('[matrixTokenManager] Network error during re-login, returning original credentials');
+            return credentials;
+          }
         }
       } else {
         logger.error('[matrixTokenManager] Error validating Matrix credentials:', error);
+
+        // For network errors, return the original credentials
+        if (error.name === 'ConnectionError') {
+          logger.warn('[matrixTokenManager] Network error during validation, returning original credentials');
+          return credentials;
+        }
       }
 
-      return null;
+      // If we get here, we couldn't validate or refresh the credentials
+      // But we'll still return the original credentials as a last resort
+      // This prevents unnecessary registration attempts
+      logger.warn('[matrixTokenManager] Could not validate or refresh credentials, but returning original credentials to prevent unnecessary registration');
+      return credentials;
     }
   },
 
@@ -298,81 +335,193 @@ const matrixTokenManager = {
    */
   async getCredentials(userId) {
     let credentials = null;
+    let foundCredentials = false;
 
-    // Try to get from IndexedDB
-    try {
-      const indexedDBData = await getFromIndexedDB(userId);
-      if (indexedDBData && indexedDBData[MATRIX_CREDENTIALS_KEY]) {
-        credentials = indexedDBData[MATRIX_CREDENTIALS_KEY];
-        logger.info('[matrixTokenManager] Found credentials in IndexedDB');
+    logger.info('[matrixTokenManager] Getting credentials for user:', userId);
 
-        // Validate and refresh if needed
-        const validCredentials = await this.validateAndRefreshCredentials(userId, credentials);
-        if (validCredentials) {
-          return validCredentials;
-        }
-      }
-    } catch (e) {
-      logger.warn('[matrixTokenManager] Failed to get from IndexedDB:', e);
-    }
-
-    // Try to get from localStorage (custom key)
+    // Try to get from localStorage (custom key) first - this is the most reliable source
     try {
       const localStorageKey = `dailyfix_connection_${userId}`;
       const localStorageData = localStorage.getItem(localStorageKey);
       if (localStorageData) {
-        const parsedData = JSON.parse(localStorageData);
-        if (parsedData.matrix_credentials) {
-          credentials = parsedData.matrix_credentials;
-          logger.info('[matrixTokenManager] Found credentials in localStorage (custom key)');
+        try {
+          const parsedData = JSON.parse(localStorageData);
+          if (parsedData.matrix_credentials &&
+              parsedData.matrix_credentials.accessToken &&
+              parsedData.matrix_credentials.userId) {
+            credentials = parsedData.matrix_credentials;
+            logger.info('[matrixTokenManager] Found credentials in localStorage (custom key)');
+            logger.info('[matrixTokenManager] Credentials user ID:', credentials.userId);
+            foundCredentials = true;
 
-          // Validate and refresh if needed
-          const validCredentials = await this.validateAndRefreshCredentials(userId, credentials);
-          if (validCredentials) {
-            return validCredentials;
+            // Don't validate immediately, just return the credentials
+            // This prevents unnecessary API calls that might fail
+            return credentials;
           }
+        } catch (parseError) {
+          logger.warn('[matrixTokenManager] Failed to parse localStorage data:', parseError);
         }
+      } else {
+        logger.info(`[matrixTokenManager] No data found in localStorage for key: dailyfix_connection_${userId}`);
       }
     } catch (e) {
       logger.warn('[matrixTokenManager] Failed to get from localStorage (custom key):', e);
     }
 
-    // Try to get from Element-style localStorage keys
-    try {
-      const mx_access_token = localStorage.getItem('mx_access_token');
-      const mx_user_id = localStorage.getItem('mx_user_id');
-      const mx_device_id = localStorage.getItem('mx_device_id');
-      const mx_hs_url = localStorage.getItem('mx_hs_url');
-      const mx_refresh_token = localStorage.getItem('mx_refresh_token');
+    // Try to get from IndexedDB if not found in localStorage
+    if (!foundCredentials) {
+      try {
+        const indexedDBData = await getFromIndexedDB(userId);
+        if (indexedDBData && indexedDBData[MATRIX_CREDENTIALS_KEY]) {
+          credentials = indexedDBData[MATRIX_CREDENTIALS_KEY];
+          logger.info('[matrixTokenManager] Found credentials in IndexedDB');
+          foundCredentials = true;
 
-      if (mx_access_token && mx_user_id) {
-        credentials = {
-          accessToken: mx_access_token,
-          userId: mx_user_id,
-          deviceId: mx_device_id,
-          homeserver: mx_hs_url || 'https://dfix-hsbridge.duckdns.org',
-          refreshToken: mx_refresh_token
-        };
-        logger.info('[matrixTokenManager] Found credentials in localStorage (Element-style)');
+          // Save to localStorage for future use
+          try {
+            const localStorageKey = `dailyfix_connection_${userId}`;
+            const localStorageData = localStorage.getItem(localStorageKey);
+            const parsedData = localStorageData ? JSON.parse(localStorageData) : {};
+            parsedData.matrix_credentials = credentials;
+            localStorage.setItem(localStorageKey, JSON.stringify(parsedData));
+            logger.info('[matrixTokenManager] Saved IndexedDB credentials to localStorage');
+          } catch (saveError) {
+            logger.warn('[matrixTokenManager] Failed to save IndexedDB credentials to localStorage:', saveError);
+          }
 
-        // Validate and refresh if needed
-        const validCredentials = await this.validateAndRefreshCredentials(userId, credentials);
-        if (validCredentials) {
-          return validCredentials;
+          return credentials;
         }
+      } catch (e) {
+        logger.warn('[matrixTokenManager] Failed to get from IndexedDB:', e);
       }
-    } catch (e) {
-      logger.warn('[matrixTokenManager] Failed to get from localStorage (Element-style):', e);
     }
 
-    // Try to get from API
-    try {
-      // This would be implemented to fetch from your backend API
-      // Similar to how it's done in the PlatformConnectionModal
-    } catch (e) {
-      logger.warn('[matrixTokenManager] Failed to get from API:', e);
+    // Try to get from Element-style localStorage keys if still not found
+    if (!foundCredentials) {
+      try {
+        const mx_access_token = localStorage.getItem('mx_access_token');
+        const mx_user_id = localStorage.getItem('mx_user_id');
+        const mx_device_id = localStorage.getItem('mx_device_id');
+        const mx_hs_url = localStorage.getItem('mx_hs_url');
+        const mx_refresh_token = localStorage.getItem('mx_refresh_token');
+
+        if (mx_access_token && mx_user_id) {
+          // Validate and fix Element-style credentials
+          const validatedCredentials = matrixCredentialValidator.validateCredentials({
+            accessToken: mx_access_token,
+            userId: mx_user_id,
+            deviceId: mx_device_id,
+            homeserver: mx_hs_url || 'https://dfix-hsbridge.duckdns.org',
+            refreshToken: mx_refresh_token
+          });
+
+          if (!validatedCredentials) {
+            logger.error('[matrixTokenManager] Element-style credentials failed validation');
+            // Continue to try other methods
+          } else {
+            credentials = validatedCredentials;
+            logger.info('[matrixTokenManager] Found valid credentials in localStorage (Element-style)');
+            foundCredentials = true;
+          }
+
+          // Save to our custom localStorage format for future use
+          try {
+            const localStorageKey = `dailyfix_connection_${userId}`;
+            const localStorageData = localStorage.getItem(localStorageKey);
+            const parsedData = localStorageData ? JSON.parse(localStorageData) : {};
+            parsedData.matrix_credentials = credentials;
+            localStorage.setItem(localStorageKey, JSON.stringify(parsedData));
+            logger.info('[matrixTokenManager] Saved Element-style credentials to custom localStorage');
+          } catch (saveError) {
+            logger.warn('[matrixTokenManager] Failed to save Element-style credentials to localStorage:', saveError);
+          }
+
+          return credentials;
+        }
+      } catch (e) {
+        logger.warn('[matrixTokenManager] Failed to get from localStorage (Element-style):', e);
+      }
     }
 
+    // If no credentials found in local storage, try to get from backend API
+    if (!foundCredentials) {
+      try {
+        logger.info('[matrixTokenManager] No credentials found locally, fetching from backend API');
+
+        // Import the API utility to ensure proper authentication headers
+        const api = (await import('../utils/api')).default;
+
+        // Call the Matrix status API to get or create credentials using the API utility
+        const { data, error } = await api.get('/api/v1/matrix/status');
+
+        if (error) {
+          throw new Error(`API error: ${error}`);
+        }
+
+        if (!data) {
+          throw new Error('API returned empty response');
+        }
+
+        if (data.credentials) {
+          logger.info('[matrixTokenManager] Successfully retrieved credentials from backend API');
+
+          // Validate and fix credentials using our validator
+          const validatedCredentials = matrixCredentialValidator.validateCredentials({
+            userId: data.credentials.userId,
+            accessToken: data.credentials.accessToken,
+            deviceId: data.credentials.deviceId,
+            homeserver: data.credentials.homeserver,
+            password: data.credentials.password,
+            expires_at: data.credentials.expires_at
+          });
+
+          if (!validatedCredentials) {
+            logger.error('[matrixTokenManager] API credentials failed validation');
+            throw new Error('API credentials failed validation');
+          }
+
+          credentials = validatedCredentials;
+          foundCredentials = true;
+
+          // Save to localStorage for future use
+          try {
+            const localStorageKey = `dailyfix_connection_${userId}`;
+            const localStorageData = localStorage.getItem(localStorageKey);
+            const parsedData = localStorageData ? JSON.parse(localStorageData) : {};
+            parsedData.matrix_credentials = credentials;
+            localStorage.setItem(localStorageKey, JSON.stringify(parsedData));
+            logger.info('[matrixTokenManager] Saved API credentials to localStorage');
+          } catch (saveError) {
+            logger.warn('[matrixTokenManager] Failed to save API credentials to localStorage:', saveError);
+          }
+
+          // Also save to IndexedDB
+          try {
+            await saveToIndexedDB(userId, {
+              [MATRIX_CREDENTIALS_KEY]: credentials
+            });
+            logger.info('[matrixTokenManager] Saved API credentials to IndexedDB');
+          } catch (saveError) {
+            logger.warn('[matrixTokenManager] Failed to save API credentials to IndexedDB:', saveError);
+          }
+
+          return credentials;
+        } else {
+          logger.warn('[matrixTokenManager] API response did not contain credentials');
+        }
+      } catch (e) {
+        logger.error('[matrixTokenManager] Failed to get credentials from backend API:', e);
+      }
+    }
+
+    // If we found credentials but validation failed, return them anyway
+    // This prevents unnecessary registration attempts
+    if (foundCredentials && credentials) {
+      logger.warn('[matrixTokenManager] Returning credentials without validation to prevent unnecessary registration');
+      return credentials;
+    }
+
+    logger.warn('[matrixTokenManager] No valid credentials found in any storage location');
     return null;
   }
 };
