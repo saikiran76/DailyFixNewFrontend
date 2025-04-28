@@ -225,6 +225,34 @@ export const useMatrixClient = () => {
 
   // First, check if window.matrixClient is available
   if (window.matrixClient) {
+    // Check if the client is in STOPPED state and start it if needed
+    const syncState = window.matrixClient.getSyncState ? window.matrixClient.getSyncState() : null;
+
+    if (syncState === 'STOPPED' || syncState === 'ERROR') {
+      logger.info(`[MatrixClientContext] window.matrixClient is in ${syncState} state, starting it`);
+      try {
+        // First try to stop the client if it's in an error state
+        if (syncState === 'ERROR') {
+          try {
+            window.matrixClient.stopClient();
+            logger.info('[MatrixClientContext] Stopped window.matrixClient before restarting');
+          } catch (stopError) {
+            logger.warn('[MatrixClientContext] Error stopping window.matrixClient:', stopError);
+          }
+        }
+
+        // Now start the client
+        window.matrixClient.startClient({
+          initialSyncLimit: 10,
+          includeArchivedRooms: true,
+          lazyLoadMembers: true
+        });
+        logger.info('[MatrixClientContext] Started window.matrixClient');
+      } catch (startError) {
+        logger.error('[MatrixClientContext] Error starting window.matrixClient:', startError);
+      }
+    }
+
     // If context is undefined or context.client is null, use window.matrixClient
     if (!context || !context.client) {
       logger.info('[MatrixClientContext] Using window.matrixClient as fallback');
@@ -355,6 +383,29 @@ export const useMatrixClient = () => {
           try {
             // Get all rooms
             const rooms = window.matrixClient.getRooms ? window.matrixClient.getRooms() : [];
+
+            // If force is true, try to restart the client if it's in a bad state
+            if (force) {
+              const syncState = window.matrixClient.getSyncState ? window.matrixClient.getSyncState() : null;
+              if (syncState === 'ERROR' || syncState === 'STOPPED') {
+                logger.info(`[MatrixClientContext] Force sync requested, restarting client in ${syncState} state`);
+                try {
+                  // Stop the client if needed
+                  if (syncState === 'ERROR') {
+                    window.matrixClient.stopClient();
+                  }
+
+                  // Start the client
+                  window.matrixClient.startClient({
+                    initialSyncLimit: 10,
+                    includeArchivedRooms: true,
+                    lazyLoadMembers: true
+                  });
+                } catch (syncError) {
+                  logger.error('[MatrixClientContext] Error restarting client during force sync:', syncError);
+                }
+              }
+            }
 
             // Return rooms directly
             return rooms;

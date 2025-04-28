@@ -222,11 +222,68 @@ class MatrixTimelineManager {
         // Force a sync first if requested
         if (forceRefresh) {
           try {
+            // Check if we're joined to the room first
+            const room = this.client.getRoom(roomId);
+            if (room) {
+              const membership = room.getMyMembership();
+              logger.info(`[MatrixTimelineManager] Room membership state before sync: ${membership}`);
+
+              // If we're not joined, try to join first
+              if (membership === 'invite') {
+                logger.info(`[MatrixTimelineManager] Room is in invite state, joining automatically`);
+                try {
+                  // Join the room
+                  await this.client.joinRoom(roomId);
+
+                  // Wait a moment for the room state to update
+                  await new Promise(resolve => setTimeout(resolve, 2000));
+
+                  // Check membership after joining
+                  const updatedMembership = room.getMyMembership();
+                  logger.info(`[MatrixTimelineManager] Room membership state after joining: ${updatedMembership}`);
+
+                  if (updatedMembership !== 'join') {
+                    logger.warn(`[MatrixTimelineManager] Failed to join room, membership is still: ${updatedMembership}`);
+                  }
+                } catch (joinError) {
+                  logger.error('[MatrixTimelineManager] Error joining room:', joinError);
+                }
+              }
+            }
+
             // Try to force a sync to get the latest messages
             await this.client.roomInitialSync(roomId, 100);
             logger.info(`[MatrixTimelineManager] Forced room initial sync for ${roomId}`);
           } catch (syncError) {
-            logger.warn('[MatrixTimelineManager] Error forcing room initial sync:', syncError);
+            // Check if this is a 403 Forbidden error
+            if (syncError.errcode === 'M_FORBIDDEN' ||
+                (syncError.message && syncError.message.includes('Forbidden')) ||
+                (syncError.data && syncError.data.error && syncError.data.error.includes('Forbidden'))) {
+              logger.warn(`[MatrixTimelineManager] Forbidden error during room sync, user may not be in room: ${roomId}`);
+
+              // Try to join the room if we're not already in it
+              try {
+                const room = this.client.getRoom(roomId);
+                if (room) {
+                  const membership = room.getMyMembership();
+                  if (membership !== 'join') {
+                    logger.info(`[MatrixTimelineManager] Attempting to join room ${roomId} after forbidden error`);
+                    await this.client.joinRoom(roomId);
+
+                    // Wait a moment for the room state to update
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+
+                    // Try the sync again
+                    await this.client.roomInitialSync(roomId, 100);
+                    logger.info(`[MatrixTimelineManager] Successfully joined and synced room ${roomId} after forbidden error`);
+                  }
+                }
+              } catch (joinError) {
+                logger.error(`[MatrixTimelineManager] Failed to join room ${roomId} after forbidden error:`, joinError);
+              }
+            } else {
+              logger.warn('[MatrixTimelineManager] Error forcing room initial sync:', syncError);
+            }
           }
         }
 
@@ -256,7 +313,45 @@ class MatrixTimelineManager {
                 logger.info(`[MatrixTimelineManager] After pagination: ${events.length} events`);
               }
             } catch (paginationError) {
-              logger.warn('[MatrixTimelineManager] Error paginating timeline:', paginationError);
+              // Check if this is a 403 Forbidden error
+              if (paginationError.errcode === 'M_FORBIDDEN' ||
+                  (paginationError.message && paginationError.message.includes('Forbidden')) ||
+                  (paginationError.data && paginationError.data.error && paginationError.data.error.includes('Forbidden'))) {
+                logger.warn(`[MatrixTimelineManager] Forbidden error during pagination, user may not be in room: ${roomId}`);
+
+                // Try to join the room if we're not already in it
+                try {
+                  const room = this.client.getRoom(roomId);
+                  if (room) {
+                    const membership = room.getMyMembership();
+                    if (membership !== 'join') {
+                      logger.info(`[MatrixTimelineManager] Attempting to join room ${roomId} after forbidden pagination error`);
+                      await this.client.joinRoom(roomId);
+
+                      // Wait a moment for the room state to update
+                      await new Promise(resolve => setTimeout(resolve, 2000));
+
+                      // Try the pagination again
+                      await this.client.paginateEventTimeline(timeline, { backwards: direction === 'b', limit });
+                      events = timeline.getEvents();
+
+                      // Add isLiveEvent function to events if it doesn't exist
+                      events = events.map(event => {
+                        if (typeof event.isLiveEvent !== 'function') {
+                          event.isLiveEvent = () => false;
+                        }
+                        return event;
+                      });
+
+                      logger.info(`[MatrixTimelineManager] Successfully joined and paginated room ${roomId} after forbidden error`);
+                    }
+                  }
+                } catch (joinError) {
+                  logger.error(`[MatrixTimelineManager] Failed to join room ${roomId} after forbidden pagination error:`, joinError);
+                }
+              } else {
+                logger.warn('[MatrixTimelineManager] Error paginating timeline:', paginationError);
+              }
             }
           }
 

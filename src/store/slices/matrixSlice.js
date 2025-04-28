@@ -2,7 +2,6 @@ import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import { supabase } from '../../supabaseClient';
 import logger from '../../utils/logger';
 import { saveToIndexedDB, getFromIndexedDB } from '../../utils/indexedDBHelper';
-import matrixRegistration from '../../utils/matrixRegistration';
 
 // Constants
 const MATRIX_CREDENTIALS_KEY = 'matrix_credentials';
@@ -72,9 +71,34 @@ export const registerMatrixAccount = createAsyncThunk(
     try {
       logger.info('[matrixSlice] Registering new Matrix account for user:', userId);
 
-      // Use the client-side Matrix registration utility
-      // This follows Element-Web's architecture for Matrix registration
-      const credentials = await matrixRegistration.registerMatrixAccount(userId);
+      // Call the Matrix status API to get or create credentials
+      const response = await fetch('/api/matrix/status', {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        credentials: 'include' // Include cookies for authentication
+      });
+
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json();
+
+      if (!data.credentials) {
+        throw new Error('API response did not contain credentials');
+      }
+
+      // Convert backend credentials format to our format
+      const credentials = {
+        userId: data.credentials.userId,
+        accessToken: data.credentials.accessToken,
+        deviceId: data.credentials.deviceId,
+        homeserver: data.credentials.homeserver,
+        password: data.credentials.password,
+        expires_at: data.credentials.expires_at
+      };
 
       logger.info('[matrixSlice] Matrix account registered successfully');
       return credentials;

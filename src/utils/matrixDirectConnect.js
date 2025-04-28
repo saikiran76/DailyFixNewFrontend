@@ -1,7 +1,8 @@
 import * as matrixSdk from 'matrix-js-sdk';
 import logger from './logger';
-import { saveToIndexedDB, getFromIndexedDB } from './indexedDBHelper';
+import { getFromIndexedDB } from './indexedDBHelper';
 import { MATRIX_CREDENTIALS_KEY } from '../constants';
+import { patchMatrixFetch } from './matrixFetchUtils';
 
 /**
  * Utility for directly connecting to Matrix with a consistent password
@@ -101,242 +102,74 @@ const matrixDirectConnect = {
         }
       }
 
-      // If we couldn't use existing credentials, proceed with login/registration
-      // Generate a unique username based on the user ID
-      // This ensures we create a fresh account with a secure password
-      const username = `user${userId.replace(/-/g, '')}matrixttestkoracatwo`;
+      // If we couldn't use existing credentials, we need to get new ones from the API
+      // Apply fetch patch to prevent errors (patches global fetch)
+      patchMatrixFetch();
 
-      // Generate a secure password based on the user ID and a secret
-      // This is more secure than a hardcoded password
-      const passwordBase = `${userId}-${navigator.userAgent}-${window.location.hostname}`;
-      const password = btoa(passwordBase).substring(0, 20) + '!Aa1';
+      // Instead of trying to register or login directly, we should use the API
+      logger.info('[matrixDirectConnect] Existing credentials are invalid or not found');
 
-      const homeserver = 'https://dfix-hsbridge.duckdns.org';
-
-      // Create a temporary client for login
-      const tempClient = matrixSdk.createClient({
-        baseUrl: homeserver
-      });
-
-      logger.info('[matrixDirectConnect] Attempting login with username:', username);
-
+      // Try to get new credentials from the API
       try {
-        // Try to login with the consistent password using non-deprecated signature
-        const loginResponse = await tempClient.login({
-          type: 'm.login.password',
-          identifier: {
-            type: 'm.id.user',
-            user: username
-          },
-          password: password,
-          initial_device_display_name: `DailyFix Web ${new Date().toISOString()}`
-        });
+        logger.info('[matrixDirectConnect] Attempting to get new credentials from the API');
 
-        if (!loginResponse || !loginResponse.access_token) {
-          throw new Error('Login failed: No valid response');
+        // Import the API utility to ensure proper authentication headers
+        const api = (await import('./api')).default;
+
+        // Call the Matrix status API to get fresh credentials using the API utility
+        // This endpoint calls matrixService.preCheckMatrixUser which includes token refresh logic
+        const { data, error } = await api.get('/api/v1/matrix/status');
+
+        if (error) {
+          throw new Error(`API error: ${error}`);
         }
 
-        logger.info('[matrixDirectConnect] Login successful');
+        if (!data || !data.credentials) {
+          throw new Error('API response did not contain credentials');
+        }
 
-        // Create credentials object
-        const credentials = {
-          userId: loginResponse.user_id,
-          accessToken: loginResponse.access_token,
-          deviceId: loginResponse.device_id,
-          homeserver: homeserver,
-          password: password // Store password for future logins
-        };
+        // Create a Matrix client with the new credentials
+        const newCredentials = data.credentials;
 
-        // Save credentials to IndexedDB
-        await saveToIndexedDB(userId, {
-          [MATRIX_CREDENTIALS_KEY]: credentials
-        });
-
-        // Save to localStorage (custom key)
+        // Store the credentials for future use
         try {
           const localStorageKey = `dailyfix_connection_${userId}`;
-          const localStorageData = localStorage.getItem(localStorageKey);
-          const parsedData = localStorageData ? JSON.parse(localStorageData) : {};
-          parsedData.matrix_credentials = credentials;
+          const existingData = localStorage.getItem(localStorageKey);
+          const parsedData = existingData ? JSON.parse(existingData) : {};
+          parsedData.matrix_credentials = newCredentials;
           localStorage.setItem(localStorageKey, JSON.stringify(parsedData));
-        } catch (e) {
-          logger.warn('[matrixDirectConnect] Failed to save to localStorage (custom key):', e);
+
+          // Also update IndexedDB if available
+          try {
+            const { saveToIndexedDB } = await import('./indexedDBHelper');
+            const { MATRIX_CREDENTIALS_KEY } = await import('../constants');
+            await saveToIndexedDB(userId, {
+              [MATRIX_CREDENTIALS_KEY]: newCredentials
+            });
+          } catch (dbError) {
+            logger.warn('[matrixDirectConnect] Error saving to IndexedDB:', dbError);
+          }
+
+          logger.info('[matrixDirectConnect] Stored new credentials in localStorage and IndexedDB');
+        } catch (storageError) {
+          logger.warn('[matrixDirectConnect] Failed to store credentials in localStorage:', storageError);
         }
 
-        // Save to Element-style localStorage keys
-        try {
-          localStorage.setItem('mx_access_token', credentials.accessToken);
-          localStorage.setItem('mx_user_id', credentials.userId);
-          localStorage.setItem('mx_device_id', credentials.deviceId);
-          localStorage.setItem('mx_hs_url', credentials.homeserver);
-        } catch (e) {
-          logger.warn('[matrixDirectConnect] Failed to save to localStorage (Element-style):', e);
-        }
-
-        // Create a Matrix client with the credentials
+        // Create a new client with the fresh credentials
         const client = matrixSdk.createClient({
-          baseUrl: homeserver,
-          accessToken: credentials.accessToken,
-          userId: credentials.userId,
-          deviceId: credentials.deviceId,
+          baseUrl: newCredentials.homeserver || 'https://dfix-hsbridge.duckdns.org',
+          accessToken: newCredentials.accessToken,
+          userId: newCredentials.userId,
+          deviceId: newCredentials.deviceId,
           timelineSupport: true,
           useAuthorizationHeader: true
         });
 
+        logger.info('[matrixDirectConnect] Successfully created client with new credentials from API');
         return client;
-      } catch (loginError) {
-        logger.warn('[matrixDirectConnect] Login failed, attempting registration:', loginError);
-
-        try {
-          // Try to register a new account using modern API
-          const registerResponse = await tempClient.register(
-            username,
-            password,
-            undefined, // device ID (auto-generated)
-            {
-              type: 'm.login.dummy'
-            },
-            {
-              initial_device_display_name: `DailyFix Web ${new Date().toISOString()}`
-            }
-          );
-
-          if (!registerResponse || !registerResponse.access_token) {
-            throw new Error('Registration failed: No valid response');
-          }
-
-          logger.info('[matrixDirectConnect] Registration successful');
-
-          // Create credentials object
-          const credentials = {
-            userId: registerResponse.user_id,
-            accessToken: registerResponse.access_token,
-            deviceId: registerResponse.device_id,
-            homeserver: homeserver,
-            password: password // Store password for future logins
-          };
-
-          // Save credentials to IndexedDB
-          await saveToIndexedDB(userId, {
-            [MATRIX_CREDENTIALS_KEY]: credentials
-          });
-
-          // Save to localStorage (custom key)
-          try {
-            const localStorageKey = `dailyfix_connection_${userId}`;
-            const localStorageData = localStorage.getItem(localStorageKey);
-            const parsedData = localStorageData ? JSON.parse(localStorageData) : {};
-            parsedData.matrix_credentials = credentials;
-            localStorage.setItem(localStorageKey, JSON.stringify(parsedData));
-          } catch (e) {
-            logger.warn('[matrixDirectConnect] Failed to save to localStorage (custom key):', e);
-          }
-
-          // Save to Element-style localStorage keys
-          try {
-            localStorage.setItem('mx_access_token', credentials.accessToken);
-            localStorage.setItem('mx_user_id', credentials.userId);
-            localStorage.setItem('mx_device_id', credentials.deviceId);
-            localStorage.setItem('mx_hs_url', credentials.homeserver);
-          } catch (e) {
-            logger.warn('[matrixDirectConnect] Failed to save to localStorage (Element-style):', e);
-          }
-
-          // Create a Matrix client with the credentials
-          const client = matrixSdk.createClient({
-            baseUrl: homeserver,
-            accessToken: credentials.accessToken,
-            userId: credentials.userId,
-            deviceId: credentials.deviceId,
-            timelineSupport: true,
-            useAuthorizationHeader: true
-          });
-
-          return client;
-        } catch (registerError) {
-          // If registration fails with M_USER_IN_USE, try a different username
-          if (registerError.errcode === 'M_USER_IN_USE' ||
-              (registerError.message && registerError.message.includes('User ID already taken'))) {
-            logger.warn('[matrixDirectConnect] Username already taken, trying with a different username');
-
-            // Try with a different username
-            const altUsername = `user${userId.replace(/-/g, '')}matrixttestkoraca${Date.now()}`;
-
-            try {
-              // Try to register with the alternative username using modern API
-              const altRegisterResponse = await tempClient.register(
-                altUsername,
-                password,
-                undefined, // device ID (auto-generated)
-                {
-                  type: 'm.login.dummy'
-                },
-                {
-                  initial_device_display_name: `DailyFix Web ${new Date().toISOString()}`
-                }
-              );
-
-              if (!altRegisterResponse || !altRegisterResponse.access_token) {
-                throw new Error('Alternative registration failed: No valid response');
-              }
-
-              logger.info('[matrixDirectConnect] Alternative registration successful');
-
-              // Create credentials object
-              const credentials = {
-                userId: altRegisterResponse.user_id,
-                accessToken: altRegisterResponse.access_token,
-                deviceId: altRegisterResponse.device_id,
-                homeserver: homeserver,
-                password: password // Store password for future logins
-              };
-
-              // Save credentials to IndexedDB
-              await saveToIndexedDB(userId, {
-                [MATRIX_CREDENTIALS_KEY]: credentials
-              });
-
-              // Save to localStorage (custom key)
-              try {
-                const localStorageKey = `dailyfix_connection_${userId}`;
-                const localStorageData = localStorage.getItem(localStorageKey);
-                const parsedData = localStorageData ? JSON.parse(localStorageData) : {};
-                parsedData.matrix_credentials = credentials;
-                localStorage.setItem(localStorageKey, JSON.stringify(parsedData));
-              } catch (e) {
-                logger.warn('[matrixDirectConnect] Failed to save to localStorage (custom key):', e);
-              }
-
-              // Save to Element-style localStorage keys
-              try {
-                localStorage.setItem('mx_access_token', credentials.accessToken);
-                localStorage.setItem('mx_user_id', credentials.userId);
-                localStorage.setItem('mx_device_id', credentials.deviceId);
-                localStorage.setItem('mx_hs_url', credentials.homeserver);
-              } catch (e) {
-                logger.warn('[matrixDirectConnect] Failed to save to localStorage (Element-style):', e);
-              }
-
-              // Create a Matrix client with the credentials
-              const client = matrixSdk.createClient({
-                baseUrl: homeserver,
-                accessToken: credentials.accessToken,
-                userId: credentials.userId,
-                deviceId: credentials.deviceId,
-                timelineSupport: true,
-                useAuthorizationHeader: true
-              });
-
-              return client;
-            } catch (altRegisterError) {
-              logger.error('[matrixDirectConnect] Alternative registration failed:', altRegisterError);
-              throw new Error('All registration attempts failed');
-            }
-          } else {
-            logger.error('[matrixDirectConnect] Registration failed:', registerError);
-            throw new Error('Registration failed: ' + (registerError.message || 'Unknown error'));
-          }
-        }
+      } catch (apiError) {
+        logger.error('[matrixDirectConnect] Error getting credentials from API:', apiError);
+        throw new Error('Failed to get Matrix credentials from API. Please refresh the page and try again.');
       }
     } catch (error) {
       logger.error('[matrixDirectConnect] Error connecting to Matrix:', error);

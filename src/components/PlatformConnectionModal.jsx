@@ -14,7 +14,6 @@ import { fetchContacts } from '../store/slices/contactSlice';
 import { toast } from 'react-toastify';
 import { saveToIndexedDB, getFromIndexedDB } from '../utils/indexedDBHelper';
 import matrixTokenManager from '../utils/matrixTokenManager';
-import matrixRegistration from '../utils/matrixRegistration';
 import matrixTokenRefresher from '../utils/matrixTokenRefresher';
 import '../styles/platformButtons.css';
 
@@ -439,14 +438,25 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
           try {
             logger.info('[PlatformConnectionModal] Starting Matrix account registration for user:', session.user.id);
 
-            // Register a new Matrix account using the imported utility
-            credentials = await matrixRegistration.registerMatrixAccount(session.user.id);
+            // Instead of client-side registration, use the backend API
+            const { data, error } = await api.post('/api/v1/matrix/auto-initialize');
 
-            if (!credentials || !credentials.accessToken) {
-              throw new Error('Registration completed but no valid credentials returned');
+            if (error) {
+              throw new Error(`API error: ${error}`);
             }
 
-            logger.info('[PlatformConnectionModal] Successfully registered new Matrix account');
+            if (!data || data.status !== 'active' || !data.credentials) {
+              throw new Error('Failed to initialize Matrix account through API');
+            }
+
+            // Use the credentials from the API response
+            credentials = data.credentials;
+
+            if (!credentials || !credentials.accessToken) {
+              throw new Error('API returned invalid credentials');
+            }
+
+            logger.info('[PlatformConnectionModal] Successfully registered new Matrix account through API');
           } catch (registrationError) {
             logger.error('[PlatformConnectionModal] Error registering Matrix account:', registrationError);
             toast.error('Failed to register Matrix account. Please try again.', { id: 'telegram-init' });
@@ -571,50 +581,57 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
     sessionStorage.setItem('connecting_to_telegram', 'true');
     logger.info('[PlatformConnectionModal] Set connecting_to_telegram flag for Matrix initialization');
 
-    // Get credentials and create client using matrixTokenManager
+    // Get Matrix credentials from matrixTokenManager
+    // This will check localStorage first, then IndexedDB, and finally call the backend API
     return matrixTokenManager.getCredentials(session.user.id)
       .then(async (credentials) => {
-        // If no credentials, register a new Matrix account
-        if (!credentials || !credentials.accessToken) {
-          logger.info('[PlatformConnectionModal] No valid Matrix credentials found for Telegram, registering new account');
-
-          try {
-            logger.info('[PlatformConnectionModal] Starting Matrix account registration for Telegram user:', session.user.id);
-
-            // Register a new Matrix account using the imported utility
-            credentials = await matrixRegistration.registerMatrixAccount(session.user.id);
-
-            if (!credentials || !credentials.accessToken) {
-              throw new Error('Registration completed but no valid credentials returned');
-            }
-
-            logger.info('[PlatformConnectionModal] Successfully registered new Matrix account for Telegram');
-          } catch (registrationError) {
-            logger.error('[PlatformConnectionModal] Error registering Matrix account for Telegram:', registrationError);
-            // toast.error('Failed to register Matrix account. Please try again.', { id: 'telegram-init' });
-            throw new Error('Could not register Matrix account: ' + registrationError.message);
-          }
+        // If credentials were found, use them
+        if (credentials && credentials.accessToken) {
+          logger.info('[PlatformConnectionModal] Using credentials from matrixTokenManager');
+          return initializeWithCredentials(credentials);
+        } else {
+          // This should not happen since matrixTokenManager now calls the backend API
+          // which should always return credentials, but handle it just in case
+          logger.error('[PlatformConnectionModal] No credentials returned from matrixTokenManager');
+          throw new Error('Failed to get Matrix credentials');
         }
+      })
+      .catch(error => {
+        logger.error('[PlatformConnectionModal] Error initializing Matrix for Telegram:', error);
+        toast.error('Failed to prepare Telegram connection. Please try again.', { id: 'telegram-init' });
 
-        // Import Matrix SDK
-        const matrixSdk = await import('matrix-js-sdk');
+        // Clear loading state
+        setLoading(false);
+        if (telegramLoading) telegramLoading.classList.remove('loading');
+
+        // Clear the connecting flag on error to allow retrying
+        sessionStorage.removeItem('connecting_to_telegram');
+      });
+
+    // Helper function to initialize with credentials
+    async function initializeWithCredentials(credentials) {
+      try {
+        // Import and apply fetch patch (patches global fetch)
+        const { patchMatrixFetch } = await import('../utils/matrixFetchUtils');
+        patchMatrixFetch();
+
+        // Import client singleton
+        const matrixClientSingleton = await import('../utils/matrixClientSingleton').then(m => m.default);
 
         // Create Matrix client directly (Element-web style)
         const { userId, accessToken, homeserver, deviceId } = credentials;
         const homeserverUrl = homeserver || 'https://dfix-hsbridge.duckdns.org';
 
-        const clientOpts = {
-          baseUrl: homeserverUrl,
+        // Prepare client configuration
+        const clientConfig = {
+          homeserver: homeserverUrl,
           userId: userId,
           deviceId: deviceId || `DFIX_WEB_${Date.now()}`,
-          accessToken: accessToken,
-          timelineSupport: true,
-          store: new matrixSdk.MemoryStore({ localStorage: window.localStorage }),
-          useAuthorizationHeader: true
+          accessToken: accessToken
         };
 
-        logger.info('[PlatformConnectionModal] Creating new Matrix client for Telegram');
-        const client = matrixSdk.createClient(clientOpts);
+        logger.info('[PlatformConnectionModal] Creating new Matrix client for Telegram with credentials');
+        const client = await matrixClientSingleton.getClient(clientConfig, userId);
 
         // Set the global Matrix client
         window.matrixClient = client;
@@ -624,24 +641,18 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
 
         // Start the client directly
         logger.info('[PlatformConnectionModal] Starting Matrix client for Telegram');
-        return client.startClient();
-      })
-      .then(() => {
+        await client.startClient();
+
         logger.info('[PlatformConnectionModal] Matrix initialized successfully for Telegram');
         toast.success('Ready to connect Telegram', { id: 'telegram-init' });
         setStep('telegram-setup');
-      })
-      .catch(error => {
-        logger.error('[PlatformConnectionModal] Error initializing Matrix for Telegram:', error);
-        // toast.error('Failed to prepare Telegram connection. Please try again.', { id: 'telegram-init' });
 
-        // Clear loading state
-        setLoading(false);
-        if (telegramLoading) telegramLoading.classList.remove('loading');
-
-        // Clear the connecting flag on error to allow retrying
-        sessionStorage.removeItem('connecting_to_telegram');
-      });
+        return client;
+      } catch (error) {
+        logger.error('[PlatformConnectionModal] Error using credentials:', error);
+        throw error;
+      }
+    }
   }, [session.user.id]);
 
   // Handle component mount and check for pre-selected platform

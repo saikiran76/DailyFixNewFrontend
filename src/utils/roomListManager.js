@@ -252,7 +252,58 @@ class RoomListManager {
         syncState = 'UNKNOWN';
       }
 
-      if (syncState !== 'PREPARED' && syncState !== 'SYNCING') {
+      if (syncState === 'ERROR') {
+        logger.warn('[RoomListManager] Matrix client in ERROR state, attempting to recover');
+
+        try {
+          // Force a retry
+          if (client.retryImmediately) {
+            client.retryImmediately();
+            logger.info('[RoomListManager] Forced immediate retry of sync');
+
+            // Wait a moment for the sync to start
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            // Check sync state again
+            const newSyncState = client.getSyncState ? client.getSyncState() : null;
+            logger.info('[RoomListManager] Matrix client sync state after recovery attempt:', newSyncState);
+
+            // If still in error state, try more aggressive recovery
+            if (newSyncState === 'ERROR') {
+              logger.warn('[RoomListManager] Still in ERROR state, trying more aggressive recovery');
+
+              // Try to restart the client completely
+              try {
+                if (client.stopClient && client.startClient) {
+                  // Stop the client
+                  await client.stopClient();
+                  logger.info('[RoomListManager] Stopped Matrix client for recovery');
+
+                  // Wait a moment before restarting
+                  await new Promise(resolve => setTimeout(resolve, 1000));
+
+                  // Start the client again
+                  await client.startClient({
+                    initialSyncLimit: 10,
+                    includeArchivedRooms: true,
+                    lazyLoadMembers: true
+                  });
+                  logger.info('[RoomListManager] Restarted Matrix client for recovery');
+
+                  // Wait for sync to start
+                  await new Promise(resolve => setTimeout(resolve, 3000));
+                }
+              } catch (restartError) {
+                logger.error('[RoomListManager] Error restarting client:', restartError);
+              }
+            }
+          } else {
+            logger.warn('[RoomListManager] retryImmediately method not available on client');
+          }
+        } catch (retryError) {
+          logger.error('[RoomListManager] Error retrying sync:', retryError);
+        }
+      } else if (syncState !== 'PREPARED' && syncState !== 'SYNCING') {
         logger.warn(`[RoomListManager] Matrix client sync state is ${syncState}, waiting for sync...`);
 
         // Try to force a sync
@@ -364,10 +415,34 @@ class RoomListManager {
               // Try to join the room
               try {
                 logger.info('[RoomListManager] Trying to join Telegram room:', telegramRoomId);
+
+                // First check if the client is in a state where it can join rooms
+                const syncState = client.getSyncState ? client.getSyncState() : null;
+                if (syncState === 'STOPPED') {
+                  logger.info('[RoomListManager] Client is STOPPED, starting it before joining room');
+                  await client.startClient({
+                    initialSyncLimit: 10,
+                    includeArchivedRooms: true,
+                    lazyLoadMembers: true
+                  });
+
+                  // Wait a moment for the client to start
+                  await new Promise(resolve => setTimeout(resolve, 3000));
+                }
+
+                // Now try to join the room
                 await client.joinRoom(telegramRoomId);
+
+                // Wait a moment for the room to be processed
+                await new Promise(resolve => setTimeout(resolve, 1000));
+
+                // Get the room again
                 const joinedRoom = client.getRoom(telegramRoomId);
                 if (joinedRoom) {
+                  logger.info(`[RoomListManager] Successfully joined Telegram room: ${joinedRoom.roomId} - ${joinedRoom.name}`);
                   filteredRooms = [joinedRoom];
+                } else {
+                  logger.warn(`[RoomListManager] Joined room but couldn't get it from client: ${telegramRoomId}`);
                 }
               } catch (joinError) {
                 logger.warn('[RoomListManager] Error joining Telegram room:', joinError);
@@ -556,6 +631,41 @@ class RoomListManager {
           // Include rooms in 'invite' state (Element does this)
           const isInvitedRoom = roomState === 'invite';
 
+          // Log room details for debugging
+          logger.info(`[RoomListManager] Checking room ${room.roomId} - ${room.name} - State: ${roomState}`);
+
+          // CRITICAL: If this is the specific Telegram room from localStorage, include it
+          if (telegramRoomId && room.roomId === telegramRoomId) {
+            logger.info(`[RoomListManager] Found exact match for stored Telegram room: ${room.roomId}`);
+            return true;
+          }
+
+          // Check room name for Telegram indicators (most reliable)
+          const roomName = room.name || '';
+          if (roomName.toLowerCase().includes('telegram') ||
+              roomName.toLowerCase().includes('tg_') ||
+              roomName.toLowerCase().startsWith('tg:')) {
+            logger.info(`[RoomListManager] Found Telegram room by name: ${room.roomId} - ${roomName}`);
+            return true;
+          }
+
+          // Check for Telegram bot or users in members
+          try {
+            const members = room.getJoinedMembers() || [];
+            const hasTelegramMember = members.some(member =>
+              member.userId === '@telegrambot:dfix-hsbridge.duckdns.org' ||
+              member.userId.includes('telegram') ||
+              member.name?.includes('Telegram')
+            );
+
+            if (hasTelegramMember) {
+              logger.info(`[RoomListManager] Found Telegram room by member: ${room.roomId} - ${roomName}`);
+              return true;
+            }
+          } catch (memberError) {
+            // Ignore errors getting members
+          }
+
           // Get joined members
           const joinedMembers = room.getJoinedMembers() || [];
 
@@ -581,8 +691,8 @@ class RoomListManager {
             (member.name && member.name.includes('Telegram'))
           );
 
-          // Get room name
-          let roomName = room.name || '';
+          // We already have roomName from above
+          // const roomName = room.name || '';
 
           // Check if any messages in the room are from Telegram users
           let hasTelegramSenders = false;
@@ -616,8 +726,8 @@ class RoomListManager {
             try {
               // Check if the inviter is a Telegram-related user
               const memberEvents = room.currentState.getStateEvents('m.room.member');
-              // Get the current user ID from the userConfig
-              const currentUserId = userId;
+              // Get the current user ID from the client
+              const currentUserId = this.roomLists.get(Object.keys(this.roomLists)[0])?.client?.getUserId() || '';
 
               const myMemberEvent = memberEvents.find(event =>
                 event.getStateKey() === currentUserId &&
@@ -1481,11 +1591,29 @@ class RoomListManager {
    * @param {string} userId - User ID
    */
   notifyRoomsUpdated(userId) {
-    const handlers = this.eventHandlers.get(userId);
-    if (handlers && handlers.onRoomsUpdated) {
-      const roomList = this.roomLists.get(userId);
-      handlers.onRoomsUpdated(roomList.rooms);
+    // Initialize the timeouts object if it doesn't exist
+    if (!this._notifyTimeouts) {
+      this._notifyTimeouts = {};
     }
+
+    // Clear any existing timeout to debounce multiple rapid updates
+    if (this._notifyTimeouts[userId]) {
+      clearTimeout(this._notifyTimeouts[userId]);
+    }
+
+    // Set a timeout to debounce multiple rapid updates
+    this._notifyTimeouts[userId] = setTimeout(() => {
+      const handlers = this.eventHandlers.get(userId);
+      if (handlers && handlers.onRoomsUpdated) {
+        const roomList = this.roomLists.get(userId);
+        if (roomList) {
+          handlers.onRoomsUpdated(roomList.rooms);
+          logger.info(`[RoomListManager] Notified handlers of ${roomList.rooms.length} rooms for user ${userId}`);
+        }
+      }
+      // Clear the timeout reference
+      delete this._notifyTimeouts[userId];
+    }, 300); // 300ms debounce time
   }
 
   /**

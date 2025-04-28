@@ -53,7 +53,7 @@ export const ResponseSchemas = {
 
 // Create unified API instance
 const api = axios.create({
-  baseURL: "https://dailyfix-apigate.duckdns.org",
+  baseURL: import.meta.env.VITE_API_URL || "http://localhost:4000",
   timeout: 180000, // 180 seconds
   withCredentials: false, // Changed from true to false to avoid CORS issues
   headers: {

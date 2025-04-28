@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { toast } from 'react-hot-toast';
+import PropTypes from 'prop-types';
 import { FiLoader, FiAlertTriangle, FiCheck, FiClock, FiRefreshCw } from 'react-icons/fi';
 import { FaTelegram } from 'react-icons/fa';
 // Import MatrixInitializer for Telegram connection
@@ -104,19 +105,67 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
               startTelegramConnection();
             }
           } else {
-            // If client is not in a valid state, force a refresh
+            // If client is not in a valid state, force a refresh but with safeguards
             logger.warn(`[TelegramConnection] Matrix client in invalid state: ${syncState}, refreshing`);
-            const refreshedClient = await matrixTokenRefresher.refreshClient(session.user.id);
-            setGlobalClient(refreshedClient);
-            window.matrixClient = refreshedClient;
 
-            // Check the state of the refreshed client
-            const refreshedSyncState = refreshedClient.getSyncState();
-            logger.info(`[TelegramConnection] Refreshed Matrix client sync state: ${refreshedSyncState}`);
-            dispatch(setSyncState(refreshedSyncState));
+            // Check if we've already tried refreshing too many times
+            const refreshAttempts = parseInt(sessionStorage.getItem('telegram_refresh_attempts') || '0');
 
-            // Store sync state in localStorage for persistence
-            localStorage.setItem('matrix_sync_state', refreshedSyncState);
+            if (refreshAttempts >= 3) {
+              logger.error(`[TelegramConnection] Too many refresh attempts (${refreshAttempts}), giving up`);
+
+              // Show a toast notification
+              try {
+                const { toast } = await import('react-hot-toast');
+                toast.error('Connection issue detected. Please try again later.', {
+                  id: 'telegram-refresh-limit',
+                  duration: 5000
+                });
+              } catch {
+                // Ignore toast errors
+              }
+
+              // Use the existing client despite its state
+              setGlobalClient(validClient);
+
+              // Store the current state in localStorage
+              localStorage.setItem('matrix_sync_state', syncState || 'ERROR');
+              dispatch(setSyncState(syncState || 'ERROR'));
+            } else {
+              // Increment the refresh attempts counter
+              sessionStorage.setItem('telegram_refresh_attempts', (refreshAttempts + 1).toString());
+
+              // Try to refresh the client
+              try {
+                const refreshedClient = await matrixTokenRefresher.refreshClient(session.user.id);
+
+                if (refreshedClient) {
+                  setGlobalClient(refreshedClient);
+                  window.matrixClient = refreshedClient;
+
+                  // Check the state of the refreshed client
+                  const refreshedSyncState = refreshedClient.getSyncState();
+                  logger.info(`[TelegramConnection] Refreshed Matrix client sync state: ${refreshedSyncState}`);
+                  dispatch(setSyncState(refreshedSyncState));
+
+                  // Store sync state in localStorage for persistence
+                  localStorage.setItem('matrix_sync_state', refreshedSyncState || 'ERROR');
+
+                  // Reset the attempts counter on success
+                  if (refreshedSyncState === 'PREPARED' || refreshedSyncState === 'SYNCING') {
+                    sessionStorage.removeItem('telegram_refresh_attempts');
+                  }
+                } else {
+                  logger.error('[TelegramConnection] Refresh failed, client is null');
+                  // Use the existing client despite its state
+                  setGlobalClient(validClient);
+                }
+              } catch (refreshError) {
+                logger.error('[TelegramConnection] Error refreshing client:', refreshError);
+                // Use the existing client despite its state
+                setGlobalClient(validClient);
+              }
+            }
           }
         } catch (error) {
           logger.error('[TelegramConnection] Error ensuring valid Matrix client:', error);
@@ -182,8 +231,8 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
     // Check immediately
     checkForMatrixClient();
 
-    // Set up interval to check every 500ms
-    checkInterval = setInterval(checkForMatrixClient, 500);
+    // Set up interval to check every 2000ms (increased from 500ms to reduce frequency)
+    checkInterval = setInterval(checkForMatrixClient, 2000);
 
     // Clean up interval on component unmount
     return () => {
@@ -191,7 +240,8 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
         clearInterval(checkInterval);
       }
     };
-  }, [session.user.id]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.user.id, dispatch, step]);
 
   // Calculate exponential backoff with jitter
   const calculateBackoff = (retry) => {
@@ -350,7 +400,14 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
       setTimeout(() => {
         // Retry the current step
         if (step === 'sending_login') {
-          sendLoginCommand(matrixClient, roomId);
+          // Use the global Matrix client for retry
+          const globalClient = window.matrixClient;
+          if (globalClient) {
+            sendLoginCommand(globalClient, roomId);
+          } else {
+            logger.error('[TelegramConnection] No Matrix client available for retry');
+            toast.error('Connection error. Please refresh and try again.', { id: 'telegram-retry' });
+          }
         } else if (step === 'phone_input') {
           // Just reset waiting state for phone input
           setWaitingForBotResponse(false);
@@ -386,11 +443,32 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
     }
   };
 
-  // Start the Telegram connection process
-  const startTelegramConnection = async () => {
+  // Create a debounced version of the connection function to prevent multiple calls
+  const isConnecting = useRef(false);
+
+  // Start the Telegram connection process - wrapped in useCallback to avoid dependency issues
+  const startTelegramConnection = useCallback(async () => {
+    // Prevent multiple simultaneous connection attempts
+    if (isConnecting.current) {
+      logger.info('[TelegramConnection] Connection already in progress, ignoring duplicate request');
+      return;
+    }
+
+    // Set the connecting flag
+    isConnecting.current = true;
+
     setLoading(true);
     setError(null);
     setRetryCount(0);
+
+    // Set connecting flag for Matrix initialization
+    sessionStorage.setItem('connecting_to_telegram', 'true');
+    logger.info('[TelegramConnection] Set connecting_to_telegram flag');
+
+    // Clear the connecting flag after a timeout regardless of outcome
+    setTimeout(() => {
+      isConnecting.current = false;
+    }, 10000); // 10 second timeout
 
     // Show a loading message to the user
     // toast.loading('Initializing Telegram connection...', { id: 'telegram-connect' });
@@ -523,7 +601,7 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
         try {
           const stateEvent = room.currentState.getStateEvents('io.dailyfix.telegram', '');
           hasTelegramState = stateEvent && stateEvent.getContent().enabled === true;
-        } catch (e) {
+        } catch {
           // State event not found
         }
 
@@ -548,36 +626,79 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
         logger.info('[TelegramConnection] No existing room found, creating new room for Telegram integration');
 
         // Create room directly using the Matrix client
-        const room = await matrixClient.createRoom({
-        name: 'Telegram Login',
-        topic: 'Telegram integration room',
-        preset: 'private_chat',
-        visibility: 'private',
-        initial_state: [
-          {
-            type: 'm.room.history_visibility',
-            content: { history_visibility: 'shared' }
-          },
-          {
-            type: 'io.dailyfix.telegram',
-            content: {
-              enabled: true,
-              bridge: 'telegram',
-              homeserver: 'dfix-hsbridge.duckdns.org'
-            }
-          }
-        ]
-      });
+        try {
+          // CRITICAL FIX: Properly format the createRoom options
+          const createRoomOptions = {
+            name: 'Telegram Login',
+            topic: 'Telegram integration room',
+            preset: 'private_chat',
+            visibility: 'private',
+            initial_state: [
+              {
+                type: 'm.room.history_visibility',
+                content: { history_visibility: 'shared' }
+              },
+              {
+                type: 'io.dailyfix.telegram',
+                content: {
+                  enabled: true,
+                  bridge: 'telegram',
+                  homeserver: 'dfix-hsbridge.duckdns.org'
+                }
+              }
+            ]
+          };
 
-        // Get the room ID from the newly created room
-        createdRoomId = room.room_id;
-        setRoomId(createdRoomId);
+          logger.info('[TelegramConnection] Creating room with options:', JSON.stringify(createRoomOptions, null, 2));
+
+          // Create the room and handle the response properly
+          const roomResponse = await matrixClient.createRoom(createRoomOptions);
+
+          // Validate the response
+          if (!roomResponse || !roomResponse.room_id) {
+            throw new Error('Room creation failed: No room ID returned');
+          }
+
+          // Get the room ID from the newly created room
+          createdRoomId = roomResponse.room_id;
+
+          // Validate the room ID
+          if (!createdRoomId || typeof createdRoomId !== 'string' || !createdRoomId.startsWith('!')) {
+            throw new Error(`Invalid room ID format: ${createdRoomId}`);
+          }
+
+          logger.info('[TelegramConnection] Room created successfully with ID:', createdRoomId);
+
+          // Set the room ID in state
+          setRoomId(createdRoomId);
+        } catch (roomCreationError) {
+          logger.error('[TelegramConnection] Error creating room:', roomCreationError);
+          toast.error('Failed to create Telegram room. Please try again.', { id: 'telegram-room-creation' });
+          throw new Error(`Room creation failed: ${roomCreationError.message}`);
+        }
 
         logger.info('[TelegramConnection] Created room with ID:', createdRoomId);
 
         // Invite Telegram bot to the room
         logger.info('[TelegramConnection] Inviting Telegram bot to room');
-        await matrixClient.invite(createdRoomId, TELEGRAM_BOT_USER_ID);
+        try {
+          // Validate room ID and bot user ID before inviting
+          if (!createdRoomId || typeof createdRoomId !== 'string' || !createdRoomId.startsWith('!')) {
+            throw new Error(`Cannot invite bot: Invalid room ID: ${createdRoomId}`);
+          }
+
+          if (!TELEGRAM_BOT_USER_ID || typeof TELEGRAM_BOT_USER_ID !== 'string' || !TELEGRAM_BOT_USER_ID.startsWith('@')) {
+            throw new Error(`Cannot invite bot: Invalid bot user ID: ${TELEGRAM_BOT_USER_ID}`);
+          }
+
+          // Invite the bot to the room
+          await matrixClient.invite(createdRoomId, TELEGRAM_BOT_USER_ID);
+          logger.info('[TelegramConnection] Successfully invited bot to room');
+        } catch (inviteError) {
+          logger.error('[TelegramConnection] Error inviting bot to room:', inviteError);
+          toast.error('Failed to invite Telegram bot. Please try again.', { id: 'telegram-bot-invite' });
+          // Continue anyway - the bot might join automatically
+        }
 
         // Update the toast to show success
         toast.success('Room created successfully!', { id: 'telegram-room-creation' });
@@ -607,6 +728,52 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
     } catch (error) {
       logger.error('[TelegramConnection] Error connecting to Telegram:', error);
 
+      // CRITICAL: Clean up resources to prevent leaks and rate limiting
+      try {
+        // Clean up the room if it was created but failed later
+        if (roomId && typeof roomId === 'string' && roomId.startsWith('!')) {
+          logger.info(`[TelegramConnection] Cleaning up failed room: ${roomId}`);
+
+          try {
+            // Leave the room to clean it up
+            if (matrixClient && matrixClient.getRoom(roomId)) {
+              logger.info(`[TelegramConnection] Leaving failed room: ${roomId}`);
+              await matrixClient.leave(roomId);
+
+              // Forget the room to completely remove it from the client
+              logger.info(`[TelegramConnection] Forgetting failed room: ${roomId}`);
+              await matrixClient.forget(roomId);
+            }
+          } catch (cleanupError) {
+            logger.warn(`[TelegramConnection] Error cleaning up room ${roomId}:`, cleanupError);
+            // Continue with cleanup even if this fails
+          }
+        }
+
+        // Clean up any event listeners
+        if (roomListener) {
+          logger.info('[TelegramConnection] Cleaning up room listeners');
+          roomListener();
+          setRoomListener(null);
+        }
+
+        // Clear any timeouts
+        if (botResponseTimeout) {
+          logger.info('[TelegramConnection] Clearing bot response timeout');
+          clearTimeout(botResponseTimeout);
+          setBotResponseTimeout(null);
+        }
+
+        // Reset connection flags
+        logger.info('[TelegramConnection] Clearing connecting_to_telegram flag');
+        sessionStorage.removeItem('connecting_to_telegram');
+        isConnecting.current = false;
+
+      } catch (cleanupError) {
+        logger.error('[TelegramConnection] Error during cleanup:', cleanupError);
+        // Continue with error handling even if cleanup fails
+      }
+
       // Update the toast to show error
       toast.error('Failed to create room. Please try again.', { id: 'telegram-room-creation' });
 
@@ -614,12 +781,35 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
       setStep('initial');
       setLoading(false);
     }
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accounts, globalClient]);
 
   // Send the login command to the bot
-  const sendLoginCommand = async (matrixClient, roomId) => {
+  const sendLoginCommand = async (client, roomId) => {
     // Show a loading toast for login command
     toast.loading('Connecting to Telegram bot...', { id: 'telegram-login-command' });
+
+    // Validate the Matrix client
+    if (!client) {
+      logger.error('[TelegramConnection] Matrix client not provided to sendLoginCommand');
+
+      // Get the global Matrix client if available
+      const globalClient = window.matrixClient;
+      if (globalClient) {
+        logger.info('[TelegramConnection] Using global Matrix client in sendLoginCommand');
+        client = globalClient;
+      } else {
+        // Update the toast to show error
+        toast.error('Matrix client not available. Please refresh and try again.', { id: 'telegram-login-command' });
+
+        setError('Matrix client not available. Please refresh and try again.');
+        setStep('initial');
+        setLoading(false);
+        return;
+      }
+    }
+
+    // Validate the room ID
     if (!roomId) {
       logger.error('[TelegramConnection] Room ID not provided to sendLoginCommand');
 
@@ -632,21 +822,12 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
       return;
     }
 
-    if (!matrixClient) {
-      logger.error('[TelegramConnection] Matrix client not available in sendLoginCommand');
-
-      // Update the toast to show error
-      toast.error('Matrix client not available. Please refresh and try again.', { id: 'telegram-login-command' });
-
-      setError('Matrix client not available. Please refresh the page and try again.');
-      setStep('initial');
-      setLoading(false);
-      return;
-    }
+    // This check is redundant now that we have the check above
+    // Removed to avoid undefined variable reference
 
     // Double-check that the room exists
     try {
-      const room = matrixClient.getRoom(roomId);
+      const room = client.getRoom(roomId);
       if (!room) {
         logger.error(`[TelegramConnection] Room ${roomId} not found in client`);
 
@@ -767,22 +948,22 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
         // We already have a dedicated login response handler defined above
 
         // Listen for all room events, not just timeline
-        matrixClient.on('Room.timeline', onRoomEvent);
-        matrixClient.on('Room.event', onRoomEvent);
-        matrixClient.on('Room.timeline', onRoomMessage); // Add specific handler for messages
-        matrixClient.on('Room.timeline', onLoginResponseMessage); // Add dedicated handler for login response
+        client.on('Room.timeline', onRoomEvent);
+        client.on('Room.event', onRoomEvent);
+        client.on('Room.timeline', onRoomMessage); // Add specific handler for messages
+        client.on('Room.timeline', onLoginResponseMessage); // Add dedicated handler for login response
 
         // Store the listener for cleanup
         setRoomListener(() => {
-          matrixClient.removeListener('Room.timeline', onRoomEvent);
-          matrixClient.removeListener('Room.event', onRoomEvent);
-          matrixClient.removeListener('Room.timeline', onRoomMessage);
-          matrixClient.removeListener('Room.timeline', onLoginResponseMessage);
+          client.removeListener('Room.timeline', onRoomEvent);
+          client.removeListener('Room.event', onRoomEvent);
+          client.removeListener('Room.timeline', onRoomMessage);
+          client.removeListener('Room.timeline', onLoginResponseMessage);
         });
 
         // Also add a direct event listener for the specific room
         try {
-          const room = matrixClient.getRoom(roomId);
+          const room = client.getRoom(roomId);
           if (room) {
             room.on('Room.timeline', onRoomMessage);
             room.on('Room.timeline', onLoginResponseMessage); // Add room-level dedicated handler
@@ -806,14 +987,14 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
       try {
         // Force a sync to get the latest messages
         try {
-          await matrixClient.syncLeftRooms();
-          await matrixClient.roomInitialSync(roomId);
+          await client.syncLeftRooms();
+          await client.roomInitialSync(roomId);
         } catch (syncError) {
           logger.warn('[TelegramConnection] Error forcing sync:', syncError);
           // Continue anyway
         }
 
-        const timeline = matrixClient.getRoom(roomId)?.getLiveTimeline();
+        const timeline = client.getRoom(roomId)?.getLiveTimeline();
         if (timeline) {
           const events = timeline.getEvents();
           logger.info(`[TelegramConnection] Found ${events.length} events in timeline`);
@@ -865,7 +1046,7 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
       logger.info('[TelegramConnection] Sending login command to bot');
 
       // Send message directly using the Matrix client
-      await matrixClient.sendMessage(roomId, {
+      await client.sendMessage(roomId, {
         msgtype: 'm.text',
         body: command
       });
@@ -879,11 +1060,11 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
       // Check for immediate response after sending the command
       try {
         // Force a sync to get the latest messages
-        await matrixClient.syncLeftRooms();
-        await matrixClient.roomInitialSync(roomId);
+        await client.syncLeftRooms();
+        await client.roomInitialSync(roomId);
 
         // Get the room and check for messages
-        const room = matrixClient.getRoom(roomId);
+        const room = client.getRoom(roomId);
         if (room) {
           const timeline = room.getLiveTimeline();
           if (timeline) {
@@ -956,7 +1137,7 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
       // Immediately check for existing messages in the room
       try {
         // Get the room and check for messages
-        const room = matrixClient.getRoom(roomId);
+        const room = client.getRoom(roomId);
         if (room) {
           const timeline = room.getLiveTimeline();
           if (timeline) {
@@ -1016,8 +1197,14 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
 
             // Force a sync to get the latest messages
             try {
-              await matrixClient.syncLeftRooms();
-              await matrixClient.roomInitialSync(roomId);
+              // Get the global Matrix client
+              const globalClient = window.matrixClient;
+              if (globalClient) {
+                await globalClient.syncLeftRooms();
+                await globalClient.roomInitialSync(roomId);
+              } else {
+                logger.error('[TelegramConnection] No Matrix client available for sync');
+              }
             } catch (syncError) {
               logger.warn('[TelegramConnection] Error forcing sync:', syncError);
               // Continue anyway
@@ -1025,7 +1212,14 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
 
             // Check for messages directly from the server
             try {
-              const response = await matrixClient.http.authedRequest(
+              // Get the global Matrix client
+              const globalClient = window.matrixClient;
+              if (!globalClient) {
+                logger.error('[TelegramConnection] No Matrix client available for HTTP request');
+                return;
+              }
+
+              const response = await globalClient.http.authedRequest(
                 undefined, "GET", "/rooms/" + encodeURIComponent(roomId) + "/messages",
                 { limit: 20, dir: 'b' }
               );
@@ -1112,15 +1306,28 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
 
                 // Force a sync
                 try {
-                  await matrixClient.syncLeftRooms();
-                  await matrixClient.roomInitialSync(roomId);
+                  // Get the global Matrix client
+                  const globalClient = window.matrixClient;
+                  if (globalClient) {
+                    await globalClient.syncLeftRooms();
+                    await globalClient.roomInitialSync(roomId);
+                  } else {
+                    logger.error('[TelegramConnection] No Matrix client available for sync during polling');
+                  }
                 } catch (syncError) {
                   logger.warn('[TelegramConnection] Error forcing sync during polling:', syncError);
                 }
 
                 // Check for messages directly
                 try {
-                  const response = await matrixClient.http.authedRequest(
+                  // Get the global Matrix client
+                  const globalClient = window.matrixClient;
+                  if (!globalClient) {
+                    logger.error('[TelegramConnection] No Matrix client available for HTTP request during polling');
+                    return;
+                  }
+
+                  const response = await globalClient.http.authedRequest(
                     undefined, "GET", "/rooms/" + encodeURIComponent(roomId) + "/messages",
                     { limit: 20, dir: 'b' }
                   );
@@ -1171,7 +1378,14 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
 
             // Check for all messages in the room
             logger.info('[TelegramConnection] Timeout: Checking for missed messages');
-            const room = matrixClient.getRoom(roomId);
+            // Get the global Matrix client
+            const globalClient = window.matrixClient;
+            if (!globalClient) {
+              logger.error('[TelegramConnection] No Matrix client available for timeout check');
+              return;
+            }
+
+            const room = globalClient.getRoom(roomId);
             if (room) {
               const timeline = room.getLiveTimeline();
               if (timeline) {
@@ -1975,7 +2189,7 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
                 }
 
                 return false;
-              } catch (e) {
+              } catch {
                 return false;
               }
             })() ? (
@@ -2169,7 +2383,7 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
                   <strong>Check your Telegram app</strong> for the verification code.
                 </p>
                 <p className="text-gray-400 mb-3">
-                  If you don't receive a code, make sure you've entered the correct phone number.
+                  If you don&apos;t receive a code, make sure you&apos;ve entered the correct phone number.
                 </p>
                 <button
                   onClick={() => {
@@ -2304,6 +2518,12 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
       </div>
     </MatrixInitializer>
   );
+};
+
+// Define prop types
+TelegramConnection.propTypes = {
+  onComplete: PropTypes.func,
+  onCancel: PropTypes.func
 };
 
 export default TelegramConnection;
