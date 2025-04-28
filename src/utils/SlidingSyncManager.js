@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import logger from './logger';
+import { throttle } from './debounceUtils';
 
 // Constants for sliding sync
 const DEFAULT_TIMELINE_LIMIT = 50; // Default number of messages to fetch
@@ -12,8 +13,10 @@ const DEFAULT_TIMELINE_LIMIT = 50; // Default number of messages to fetch
  * This is inspired by Element's implementation but simplified for our needs.
  */
 class SlidingSyncManager extends EventEmitter {
-  // Static property to track if any instance is starting a sync loop
-  static _globalSyncStarting = false;
+  // Static properties for throttling and tracking sync attempts
+  static _lastSyncAttempt = null;
+  static _lastSyncTime = 0;
+  static _minSyncInterval = 5000; // Minimum time between syncs (5 seconds)
 
   // Static property to track all instances
   static _instances = [];
@@ -31,6 +34,9 @@ class SlidingSyncManager extends EventEmitter {
       }
       window.slidingSyncInstances.push(this);
     }
+
+    // Create throttled versions of methods
+    this.throttledStartSyncLoop = throttle(this._startSyncLoop.bind(this), 5000);
 
     logger.info('[SlidingSyncManager] New instance created and registered');
   }
@@ -355,11 +361,23 @@ class SlidingSyncManager extends EventEmitter {
       };
 
       // Add the lists
-      for (const [listName, options] of this.slidingSync.lists.entries()) {
-        requestBody.lists[listName] = {
-          ranges: options.ranges || [[0, 20]],
-          sort: options.sort || ['by_recency'],
-          timeline_limit: options.timeline_limit || 0
+      // CRITICAL FIX: Add null check for lists
+      if (this.slidingSync.lists) {
+        for (const [listName, options] of this.slidingSync.lists.entries()) {
+          requestBody.lists[listName] = {
+            ranges: options.ranges || [[0, 20]],
+            sort: options.sort || ['by_recency'],
+            timeline_limit: options.timeline_limit || 0
+          };
+        }
+      } else {
+        logger.warn('[SlidingSyncManager] slidingSync.lists is null during request building, initializing it');
+        this.slidingSync.lists = new Map();
+        // Add a default list
+        requestBody.lists['default'] = {
+          ranges: [[0, 20]],
+          sort: ['by_recency'],
+          timeline_limit: 0
         };
       }
 
@@ -466,6 +484,14 @@ class SlidingSyncManager extends EventEmitter {
         return;
       }
 
+      // CRITICAL FIX: Check if the user is actually in the room before processing
+      // This prevents unnecessary 403 errors when trying to access rooms the user is not in
+      const membership = room.getMyMembership ? room.getMyMembership() : null;
+      if (membership !== 'join' && membership !== 'invite') {
+        logger.info(`[SlidingSyncManager] Skipping timeline processing for room ${roomId} - user membership is ${membership}`);
+        return;
+      }
+
       // Process the timeline events
       const messages = this.processEvents(timeline, roomId);
 
@@ -544,15 +570,34 @@ class SlidingSyncManager extends EventEmitter {
   }
 
   /**
-   * Start the sliding sync loop with improved reliability
+   * Start the sliding sync loop with throttling to prevent multiple simultaneous calls
    */
   async startSyncLoop() {
-    // Use a static class property to track if any instance is starting a sync loop
-    // This prevents multiple instances from starting sync loops simultaneously
-    if (SlidingSyncManager._globalSyncStarting) {
-      logger.info('[SlidingSyncManager] Another sync loop is already being started, will join that one');
+    // Use the throttled version to prevent multiple rapid calls
+    return this.throttledStartSyncLoop();
+  }
+
+  /**
+   * Internal method to start the sliding sync loop with improved reliability
+   * This should not be called directly, use startSyncLoop instead
+   */
+  async _startSyncLoop() {
+    // Check if we've synced recently (within the last 5 seconds)
+    const now = Date.now();
+    if (SlidingSyncManager._lastSyncTime && (now - SlidingSyncManager._lastSyncTime < SlidingSyncManager._minSyncInterval)) {
+      logger.info(`[SlidingSyncManager] Skipping sync, last sync was ${(now - SlidingSyncManager._lastSyncTime) / 1000}s ago`);
       return;
     }
+
+    // Update the last sync time
+    SlidingSyncManager._lastSyncTime = now;
+    if (SlidingSyncManager._lastSyncAttempt && (now - SlidingSyncManager._lastSyncAttempt < 5000)) {
+      logger.info('[SlidingSyncManager] Another sync loop was started recently, waiting');
+      return;
+    }
+
+    // Update the last sync attempt timestamp
+    SlidingSyncManager._lastSyncAttempt = now;
 
     // Prevent multiple sync loops from starting on this instance
     if (this.syncInProgress) {
@@ -566,18 +611,50 @@ class SlidingSyncManager extends EventEmitter {
       return;
     }
 
-    // Check if the Matrix client is in STOPPED state and start it if needed
+    // CRITICAL FIX: Check if the Matrix client is in ERROR or STOPPED state and handle appropriately
     try {
       const syncState = this.client.getSyncState ? this.client.getSyncState() : null;
+      logger.info(`[SlidingSyncManager] Matrix client sync state before sync: ${syncState}`);
+
+      if (syncState === 'ERROR') {
+        logger.warn('[SlidingSyncManager] Matrix client is in ERROR state, attempting recovery');
+        try {
+          // Try to force a retry
+          if (this.client.retryImmediately) {
+            this.client.retryImmediately();
+            logger.info('[SlidingSyncManager] Forced immediate retry of sync');
+            // Wait a moment for the retry to take effect
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        } catch (retryError) {
+          logger.error('[SlidingSyncManager] Error forcing sync retry:', retryError);
+        }
+      }
+
       if (syncState === 'STOPPED') {
         logger.warn('[SlidingSyncManager] Matrix client is STOPPED, starting it before sync');
         try {
-          await this.client.startClient({
+          // CRITICAL FIX: Stop the client first to ensure a clean start
+          try {
+            this.client.stopClient();
+            logger.info('[SlidingSyncManager] Stopped Matrix client before restarting');
+          } catch (stopError) {
+            logger.warn('[SlidingSyncManager] Error stopping Matrix client:', stopError);
+          }
+
+          // Wait a moment for the stop to take effect
+          await new Promise(resolve => setTimeout(resolve, 500));
+
+          // Start the client
+          this.client.startClient({
             initialSyncLimit: 10,
             includeArchivedRooms: true,
             lazyLoadMembers: true
           });
           logger.info('[SlidingSyncManager] Started Matrix client for sync');
+
+          // Wait a moment for the client to start
+          await new Promise(resolve => setTimeout(resolve, 1000));
         } catch (startError) {
           logger.error('[SlidingSyncManager] Error starting Matrix client:', startError);
         }
@@ -585,9 +662,6 @@ class SlidingSyncManager extends EventEmitter {
     } catch (clientCheckError) {
       logger.error('[SlidingSyncManager] Error checking client state:', clientCheckError);
     }
-
-    // Set the global flag to prevent other instances from starting a sync loop
-    SlidingSyncManager._globalSyncStarting = true;
 
     // Stop any existing sync loops across all instances
     if (window.slidingSyncInstances) {
@@ -617,6 +691,14 @@ class SlidingSyncManager extends EventEmitter {
     logger.info('[SlidingSyncManager] Starting sync loop');
 
     try {
+      // CRITICAL FIX: Check token validity before performing sync
+      const isTokenValid = await this.checkTokenValidity();
+      if (!isTokenValid) {
+        logger.warn('[SlidingSyncManager] Token is invalid, not performing sync');
+        this.syncInProgress = false;
+        return;
+      }
+
       // Perform the sync operation
       const syncResult = await this.performSync();
 
@@ -627,15 +709,11 @@ class SlidingSyncManager extends EventEmitter {
       if (!this.syncStopped) {
         this.syncTimer = setTimeout(() => {
           this.syncInProgress = false;
-          // Clear the global flag before starting the next sync
-          SlidingSyncManager._globalSyncStarting = false;
           this.startSyncLoop();
-        }, 5000); // 5 seconds between syncs for better performance
+        }, 10000); // 10 seconds between syncs for better performance and less load
       } else {
         logger.info('[SlidingSyncManager] Sync loop stopped, not scheduling next sync');
         this.syncInProgress = false;
-        // Clear the global flag
-        SlidingSyncManager._globalSyncStarting = false;
       }
     } catch (error) {
       logger.error('[SlidingSyncManager] Error in sync loop:', error);
@@ -645,15 +723,79 @@ class SlidingSyncManager extends EventEmitter {
       if (!this.syncStopped) {
         logger.info('[SlidingSyncManager] Scheduling retry after error');
         this.syncRetryTimer = setTimeout(() => {
-          // Clear the global flag before retrying
-          SlidingSyncManager._globalSyncStarting = false;
           this.startSyncLoop();
-        }, 10000); // 10 seconds retry delay after error
+        }, 30000); // 30 seconds retry delay after error to prevent rapid retries
       } else {
         logger.info('[SlidingSyncManager] Sync loop stopped, not retrying after error');
-        // Clear the global flag
-        SlidingSyncManager._globalSyncStarting = false;
       }
+    }
+  }
+
+  /**
+   * Check if the Matrix token is valid and refresh if needed
+   * @returns {Promise<boolean>} - Whether the token is valid
+   */
+  async checkTokenValidity() {
+    if (!this.client) return false;
+
+    try {
+      // Import the matrixTokenManager to handle token refresh
+      const matrixTokenManager = (await import('./matrixTokenManager')).default;
+
+      // Get the current user ID
+      const userId = this.client.getUserId();
+
+      if (userId) {
+        // Get the current credentials
+        const credentials = {
+          userId: userId,
+          accessToken: this.client.getAccessToken(),
+          deviceId: this.client.getDeviceId(),
+          homeserver: this.client.getHomeserverUrl()
+        };
+
+        // Validate and refresh credentials if needed
+        try {
+          const validatedCredentials = await matrixTokenManager.validateAndRefreshCredentials(userId, credentials);
+
+          // If credentials were refreshed, update the client
+          if (validatedCredentials && validatedCredentials.accessToken !== credentials.accessToken) {
+            logger.info('[SlidingSyncManager] Credentials were refreshed, updating client');
+
+            // Update the client with the new access token
+            this.client.setAccessToken(validatedCredentials.accessToken);
+
+            // If the device ID changed, update that too
+            if (validatedCredentials.deviceId !== credentials.deviceId) {
+              this.client.setDeviceId(validatedCredentials.deviceId);
+            }
+          }
+
+          // If we got valid credentials, the token is valid
+          return true;
+        } catch (refreshError) {
+          logger.warn('[SlidingSyncManager] Error refreshing credentials:', refreshError);
+          // Try the original method as a fallback
+        }
+      }
+
+      // Fall back to the original method if token manager fails
+      try {
+        // Try a simple API call to check token validity
+        await this.client.getProfileInfo(this.client.getUserId());
+        return true;
+      } catch (error) {
+        if (error.errcode === 'M_UNKNOWN_TOKEN') {
+          logger.error('[SlidingSyncManager] Token is invalid, need to re-authenticate');
+          return false;
+        }
+        // Other errors might not be related to token validity
+        return true;
+      }
+    } catch (error) {
+      logger.error('[SlidingSyncManager] Error in checkTokenValidity:', error);
+      // Default to assuming token is valid to prevent unnecessary re-authentication
+      return true;
     }
   }
 
@@ -723,8 +865,23 @@ class SlidingSyncManager extends EventEmitter {
       const allRooms = this.client.getRooms ? this.client.getRooms() : [];
       logger.info(`[SlidingSyncManager] Found ${allRooms.length} rooms in client during sync`);
 
-      // Add all rooms to the roomSubscriptions if they're not already there
-      for (const room of allRooms) {
+      // CRITICAL FIX: Filter out rooms that the user is not a member of
+      const accessibleRooms = allRooms.filter(room => {
+        try {
+          // Check if the user is actually in the room
+          const membership = room.getMyMembership ? room.getMyMembership() : null;
+          // Include both 'join' and 'invite' rooms, but exclude 'leave' and 'ban'
+          return membership === 'join' || membership === 'invite';
+        } catch (error) {
+          logger.warn(`[SlidingSyncManager] Error checking membership for room ${room.roomId}:`, error);
+          return false;
+        }
+      });
+
+      logger.info(`[SlidingSyncManager] Filtered to ${accessibleRooms.length} accessible rooms (join + invite)`);
+
+      // Add accessible rooms to the roomSubscriptions if they're not already there
+      for (const room of accessibleRooms) {
         if (room && room.roomId && !this.roomSubscriptions.has(room.roomId)) {
           this.roomSubscriptions.set(room.roomId, { timelineLimit: DEFAULT_TIMELINE_LIMIT });
         }
@@ -783,6 +940,27 @@ class SlidingSyncManager extends EventEmitter {
         return [];
       }
 
+      // CRITICAL FIX: Check if the user is actually in the room before trying to load events
+      // This prevents 403 errors when trying to access rooms the user is not in
+      const membership = room.getMyMembership ? room.getMyMembership() : null;
+
+      // Skip rooms where user is not a member or invitee
+      if (membership !== 'join' && membership !== 'invite') {
+        logger.info(`[SlidingSyncManager] Skipping sync for room ${roomId} - user membership is ${membership}`);
+        return [];
+      }
+
+      // CRITICAL FIX: For invite rooms, don't try to load messages (which would cause 403 errors)
+      // Instead, just return basic room info without trying to load timeline
+      if (membership === 'invite') {
+        // For invite rooms, we can't load messages, so just return basic info
+        logger.info(`[SlidingSyncManager] Room ${roomId} is an invite room - skipping message loading`);
+
+        // Return an empty array for messages, but still include the room in the list
+        // This prevents 403 errors while still showing the room in the UI
+        return [];
+      }
+
       // Get subscription options
       const subscriptionOptions = this.roomSubscriptions.get(roomId) || {};
       const timelineLimit = options.timelineLimit || subscriptionOptions.timelineLimit || DEFAULT_TIMELINE_LIMIT;
@@ -801,21 +979,28 @@ class SlidingSyncManager extends EventEmitter {
         // If we have very few events, try to load more
         if (events.length < timelineLimit) {
           try {
-            // Try to use pagination to get more events
-            if (this.client.paginateEventTimeline) {
-              const paginationResult = await this.client.paginateEventTimeline(timeline, {
-                backwards: true,
-                limit: timelineLimit
-              });
+            // CRITICAL FIX: Check if this is an invite room before trying to paginate
+            const membership = room.getMyMembership ? room.getMyMembership() : null;
+            if (membership === 'invite') {
+              logger.info(`[SlidingSyncManager] Skipping pagination for invite room ${roomId}`);
+            } else {
+              // Try to use pagination to get more events only for joined rooms
+              if (this.client.paginateEventTimeline) {
+                const paginationResult = await this.client.paginateEventTimeline(timeline, {
+                  backwards: true,
+                  limit: timelineLimit
+                });
 
-              if (paginationResult) {
-                events = timeline.getEvents();
-                logger.info(`[SlidingSyncManager] After pagination: ${events.length} events for room ${roomId}`);
+                if (paginationResult) {
+                  events = timeline.getEvents();
+                  logger.info(`[SlidingSyncManager] After pagination: ${events.length} events for room ${roomId}`);
+                }
               }
             }
 
             // If still not enough, try roomMessages API
-            if (events.length < timelineLimit && this.client.roomMessages) {
+            // CRITICAL FIX: Only try roomMessages API for joined rooms
+            if (events.length < timelineLimit && this.client.roomMessages && membership === 'join') {
               const messageResponse = await this.client.roomMessages(roomId, null, timelineLimit, 'b');
 
               if (messageResponse && messageResponse.chunk && messageResponse.chunk.length > 0) {
@@ -971,6 +1156,23 @@ class SlidingSyncManager extends EventEmitter {
         return [];
       }
 
+      // CRITICAL FIX: Check if the user is actually in the room before trying to load events
+      // This prevents 403 errors when trying to access rooms the user is not in
+      const membership = room.getMyMembership ? room.getMyMembership() : null;
+
+      // Skip rooms where user is not a member or invitee
+      if (membership !== 'join' && membership !== 'invite') {
+        logger.info(`[SlidingSyncManager] Skipping message loading for room ${roomId} - user membership is ${membership}`);
+        return [];
+      }
+
+      // CRITICAL FIX: For invite rooms, don't try to load messages (which would cause 403 errors)
+      // Instead, just return basic room info without trying to load timeline
+      if (membership === 'invite') {
+        logger.info(`[SlidingSyncManager] Room ${roomId} is an invite room - skipping message loading in fallback method`);
+        return [];
+      }
+
       // Try to get messages from the timeline
       const timeline = room.getLiveTimeline();
       if (!timeline) {
@@ -985,8 +1187,11 @@ class SlidingSyncManager extends EventEmitter {
       // If we have very few events, try to load more
       if (events.length < limit) {
         try {
-          // Try to use pagination to get more events
-          if (this.client.paginateEventTimeline) {
+          // CRITICAL FIX: Check if this is an invite room before trying to paginate
+          if (membership === 'invite') {
+            logger.info(`[SlidingSyncManager] Skipping pagination for invite room ${roomId} in fallback method`);
+          } else if (this.client.paginateEventTimeline) {
+            // Try to use pagination to get more events only for joined rooms
             logger.info(`[SlidingSyncManager] Attempting to paginate timeline for room ${roomId}`);
             const paginationResult = await this.client.paginateEventTimeline(timeline, {
               backwards: true,
@@ -1000,7 +1205,8 @@ class SlidingSyncManager extends EventEmitter {
           }
 
           // If still not enough, try roomMessages API
-          if (events.length < limit && this.client.roomMessages) {
+          // CRITICAL FIX: Only try roomMessages API for joined rooms
+          if (events.length < limit && this.client.roomMessages && membership === 'join') {
             logger.info(`[SlidingSyncManager] Attempting to fetch messages directly for room ${roomId}`);
             const messageResponse = await this.client.roomMessages(roomId, null, limit, 'b');
 

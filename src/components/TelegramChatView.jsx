@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { FiSend, FiMessageCircle, FiUser, FiUsers, FiPaperclip, FiImage, FiSmile, FiMic, FiHelpCircle } from 'react-icons/fi';
 import AIAssistantButton from './AIAssistantButton';
 import AIFeatureTour from './AIFeatureTour';
@@ -138,145 +138,11 @@ const TelegramChatView = ({ selectedContact }) => {
     }
   };
 
-  // Load messages when selected contact changes and confirmation is not needed
-  useEffect(() => {
-    if (selectedContact && client && !needsConfirmation) {
-      // Always load messages when contact changes
-      loadMessages();
-
-      // Set up real-time updates
-      setupRealTimeUpdates(selectedContact.id);
-    }
-
-    // Return cleanup function
-    return () => {
-      // Clean up any listeners when component unmounts or selectedContact changes
-      if (client && matrixTimelineManager && matrixTimelineManager.initialized) {
-        try {
-          logger.info('[TelegramChatView] Cleaning up event listeners');
-          // Only remove listeners for the current room, not all rooms
-          if (selectedContact?.id) {
-            matrixTimelineManager.removeRoomListeners(selectedContact.id);
-          }
-        } catch (error) {
-          logger.warn('[TelegramChatView] Error cleaning up event listeners:', error);
-        }
-      }
-    };
-  }, [selectedContact, client, needsConfirmation]);
-
-  // Add a cleanup effect when component unmounts
-  useEffect(() => {
-    // Return cleanup function for component unmount
-    return () => {
-      logger.info('[TelegramChatView] Component unmounting, cleaning up resources');
-      // Clean up any cached data or listeners
-      if (matrixTimelineManager && matrixTimelineManager.initialized) {
-        try {
-          matrixTimelineManager.cleanup();
-        } catch (error) {
-          logger.warn('[TelegramChatView] Error during final cleanup:', error);
-        }
-      }
-    };
-  }, []);
-
-  // Add keyboard shortcut for AI Assistant (Alt+A)
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      // Alt+A to open AI Assistant
-      if (e.altKey && e.key === 'a') {
-        e.preventDefault();
-        // Find the AI Assistant button and click it
-        const aiButton = document.querySelector('.ai-assistant-button');
-        if (aiButton) {
-          aiButton.click();
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
-
-  // First-time user experience for AI button
-  useEffect(() => {
-    if (selectedContact) {
-      // Check if user has seen the AI button highlight
-      const aiButtonHighlighted = localStorage.getItem('ai_button_highlighted');
-
-      if (aiButtonHighlighted !== 'true') {
-        // Wait for the DOM to update
-        setTimeout(() => {
-          const aiButton = document.querySelector('.ai-assistant-button-composer');
-          const aiButtonContainer = document.querySelector('.ai-button-container');
-          if (aiButton && aiButtonContainer) {
-            // Add a pulsing animation to draw attention
-            aiButton.classList.add('animate-attention');
-
-            // Add a tooltip
-            const tooltip = document.createElement('div');
-            tooltip.className = 'absolute -top-16 left-1/2 transform -translate-x-1/2 bg-[#0088CC] text-white text-xs py-2 px-3 rounded shadow-lg whitespace-nowrap z-50';
-            tooltip.innerHTML = 'Try the AI Assistant! <span class="text-xs opacity-80">(Alt+A)</span>';
-
-            // Add arrow
-            const arrow = document.createElement('div');
-            arrow.className = 'absolute -bottom-1 left-1/2 transform -translate-x-1/2 w-2 h-2 bg-[#0088CC] rotate-45';
-            tooltip.appendChild(arrow);
-
-            aiButtonContainer.appendChild(tooltip);
-
-            // Remove after 5 seconds
-            setTimeout(() => {
-              aiButton.classList.remove('animate-attention');
-              if (tooltip.parentNode) {
-                tooltip.parentNode.removeChild(tooltip);
-              }
-              localStorage.setItem('ai_button_highlighted', 'true');
-            }, 5000);
-          }
-        }, 2000);
-      }
-    }
-  }, [selectedContact]);
-
-  // Scroll to bottom when messages change
-  useEffect(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [messages]);
-
-  // Helper function to show welcome messages
-  const showWelcomeMessages = (customMessage) => {
-    const welcomeMessages = [
-      {
-        id: 'welcome-1',
-        sender: '@telegrambot:dfix-hsbridge.duckdns.org',
-        content: {
-          msgtype: 'm.text',
-          body: customMessage || 'Welcome to Telegram! You are now connected to your Telegram account.'
-        },
-        timestamp: Date.now() - 60000,
-        isFromMe: false
-      },
-      {
-        id: 'welcome-2',
-        sender: '@telegrambot:dfix-hsbridge.duckdns.org',
-        content: {
-          msgtype: 'm.text',
-          body: 'You can now send and receive messages from your Telegram contacts.'
-        },
-        timestamp: Date.now() - 30000,
-        isFromMe: false
-      }
-    ];
-
-    setMessages(welcomeMessages);
-  };
+  // Forward declarations
+  let setupRealTimeUpdates;
 
   // Fetch parent events for replies
-  const fetchParentEvents = async (messages) => {
+  const fetchParentEvents = useCallback(async (messages) => {
     if (!client || !messages || messages.length === 0) return {};
 
     const newParentEvents = { ...parentEvents };
@@ -417,10 +283,10 @@ const TelegramChatView = ({ selectedContact }) => {
 
     setParentEvents(newParentEvents);
     return newParentEvents;
-  };
+  }, [client, parentEvents, selectedContact, setParentEvents]);
 
   // Load messages using our enhanced MatrixTimelineManager for reliable message loading
-  const loadMessages = async () => {
+  const loadMessages = useCallback(async () => {
     if (!selectedContact || !client) {
       logger.error('[TelegramChatView] Cannot load messages: selectedContact or client is null');
       return;
@@ -453,20 +319,123 @@ const TelegramChatView = ({ selectedContact }) => {
       if (membership === 'invite') {
         logger.info(`[TelegramChatView] Room is in invite state, joining automatically`);
         try {
-          // Join the room
-          await client.joinRoom(selectedContact.id);
+          // Join the room using a more robust approach
+          logger.info(`[TelegramChatView] Attempting to join room: ${selectedContact.id}`);
 
-          // Wait a moment for the room state to update
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          // First try using the standard joinRoom method
+          try {
+            await client.joinRoom(selectedContact.id);
+            logger.info(`[TelegramChatView] Successfully called joinRoom for ${selectedContact.id}`);
+          } catch (initialJoinError) {
+            logger.warn(`[TelegramChatView] Initial join attempt failed: ${initialJoinError.message}`);
 
-          // Check membership after joining
-          const updatedMembership = room.getMyMembership();
-          logger.info(`[TelegramChatView] Room membership state after joining: ${updatedMembership}`);
+            // If that fails, try the /join API endpoint directly
+            try {
+              const homeserverUrl = client.getHomeserverUrl();
+              const accessToken = client.getAccessToken();
 
-          if (updatedMembership !== 'join') {
-            logger.warn(`[TelegramChatView] Failed to join room, membership is still: ${updatedMembership}`);
-            showWelcomeMessages('Unable to join room. Please try again later.');
-            return;
+              if (homeserverUrl && accessToken) {
+                logger.info(`[TelegramChatView] Trying direct API join for ${selectedContact.id}`);
+
+                const joinUrl = `${homeserverUrl}/_matrix/client/v3/join/${encodeURIComponent(selectedContact.id)}`;
+                const response = await fetch(joinUrl, {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({})
+                });
+
+                if (response.ok) {
+                  logger.info(`[TelegramChatView] Direct API join successful for ${selectedContact.id}`);
+                } else {
+                  const errorData = await response.json();
+                  throw new Error(`API join failed: ${errorData.error || response.statusText}`);
+                }
+              } else {
+                throw new Error('Missing homeserver URL or access token');
+              }
+            } catch (apiJoinError) {
+              logger.error(`[TelegramChatView] API join attempt also failed: ${apiJoinError.message}`);
+              throw apiJoinError; // Re-throw to be caught by the outer catch
+            }
+          }
+
+          // Wait for the room state to update - use a longer timeout and check multiple times
+          let joinSuccessful = false;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            // Wait between checks
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            // Force a refresh of the room object
+            const refreshedRoom = client.getRoom(selectedContact.id);
+
+            if (refreshedRoom) {
+              const currentMembership = refreshedRoom.getMyMembership();
+              logger.info(`[TelegramChatView] Room membership check attempt ${attempt + 1}: ${currentMembership}`);
+
+              if (currentMembership === 'join') {
+                joinSuccessful = true;
+                logger.info(`[TelegramChatView] Successfully joined room on attempt ${attempt + 1}`);
+                break;
+              }
+            } else {
+              logger.warn(`[TelegramChatView] Room object not available on attempt ${attempt + 1}`);
+            }
+          }
+
+          // If we still haven't joined successfully, try one more approach - force a room sync
+          if (!joinSuccessful) {
+            logger.warn(`[TelegramChatView] Join not confirmed after multiple checks, trying room sync`);
+
+            try {
+              // Force a room sync to update the room state
+              await client.roomInitialSync(selectedContact.id, 10);
+
+              // Check membership again after sync
+              const syncedRoom = client.getRoom(selectedContact.id);
+              if (syncedRoom) {
+                const finalMembership = syncedRoom.getMyMembership();
+                logger.info(`[TelegramChatView] Room membership after sync: ${finalMembership}`);
+
+                if (finalMembership === 'join') {
+                  joinSuccessful = true;
+                  logger.info(`[TelegramChatView] Join confirmed after room sync`);
+                }
+              }
+            } catch (syncError) {
+              logger.warn(`[TelegramChatView] Room sync failed: ${syncError.message}`);
+              // Continue with the process even if sync fails
+            }
+          }
+
+          // If all our attempts failed, we'll proceed anyway but log a warning
+          if (!joinSuccessful) {
+            logger.warn(`[TelegramChatView] Could not confirm room join, but proceeding anyway`);
+
+            // Force the client to recognize the room as joined
+            try {
+              // Get the room again
+              const room = client.getRoom(selectedContact.id);
+
+              if (room) {
+                // If the room object has a setMyMembership method, use it
+                if (typeof room.setMyMembership === 'function') {
+                  room.setMyMembership('join');
+                  logger.info(`[TelegramChatView] Manually set room membership to 'join'`);
+                }
+
+                // Also try to force a room state update
+                if (typeof room.updateMyMembership === 'function') {
+                  room.updateMyMembership('join');
+                  logger.info(`[TelegramChatView] Updated room membership to 'join'`);
+                }
+              }
+            } catch (membershipError) {
+              logger.warn(`[TelegramChatView] Error setting membership manually: ${membershipError.message}`);
+              // Continue anyway
+            }
           }
         } catch (joinError) {
           logger.error('[TelegramChatView] Error joining room:', joinError);
@@ -506,7 +475,7 @@ const TelegramChatView = ({ selectedContact }) => {
       });
 
       // Stage 2: If we have very few messages, try a direct room sync to get the latest
-      if (loadedMessages.length < 20) {
+      if (loadedMessages && loadedMessages.length < 20) {
         logger.info('[TelegramChatView] Stage 2: Few messages found, trying direct room sync');
         try {
           // Force a room sync to get the latest messages
@@ -518,11 +487,21 @@ const TelegramChatView = ({ selectedContact }) => {
             forceRefresh: true
           });
 
-          if (syncedMessages.length > loadedMessages.length) {
+          if (syncedMessages && syncedMessages.length > 0 && (!loadedMessages || syncedMessages.length > loadedMessages.length)) {
             logger.info(`[TelegramChatView] Room sync successful, found ${syncedMessages.length} messages`);
             // Use the synced messages instead
-            loadedMessages.length = 0; // Clear the array
-            loadedMessages.push(...syncedMessages); // Add the new messages
+            // Create a new array with the synced messages
+            const newMessages = [...syncedMessages];
+
+            // Replace loadedMessages with the new messages
+            if (loadedMessages) {
+              loadedMessages.length = 0; // Clear the array
+              loadedMessages.push(...newMessages); // Add the new messages
+            } else {
+              // If loadedMessages is undefined, create a new variable
+              logger.info(`[TelegramChatView] Creating new loadedMessages array with ${newMessages.length} messages`);
+              // We'll use newMessages directly in the next steps
+            }
           }
         } catch (syncError) {
           logger.warn('[TelegramChatView] Error during room sync:', syncError);
@@ -532,10 +511,12 @@ const TelegramChatView = ({ selectedContact }) => {
 
       // Log the message count by type for debugging
       const messageTypeCount = {};
-      loadedMessages.forEach(msg => {
-        const type = msg.eventType || 'unknown';
-        messageTypeCount[type] = (messageTypeCount[type] || 0) + 1;
-      });
+      if (loadedMessages && Array.isArray(loadedMessages)) {
+        loadedMessages.forEach(msg => {
+          const type = msg.eventType || 'unknown';
+          messageTypeCount[type] = (messageTypeCount[type] || 0) + 1;
+        });
+      }
       logger.info(`[TelegramChatView] Message type counts: ${JSON.stringify(messageTypeCount)}`);
 
       // Mark all messages as read
@@ -555,20 +536,95 @@ const TelegramChatView = ({ selectedContact }) => {
         logger.warn(`[TelegramChatView] Error sending read receipt:`, error);
       }
 
-      // If no messages were found, show welcome message
-      if (!loadedMessages || loadedMessages.length === 0) {
+      // Debug output to see what we're getting
+      logger.info(`[TelegramChatView] Got ${loadedMessages ? loadedMessages.length : 0} messages from MatrixTimelineManager`);
+      if (loadedMessages && loadedMessages.length > 0) {
+        loadedMessages.forEach((msg, i) => {
+          logger.info(`Message ${i+1}: ${JSON.stringify(msg).substring(0, 200)}...`);
+        });
+
+        // Set messages directly
+        setMessages(loadedMessages);
+        return;
+      } else {
+        // If no messages were found, show welcome message
         logger.warn('[TelegramChatView] No messages found, showing welcome message');
         showWelcomeMessages('No messages found. Start a conversation!');
         return;
       }
 
-      logger.info(`[TelegramChatView] Successfully loaded ${loadedMessages.length} messages`);
+      // Debug: Log the actual messages we received
+      if (loadedMessages && Array.isArray(loadedMessages)) {
+        logger.info(`[TelegramChatView] Received ${loadedMessages.length} messages from MatrixTimelineManager`);
+        loadedMessages.forEach((msg, index) => {
+          logger.info(`[TelegramChatView] Message ${index + 1}: type=${msg.eventType}, sender=${msg.sender}, content=${JSON.stringify(msg.content).substring(0, 100)}...`);
+        });
+      } else {
+        logger.info('[TelegramChatView] No messages received from MatrixTimelineManager');
+      }
+
+      // Use all messages from MatrixTimelineManager since it's already filtering correctly
+      const actualMessages = loadedMessages;
+
+      // Check if we have any actual message events (not just state events)
+      const hasActualMessages = loadedMessages && loadedMessages.some(msg => msg.eventType === 'm.room.message');
+
+      // If we don't have any actual messages, add welcome messages
+      if (!hasActualMessages) {
+        logger.info('[TelegramChatView] No actual message events found, showing welcome message with state info');
+
+        // Create a new array for the messages we'll display
+        const displayMessages = [];
+
+        // Add room creation info if available
+        if (loadedMessages) {
+          const creationEvent = loadedMessages.find(msg => msg.eventType === 'm.room.create');
+          if (creationEvent) {
+            const creationTime = new Date(creationEvent.timestamp).toLocaleString();
+            const creatorName = creationEvent.senderName || creationEvent.sender;
+
+            const roomCreationMessage = {
+              id: `welcome-creation-${Date.now()}`,
+              sender: 'system',
+              senderName: 'System',
+              content: { body: `This conversation was created by ${creatorName} on ${creationTime}.` },
+              timestamp: creationEvent.timestamp + 1,
+              isFromMe: false,
+              eventType: 'm.room.message',
+              isSystemMessage: true
+            };
+
+            displayMessages.push(roomCreationMessage);
+          }
+        }
+
+        // Create a welcome message
+        const welcomeMessage = {
+          id: `welcome-${Date.now()}`,
+          sender: 'system',
+          senderName: 'System',
+          content: { body: 'Welcome to this conversation! You can start chatting now.' },
+          timestamp: Date.now(),
+          isFromMe: false,
+          eventType: 'm.room.message',
+          isSystemMessage: true
+        };
+
+        // Add the welcome message
+        displayMessages.push(welcomeMessage);
+
+        // Use these messages instead of the loaded ones
+        setMessages(displayMessages);
+        return;
+      }
+
+      logger.info(`[TelegramChatView] Successfully loaded ${loadedMessages.length} messages, ${actualMessages.length} are actual chat messages`);
 
       // Fetch parent events for replies
-      await fetchParentEvents(loadedMessages);
+      await fetchParentEvents(actualMessages);
 
       // Update state with loaded messages
-      setMessages(loadedMessages);
+      setMessages(actualMessages);
 
       // Store the oldest event ID for pagination
       if (loadedMessages.length > 0) {
@@ -642,13 +698,151 @@ const TelegramChatView = ({ selectedContact }) => {
     } finally {
       setLoading(false);
     }
+  }, [selectedContact, client, setMessages, setLoading, setError, fetchParentEvents, setupRealTimeUpdates]);
+
+  // Load messages when selected contact changes and confirmation is not needed
+  useEffect(() => {
+    if (selectedContact && client && !needsConfirmation) {
+      // Always load messages when contact changes
+      loadMessages();
+    }
+
+    // Return cleanup function
+    return () => {
+      // Clean up any listeners when component unmounts or selectedContact changes
+      if (client && matrixTimelineManager && matrixTimelineManager.initialized) {
+        try {
+          logger.info('[TelegramChatView] Cleaning up event listeners');
+          // Only remove listeners for the current room, not all rooms
+          if (selectedContact?.id) {
+            matrixTimelineManager.removeRoomListeners(selectedContact.id);
+          }
+        } catch (error) {
+          logger.warn('[TelegramChatView] Error cleaning up event listeners:', error);
+        }
+      }
+    };
+  }, [selectedContact, client, needsConfirmation, loadMessages]);
+
+  // Add a cleanup effect when component unmounts
+  useEffect(() => {
+    // Return cleanup function for component unmount
+    return () => {
+      logger.info('[TelegramChatView] Component unmounting, cleaning up resources');
+      // Clean up any cached data or listeners
+      if (matrixTimelineManager && matrixTimelineManager.initialized) {
+        try {
+          matrixTimelineManager.cleanup();
+        } catch (error) {
+          logger.warn('[TelegramChatView] Error during final cleanup:', error);
+        }
+      }
+    };
+  }, []);
+
+  // Add keyboard shortcut for AI Assistant (Alt+A)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Alt+A to open AI Assistant
+      if (e.altKey && e.key === 'a') {
+        e.preventDefault();
+        // Find the AI Assistant button and click it
+        const aiButton = document.querySelector('.ai-assistant-button');
+        if (aiButton) {
+          aiButton.click();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // First-time user experience for AI button
+  useEffect(() => {
+    if (selectedContact) {
+      // Check if user has seen the AI button highlight
+      const aiButtonHighlighted = localStorage.getItem('ai_button_highlighted');
+
+      if (aiButtonHighlighted !== 'true') {
+        // Wait for the DOM to update
+        setTimeout(() => {
+          const aiButton = document.querySelector('.ai-assistant-button-composer');
+          const aiButtonContainer = document.querySelector('.ai-button-container');
+          if (aiButton && aiButtonContainer) {
+            // Add a pulsing animation to draw attention
+            aiButton.classList.add('animate-attention');
+
+            // Add a tooltip
+            const tooltip = document.createElement('div');
+            tooltip.className = 'absolute -top-16 left-1/2 transform -translate-x-1/2 bg-[#0088CC] text-white text-xs py-2 px-3 rounded shadow-lg whitespace-nowrap z-50';
+            tooltip.innerHTML = 'Try the AI Assistant! <span class="text-xs opacity-80">(Alt+A)</span>';
+
+            // Add arrow
+            const arrow = document.createElement('div');
+            arrow.className = 'absolute -bottom-1 left-1/2 transform -translate-x-1/2 w-2 h-2 bg-[#0088CC] rotate-45';
+            tooltip.appendChild(arrow);
+
+            aiButtonContainer.appendChild(tooltip);
+
+            // Remove after 5 seconds
+            setTimeout(() => {
+              aiButton.classList.remove('animate-attention');
+              if (tooltip.parentNode) {
+                tooltip.parentNode.removeChild(tooltip);
+              }
+              localStorage.setItem('ai_button_highlighted', 'true');
+            }, 5000);
+          }
+        }, 2000);
+      }
+    }
+  }, [selectedContact]);
+
+  // Scroll to bottom when messages change
+  useEffect(() => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages]);
+
+  // Helper function to show welcome messages
+  const showWelcomeMessages = (customMessage) => {
+    const welcomeMessages = [
+      {
+        id: 'welcome-1',
+        sender: '@telegrambot:dfix-hsbridge.duckdns.org',
+        content: {
+          msgtype: 'm.text',
+          body: customMessage || 'Welcome to Telegram! You are now connected to your Telegram account.'
+        },
+        timestamp: Date.now() - 60000,
+        isFromMe: false
+      },
+      {
+        id: 'welcome-2',
+        sender: '@telegrambot:dfix-hsbridge.duckdns.org',
+        content: {
+          msgtype: 'm.text',
+          body: 'You can now send and receive messages from your Telegram contacts.'
+        },
+        timestamp: Date.now() - 30000,
+        isFromMe: false
+      }
+    ];
+
+    setMessages(welcomeMessages);
   };
+
+  // Note: fetchParentEvents is already defined above
+
+  // Note: loadMessages is already defined above
 
   // Note: We're using MatrixTimelineManager to process events into messages
   // The implementation is in matrixTimelineManager.js
 
-  // Set up real-time updates for a room using MatrixTimelineManager
-  const setupRealTimeUpdates = (roomId) => {
+  // Implementation of setupRealTimeUpdates
+  setupRealTimeUpdates = useCallback((roomId) => {
     if (!roomId || !client) return;
 
     logger.info(`[TelegramChatView] Setting up real-time updates for room ${roomId}`);
@@ -780,7 +974,7 @@ const TelegramChatView = ({ selectedContact }) => {
         loadMessages();
       }
     });
-  };
+  }, [client, messages, loadMessages, setMessages, fetchParentEvents]);
 
   // Load more messages (older messages) with enhanced reliability
   const loadMoreMessages = async () => {
@@ -1203,7 +1397,7 @@ const TelegramChatView = ({ selectedContact }) => {
 
                 // Merge with existing messages, avoiding duplicates
                 const existingIds = new Set(messages.map(msg => msg.id));
-                const uniqueNewMessages = newMessages.filter(msg => !existingIds.has(msg.id));
+                const uniqueNewMessages = newMessages && newMessages.length > 0 ? newMessages.filter(msg => !existingIds.has(msg.id)) : [];
 
                 if (uniqueNewMessages.length > 0) {
                   // Update messages state with the new messages

@@ -28,6 +28,26 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
   const [showArchived, setShowArchived] = useState(false);
   const [activeFilter, setActiveFilter] = useState('all');
 
+  // Function to organize contacts into categories
+  const organizeContactList = useCallback((contactsToOrganize = contacts) => {
+    if (!contactsToOrganize || contactsToOrganize.length === 0) return;
+
+    try {
+      // Use the contactOrganizer utility to organize contacts
+      const organized = contactOrganizer.organizeContacts(contactsToOrganize, {
+        pinnedIds: pinnedContactIds,
+        mutedIds: mutedContactIds,
+        archivedIds: archivedContactIds,
+        showMuted,
+        showArchived
+      });
+
+      setOrganizedContacts(organized);
+    } catch (error) {
+      logger.error('[TelegramContactList] Error organizing contacts:', error);
+    }
+  }, [contacts, pinnedContactIds, mutedContactIds, archivedContactIds, showMuted, showArchived]);
+
   // Reference to track if we've already tried to load contacts
   const hasTriedLoading = useRef(false);
 
@@ -67,6 +87,8 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
             instance.reset();
           }
         });
+        // Clear the instances array
+        window.slidingSyncInstances = [];
       }
 
       // Initialize the sliding sync manager with the client
@@ -108,56 +130,27 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
         logger.warn('[TelegramContactList] Global timeout reached, forcing completion');
         setLoading(false);
 
-        // Try to load cached contacts first
-        loadCachedContacts().then(cachedContacts => {
-          if (cachedContacts && cachedContacts.length > 0) {
-            logger.info(`[TelegramContactList] Loaded ${cachedContacts.length} contacts from cache after global timeout`);
-            setContacts(cachedContacts);
-            setFilteredContacts(cachedContacts);
-            // Organize the cached contacts
-            organizeContactList();
-          } else {
-            // If no cached contacts, show a special placeholder with prominent refresh CTA
-            const placeholderContact = {
-              id: 'telegram_placeholder',
-              name: 'Telegram',
-              avatar: null,
-              lastMessage: '⚠️ Connection timed out. Tap here to refresh your contacts.',
-              timestamp: Date.now(),
-              unreadCount: 1, // Add an unread count to draw attention
-              isGroup: false,
-              isTelegram: true,
-              members: 1,
-              isPlaceholder: true,
-              needsRefresh: true // Special flag to show refresh CTA
-            };
+        // Create a default placeholder contact
+        const placeholderContact = {
+          id: 'telegram_placeholder',
+          name: 'Telegram',
+          avatar: null,
+          lastMessage: 'Connected to Telegram',
+          timestamp: Date.now(),
+          unreadCount: 0,
+          isGroup: false,
+          isTelegram: true,
+          members: 1,
+          isPlaceholder: true
+        };
 
-            setContacts([placeholderContact]);
-            setFilteredContacts([placeholderContact]);
-          }
-        }).catch(err => {
-          logger.error('[TelegramContactList] Error loading cached contacts after global timeout:', err);
+        setContacts([placeholderContact]);
+        setFilteredContacts([placeholderContact]);
 
-          // Show a special placeholder with prominent refresh CTA
-          const placeholderContact = {
-            id: 'telegram_placeholder',
-            name: 'Telegram',
-            avatar: null,
-            lastMessage: '⚠️ Connection timed out. Tap here to refresh your contacts.',
-            timestamp: Date.now(),
-            unreadCount: 1, // Add an unread count to draw attention
-            isGroup: false,
-            isTelegram: true,
-            members: 1,
-            isPlaceholder: true,
-            needsRefresh: true // Special flag to show refresh CTA
-          };
-
-          setContacts([placeholderContact]);
-          setFilteredContacts([placeholderContact]);
-        });
+        // Clear the loading flag to allow future loads
+        window._loadingContactsInProgress = false;
       }
-    }, 20000); // 20 seconds global timeout
+    }, 10000); // 10 seconds timeout for better UX
 
     const initializeContacts = async () => {
       if (!client || !isMounted || clientLoading) return;
@@ -369,12 +362,15 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
 
   // Filter contacts when search query changes
   useEffect(() => {
+    // CRITICAL FIX: Filter out null contacts
+    const validContacts = contacts.filter(contact => contact != null);
+
     if (searchQuery.trim() === '') {
-      setFilteredContacts(contacts);
+      setFilteredContacts(validContacts);
     } else {
       const query = searchQuery.toLowerCase();
-      const filtered = contacts.filter(contact =>
-        contact.name.toLowerCase().includes(query)
+      const filtered = validContacts.filter(contact =>
+        contact.name?.toLowerCase().includes(query)
       );
       setFilteredContacts(filtered);
     }
@@ -459,6 +455,56 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
       setLoading(true);
     }
 
+    // Create a default placeholder contact
+    const placeholderContact = {
+      id: 'telegram_placeholder',
+      name: 'Telegram',
+      avatar: null,
+      lastMessage: 'Connected to Telegram',
+      timestamp: Date.now(),
+      unreadCount: 0,
+      isGroup: false,
+      isTelegram: true,
+      members: 1,
+      isPlaceholder: true
+    };
+
+    // Set the placeholder contact immediately to show something
+    setContacts([placeholderContact]);
+    setFilteredContacts([placeholderContact]);
+
+    // CRITICAL FIX: Check if Matrix client is initialized, if not, trigger initialization
+    if (!client) {
+      logger.warn('[TelegramContactList] Matrix client not available, triggering initialization');
+
+      // Set sessionStorage flag to trigger Matrix initialization
+      sessionStorage.setItem('connecting_to_telegram', 'true');
+
+      // Trigger Matrix initialization via custom event
+      const event = new CustomEvent('dailyfix-initialize-matrix', {
+        detail: { reason: 'telegram_contact_list' }
+      });
+      window.dispatchEvent(event);
+
+      // Wait a bit for initialization to start
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // If client is still not available after waiting, use cached contacts
+      if (!window.matrixClient && !client) {
+        logger.warn('[TelegramContactList] Matrix client still not available after initialization attempt');
+        const cachedContacts = await loadCachedContacts();
+        if (cachedContacts && cachedContacts.length > 0) {
+          logger.info(`[TelegramContactList] Using ${cachedContacts.length} cached contacts as fallback`);
+          setContacts(cachedContacts);
+          setFilteredContacts(cachedContacts);
+          organizeContactList(cachedContacts);
+        }
+        setLoading(false);
+        window._loadingContactsInProgress = false;
+        return;
+      }
+    }
+
     // IMMEDIATE IMPROVEMENT: Load cached contacts first to show something to the user right away
     const cachedContacts = await loadCachedContacts();
     if (cachedContacts && cachedContacts.length > 0) {
@@ -481,32 +527,10 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
         // Clear the loading flag
         window._loadingContactsInProgress = false;
 
-        // We already loaded cached contacts, so just finish loading
-        logger.info('[TelegramContactList] Still loading after timeout, trying direct room fetch');
-
-        // Try to get the Telegram room directly from localStorage
-        try {
-          const connectionStatus = JSON.parse(localStorage.getItem('dailyfix_connection_status') || '{}');
-          const knownTelegramRoomId = connectionStatus.telegramRoomId;
-
-          if (knownTelegramRoomId) {
-            logger.info('[TelegramContactList] Found Telegram room ID in localStorage:', knownTelegramRoomId);
-            // Try to join this room directly - but don't trigger another loadContacts
-            client.joinRoom(knownTelegramRoomId).then(() => {
-              logger.info(`[TelegramContactList] Successfully joined Telegram room: ${knownTelegramRoomId}`);
-              // Force a refresh after a short delay
-              setTimeout(() => {
-                window.location.reload();
-              }, 2000);
-            }).catch(error => {
-              logger.error(`[TelegramContactList] Error joining Telegram room ${knownTelegramRoomId}:`, error);
-            });
-          }
-        } catch (directRoomError) {
-          logger.warn('[TelegramContactList] Error getting room from localStorage:', directRoomError);
-        }
+        // We already set a placeholder contact, so just finish loading
+        logger.info('[TelegramContactList] Finishing load after timeout');
       }
-    }, 10000); // 10 seconds timeout for better UX
+    }, 5000); // 5 seconds timeout for better UX
 
     // Declare telegramRooms at the function level so it's accessible throughout
     let telegramRooms = [];
@@ -1081,43 +1105,13 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
       }
 
       try {
-        // Update the contacts
-        setContacts(telegramRooms);
-        setFilteredContacts(telegramRooms);
-        logger.info(`[TelegramContactList] Successfully loaded ${telegramRooms.length} Telegram contacts`);
-      } catch (error) {
-        logger.error('[TelegramContactList] Error loading contacts:', error);
-        setError('Failed to load Telegram contacts');
-
-        // Show a placeholder contact even if there's an error
-        const errorPlaceholder = {
-          id: 'telegram_error',
-          name: 'Telegram',
-          avatar: null,
-          lastMessage: 'There was an error loading your contacts. Tap to retry.',
-          timestamp: Date.now(),
-          unreadCount: 0,
-          isGroup: false,
-          isTelegram: true,
-          isPlaceholder: true,
-          isError: true
-        };
-
-        setContacts([errorPlaceholder]);
-        setFilteredContacts([errorPlaceholder]);
-      } finally {
-        // Mark loading as complete
-        isLoadingRef.current = false;
-
-        // Clear the loading timeout
-        clearTimeout(loadingTimeout);
-        setLoading(false);
-
-        // CRITICAL FIX: Clear the loading flag to allow future loads
-        window._loadingContactsInProgress = false;
-
-        // Cache the contacts for future use if we have any
+        // Only update contacts if we found real rooms
         if (telegramRooms.length > 0) {
+          setContacts(telegramRooms);
+          setFilteredContacts(telegramRooms);
+          logger.info(`[TelegramContactList] Successfully loaded ${telegramRooms.length} Telegram contacts`);
+
+          // Cache the contacts for future use
           try {
             // Create a safe-to-serialize copy without circular references
             const safeContacts = telegramRooms.map(room => ({
@@ -1140,6 +1134,19 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
             logger.warn('[TelegramContactList] Error caching contacts:', cacheError);
           }
         }
+      } catch (error) {
+        logger.error('[TelegramContactList] Error loading contacts:', error);
+        setError('Failed to load Telegram contacts');
+      } finally {
+        // Mark loading as complete
+        isLoadingRef.current = false;
+
+        // Clear the loading timeout
+        clearTimeout(loadingTimeout);
+        setLoading(false);
+
+        // CRITICAL FIX: Clear the loading flag to allow future loads
+        window._loadingContactsInProgress = false;
       }
   };
 
@@ -1544,61 +1551,16 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
 
   // We already defined hasTriedLoading at the top
 
-  // Function to organize contacts with improved filtering
-  const organizeContactList = useCallback(() => {
-    if (!contacts || contacts.length === 0) return;
-
-    // Filter out the Telegram bridge bot and any contacts with raw Matrix IDs as names
-    const filteredContactsList = contacts.filter(contact => {
-      // Filter out the Telegram bridge bot - ULTRA-STRICT filtering
-      if (contact.name === '@telegrambot:dfix-hsbridge.duckdns.org' ||
-          contact.name === 'telegrambot' ||
-          contact.name === 'telegram bridge bot' ||
-          contact.name.toLowerCase().includes('telegram bridge') ||
-          contact.name.toLowerCase() === 'telegram' ||
-          contact.id === '@telegrambot:dfix-hsbridge.duckdns.org' ||
-          (contact.telegramContact && contact.telegramContact.username === 'telegrambot') ||
-          (contact.members <= 2 && contact.name.toLowerCase() === 'telegram')) {
-        logger.debug('[TelegramContactList] Filtering out bridge bot:', contact.name);
-        return false;
-      }
-
-      // Filter out contacts with raw Matrix IDs as names
-      if (contact.name && contact.name.includes('@telegram_')) {
-        return false;
-      }
-
-      // Filter out the generic 'Telegram' contact if it has no messages
-      if (contact.name === 'Telegram' && !contact.lastMessage) {
-        return false;
-      }
-
-      return true;
-    });
-
-    const options = {
-      pinnedContactIds,
-      mutedContactIds,
-      archivedContactIds,
-      showMuted,
-      showArchived,
-      mentionKeywords: [`@${client?.getUserId()}`]
-    };
-
-    const organized = contactOrganizer.organizeContacts(filteredContactsList, options);
-    setOrganizedContacts(organized);
-
-    // Also update the filtered contacts list for search
-    setFilteredContacts(filteredContactsList);
-  }, [contacts, pinnedContactIds, mutedContactIds, archivedContactIds, showMuted, showArchived, client]);
-
   // NOTE: We've removed the attemptToJoinTelegramRoom function and now handle room joining directly
   // in the loadContacts and handleRefresh functions to prevent recursive loading issues.
 
   // Organize contacts whenever they change
   useEffect(() => {
-    organizeContactList();
-  }, [organizeContactList]);
+    // Apply the organizeContactList function with the current contacts
+    if (contacts && contacts.length > 0) {
+      organizeContactList(contacts);
+    }
+  }, [contacts, organizeContactList]);
 
   // Function to toggle pin status for a contact
   const togglePinContact = (contactId) => {
@@ -1832,7 +1794,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
           >
             <FiSettings className="w-5 h-5" />
           </button>
-          {contacts.some(contact => contact.needsRefresh) ? (
+          {contacts.some(contact => contact && contact.needsRefresh) ? (
             <button
               className="p-2 px-4 bg-yellow-600 text-white rounded-lg shadow-lg hover:bg-yellow-500 transition-all duration-300 transform hover:scale-105 animate-pulse flex items-center"
               onClick={handleRefresh}
@@ -1950,7 +1912,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
             {/* If no organized contacts are shown, show all contacts */}
             {Object.values(organizedContacts).flat().length === 0 && (
               <div className="space-y-2">
-                {filteredContacts.map(contact => (
+                {filteredContacts.filter(contact => contact && contact.id).map(contact => (
                   <div
                     key={contact.id}
                     className={`flex items-center p-3 rounded-lg cursor-pointer transition-all duration-200 ${
@@ -2037,9 +1999,9 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
       )}
 
       {/* Refresh button at the bottom */}
-      {!loading && filteredContacts.length > 0 && (
+      {!loading && filteredContacts && filteredContacts.length > 0 && (
         <div className="pt-4 mt-auto">
-          {contacts.some(contact => contact.needsRefresh) ? (
+          {contacts && contacts.some(contact => contact && contact.needsRefresh) ? (
             <button
               className={`w-full flex items-center justify-center py-3 px-4 rounded-lg transition-all duration-300 ${
                 refreshing

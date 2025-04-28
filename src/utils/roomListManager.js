@@ -862,7 +862,23 @@ class RoomListManager {
   transformRooms(userId, rooms, matrixClient = null) {
     // Get the client from the parameters or try to get it from the room list
     const client = matrixClient || this.getClientForUser(userId);
-    return rooms.map(room => {
+
+    // CRITICAL FIX: Filter out rooms that the user is not a member of
+    const filteredRooms = rooms.filter(room => {
+      try {
+        // Check if the user is actually in the room
+        const membership = room.getMyMembership ? room.getMyMembership() : null;
+        return membership === 'join' || membership === 'invite';
+      } catch (error) {
+        logger.warn(`[RoomListManager] Error checking membership for room ${room.roomId}:`, error);
+        return false;
+      }
+    });
+
+    logger.info(`[RoomListManager] Filtered ${rooms.length} rooms to ${filteredRooms.length} rooms based on membership`);
+
+    // CRITICAL FIX: Add null check for rooms
+    return filteredRooms.filter(room => room != null).map(room => {
       // Get room membership state
       let roomState = 'unknown';
       try {
@@ -1336,7 +1352,12 @@ class RoomListManager {
     if (!roomList) return;
 
     // Find room in list
-    const index = roomList.rooms.findIndex(r => r.id === room.roomId);
+    // CRITICAL FIX: Add null check for room.roomId
+    if (!room || !room.roomId) {
+      logger.warn('[RoomListManager] Cannot update room with undefined roomId');
+      return;
+    }
+    const index = roomList.rooms.findIndex(r => r && r.id === room.roomId);
 
     if (index >= 0) {
       // Update existing room
@@ -1456,7 +1477,9 @@ class RoomListManager {
   async cacheRooms(userId, rooms) {
     try {
       // Prepare rooms for caching
-      const roomsToCache = rooms.map(room => ({
+      // Filter out any null or undefined rooms
+      const validRooms = rooms.filter(room => room != null);
+      const roomsToCache = validRooms.map(room => ({
         id: room.id,
         name: room.name,
         avatar: room.avatar,
