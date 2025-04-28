@@ -88,14 +88,39 @@ const SessionExpirationHandler = () => {
         const response = await originalFetch(resource, options);
 
         // Check if this is a Supabase auth endpoint with a 403 error
-        // CRITICAL FIX: Properly check if resource is a string before calling includes
+        // CRITICAL FIX: Only handle Supabase auth errors, not Matrix errors
         if (
           typeof resource === 'string' &&
           resource.includes('supabase') &&
-          !isExpiring
+          resource.includes('auth') &&
+          response.status === 403 &&
+          !isExpiring &&
+          !resource.includes('matrix') &&
+          !resource.includes('dfix-hsbridge')
         ) {
           logger.warn('[SessionExpirationHandler] Detected Supabase auth 403 error, session likely expired');
           handleSessionExpiration('403-error');
+        }
+
+        // Handle Matrix 401 errors separately - don't log out of Supabase
+        if (
+          typeof resource === 'string' &&
+          (resource.includes('matrix') || resource.includes('dfix-hsbridge')) &&
+          response.status === 401 &&
+          !isExpiring
+        ) {
+          logger.warn('[SessionExpirationHandler] Detected Matrix 401 error, triggering Matrix re-authentication');
+
+          // Trigger Matrix re-authentication without logging out of Supabase
+          try {
+            // Dispatch a custom event to trigger Matrix re-authentication
+            const event = new CustomEvent('dailyfix-initialize-matrix', {
+              detail: { reason: 'matrix_401_error' }
+            });
+            window.dispatchEvent(event);
+          } catch (error) {
+            logger.error('[SessionExpirationHandler] Error triggering Matrix re-authentication:', error);
+          }
         }
 
         // Return the original response

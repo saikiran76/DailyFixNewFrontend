@@ -446,6 +446,39 @@ const TelegramChatView = ({ selectedContact }) => {
         return;
       }
 
+      // Check if we need to join the room first
+      const membership = room.getMyMembership();
+      logger.info(`[TelegramChatView] Room membership state: ${membership}`);
+
+      if (membership === 'invite') {
+        logger.info(`[TelegramChatView] Room is in invite state, joining automatically`);
+        try {
+          // Join the room
+          await client.joinRoom(selectedContact.id);
+
+          // Wait a moment for the room state to update
+          await new Promise(resolve => setTimeout(resolve, 2000));
+
+          // Check membership after joining
+          const updatedMembership = room.getMyMembership();
+          logger.info(`[TelegramChatView] Room membership state after joining: ${updatedMembership}`);
+
+          if (updatedMembership !== 'join') {
+            logger.warn(`[TelegramChatView] Failed to join room, membership is still: ${updatedMembership}`);
+            showWelcomeMessages('Unable to join room. Please try again later.');
+            return;
+          }
+        } catch (joinError) {
+          logger.error('[TelegramChatView] Error joining room:', joinError);
+          showWelcomeMessages('Error joining room. Please try again later.');
+          return;
+        }
+      } else if (membership !== 'join') {
+        logger.warn(`[TelegramChatView] Room membership state is ${membership}, not 'join'`);
+        showWelcomeMessages(`Cannot access room (membership: ${membership}). Please try again later.`);
+        return;
+      }
+
       // Initialize MatrixTimelineManager
       if (!matrixTimelineManager.initialized) {
         logger.info('[TelegramChatView] Initializing MatrixTimelineManager');

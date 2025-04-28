@@ -82,12 +82,26 @@ const ChatConfirmation = ({ contact, onConfirm, isJoining = false, error = null 
                 </div>
               </div>
               <h3 className="text-xl font-medium text-white mb-3">
-                View {contact?.telegramContact?.firstName || contact?.name} Chat
+                Join {contact?.telegramContact?.firstName || contact?.name} Chat
               </h3>
               <p className="text-gray-400 mb-6">
-                You're about to view messages from this Telegram conversation.
-                This will automatically join the chat if you haven't already.
+                You need to join this Telegram conversation before you can view messages.
+                Click the button below to join the chat and view messages.
               </p>
+              <div className="bg-[#0088cc]/10 border border-[#0088cc]/20 rounded-lg p-4 mb-6">
+                <div className="flex items-start">
+                  <div className="mr-3 text-[#0088cc]">
+                    <FiCheck className="w-5 h-5" />
+                  </div>
+                  <div className="text-sm text-left">
+                    <p className="text-white font-medium mb-1">Why do I need to join?</p>
+                    <p className="text-gray-400">
+                      Matrix requires you to join rooms before you can view messages.
+                      This is a security feature to protect your privacy.
+                    </p>
+                  </div>
+                </div>
+              </div>
               <div className="space-y-4">
                 <button
                   onClick={onConfirm}
@@ -101,7 +115,7 @@ const ChatConfirmation = ({ contact, onConfirm, isJoining = false, error = null 
                   ) : (
                     <>
                       <FaTelegram className="mr-2" />
-                      View Messages
+                      Join Chat & View Messages
                     </>
                   )}
                 </button>

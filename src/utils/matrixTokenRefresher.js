@@ -52,13 +52,14 @@ const matrixTokenRefresher = {
 
       // Check if token is expired or about to expire (within 2 minutes)
       if (credentials.expires_at && Date.now() > credentials.expires_at - 120000) {
-        logger.info('[matrixTokenRefresher] Token expired or expiring soon, refreshing');
+        logger.info('[matrixTokenRefresher] Token expired or expiring soon, refreshing via API');
 
         try {
           // Import the API utility to ensure proper authentication headers
           const api = (await import('./api')).default;
 
           // Call the Matrix status API to get fresh credentials using the API utility
+          // This endpoint calls matrixService.preCheckMatrixUser which includes token refresh logic
           const { data, error } = await api.get('/api/v1/matrix/status');
 
           if (error) {
@@ -101,22 +102,8 @@ const matrixTokenRefresher = {
         } catch (apiError) {
           logger.error('[matrixTokenRefresher] API token refresh failed:', apiError);
 
-          // Fall back to direct refresh if API fails
-          try {
-            if (credentials.password) {
-              const refreshedCredentials = await this.refreshToken(credentials);
-
-              // Update localStorage with refreshed credentials
-              parsedData.matrix_credentials = refreshedCredentials;
-              localStorage.setItem(localStorageKey, JSON.stringify(parsedData));
-
-              logger.info('[matrixTokenRefresher] Successfully refreshed token via direct refresh');
-              return true;
-            }
-          } catch (refreshError) {
-            logger.error('[matrixTokenRefresher] Direct token refresh failed:', refreshError);
-          }
-
+          // No longer attempting direct refresh - rely solely on the API
+          logger.warn('[matrixTokenRefresher] Token refresh via API failed, cannot proceed without valid token');
           return false;
         }
       }
@@ -344,83 +331,143 @@ const matrixTokenRefresher = {
             }
           }
 
-          // Connect to Matrix using our direct connect utility with timeout
-          logger.info('[matrixTokenRefresher] Connecting to Matrix for token refresh');
+          // Get fresh credentials from the API
+          logger.info('[matrixTokenRefresher] Attempting to get credentials from API');
           try {
-            const newClient = await Promise.race([
-              matrixDirectConnect.connectToMatrix(userId),
-              new Promise((_, reject) => {
-                setTimeout(() => reject(new Error('Connect timeout')), 15000);
-              })
-            ]);
+            // Import the API utility to ensure proper authentication headers
+            const api = (await import('./api')).default;
 
-            // If we got a client, use it
-            if (newClient) {
-              // Set the global Matrix client
-              window.matrixClient = newClient;
+            // Call the Matrix status API to get fresh credentials using the API utility
+            // This endpoint calls matrixService.preCheckMatrixUser which includes token refresh logic
+            const { data, error } = await api.get('/api/v1/matrix/status');
 
-              // Start the client with timeout
-              await Promise.race([
-                matrixDirectConnect.startClient(newClient),
+            if (error) {
+              throw new Error(`API error: ${error}`);
+            }
+
+            if (!data || !data.credentials) {
+              throw new Error('API response did not contain credentials');
+            }
+
+            // Create a Matrix client with the new credentials
+            const newCredentials = data.credentials;
+
+            // Store the credentials for future use
+            try {
+              const localStorageKey = `dailyfix_connection_${userId}`;
+              const existingData = localStorage.getItem(localStorageKey);
+              const parsedData = existingData ? JSON.parse(existingData) : {};
+              parsedData.matrix_credentials = newCredentials;
+              localStorage.setItem(localStorageKey, JSON.stringify(parsedData));
+
+              // Also update IndexedDB
+              try {
+                await saveToIndexedDB(userId, {
+                  [MATRIX_CREDENTIALS_KEY]: newCredentials
+                });
+              } catch (dbError) {
+                logger.warn('[matrixTokenRefresher] Error saving to IndexedDB:', dbError);
+              }
+
+              logger.info('[matrixTokenRefresher] Stored new credentials in localStorage and IndexedDB');
+            } catch (storageError) {
+              logger.warn('[matrixTokenRefresher] Failed to store credentials in localStorage:', storageError);
+            }
+
+            // Create a new client with the fresh credentials
+            const matrixSdk = (await import('matrix-js-sdk')).default;
+            const newClient = matrixSdk.createClient({
+              baseUrl: newCredentials.homeserver || 'https://dfix-hsbridge.duckdns.org',
+              accessToken: newCredentials.accessToken,
+              userId: newCredentials.userId,
+              deviceId: newCredentials.deviceId,
+              timelineSupport: true,
+              useAuthorizationHeader: true
+            });
+
+            logger.info('[matrixTokenRefresher] Successfully created client with new credentials from API');
+            return newClient;
+          } catch (apiError) {
+            logger.error('[matrixTokenRefresher] API token refresh failed:', apiError);
+
+            // If API call fails, we have no choice but to try direct connect as a last resort
+            logger.warn('[matrixTokenRefresher] API call failed, attempting direct connect as last resort');
+            try {
+              const newClient = await Promise.race([
+                matrixDirectConnect.connectToMatrix(userId),
                 new Promise((_, reject) => {
-                  setTimeout(() => reject(new Error('Start client timeout')), 15000);
+                  setTimeout(() => reject(new Error('Connect timeout')), 15000);
                 })
               ]);
 
-              // If this was for Telegram, make sure the flag is still set
-              // This ensures future refreshes will work
-              if (oldUserId && oldUserId.includes('@telegram_')) {
-                logger.info('[matrixTokenRefresher] Preserving Telegram connection flag for future refreshes');
-                sessionStorage.setItem('connecting_to_telegram', 'true');
+              // If we got a client, use it
+              if (newClient) {
+                // Set the global Matrix client
+                window.matrixClient = newClient;
+
+                // Start the client with timeout
+                await Promise.race([
+                  matrixDirectConnect.startClient(newClient),
+                  new Promise((_, reject) => {
+                    setTimeout(() => reject(new Error('Start client timeout')), 15000);
+                  })
+                ]);
+
+                // If this was for Telegram, make sure the flag is still set
+                // This ensures future refreshes will work
+                if (oldUserId && oldUserId.includes('@telegram_')) {
+                  logger.info('[matrixTokenRefresher] Preserving Telegram connection flag for future refreshes');
+                  sessionStorage.setItem('connecting_to_telegram', 'true');
+                }
+
+                logger.info('[matrixTokenRefresher] Successfully refreshed Matrix client');
+
+                // Reset the refresh attempts counter on successful refresh
+                this._refreshAttempts = 0;
+                if (this._resetRefreshAttemptsTimeout) {
+                  clearTimeout(this._resetRefreshAttemptsTimeout);
+                  this._resetRefreshAttemptsTimeout = null;
+                }
+
+                return newClient;
+              } else {
+                throw new Error('Failed to get Matrix client');
+              }
+            } catch (directConnectError) {
+              // If the error indicates we need to get credentials from the API,
+              // we should redirect the user to re-authenticate
+              if (directConnectError.message && directConnectError.message.includes('Please use the API to get new credentials')) {
+                logger.warn('[matrixTokenRefresher] Need to get new credentials from the API');
+
+                // Show a toast notification for the error
+                try {
+                  const { toast } = await import('react-hot-toast');
+                  toast.error('Your session has expired. Please reconnect to Telegram.', {
+                    id: 'matrix-credentials-expired',
+                    duration: 5000
+                  });
+                } catch {
+                  // Ignore toast errors
+                }
+
+                // Clear any stored credentials
+                try {
+                  localStorage.removeItem(`dailyfix_connection_${userId}`);
+                  localStorage.removeItem('mx_access_token');
+                  localStorage.removeItem('mx_user_id');
+                  localStorage.removeItem('mx_device_id');
+                  localStorage.removeItem('mx_hs_url');
+                } catch (e) {
+                  logger.warn('[matrixTokenRefresher] Failed to clear localStorage:', e);
+                }
+
+                // Return null to indicate we need to re-authenticate
+                return null;
               }
 
-              logger.info('[matrixTokenRefresher] Successfully refreshed Matrix client');
-
-              // Reset the refresh attempts counter on successful refresh
-              this._refreshAttempts = 0;
-              if (this._resetRefreshAttemptsTimeout) {
-                clearTimeout(this._resetRefreshAttemptsTimeout);
-                this._resetRefreshAttemptsTimeout = null;
-              }
-
-              return newClient;
-            } else {
-              throw new Error('Failed to get Matrix client');
+              // For other errors, just rethrow
+              throw directConnectError;
             }
-          } catch (error) {
-            // If the error indicates we need to get credentials from the API,
-            // we should redirect the user to re-authenticate
-            if (error.message && error.message.includes('Please use the API to get new credentials')) {
-              logger.warn('[matrixTokenRefresher] Need to get new credentials from the API');
-
-              // Show a toast notification for the error
-              try {
-                const { toast } = await import('react-hot-toast');
-                toast.error('Your session has expired. Please reconnect to Telegram.', {
-                  id: 'matrix-credentials-expired',
-                  duration: 5000
-                });
-              } catch {
-                // Ignore toast errors
-              }
-
-              // Clear any stored credentials
-              try {
-                localStorage.removeItem(`dailyfix_connection_${userId}`);
-                localStorage.removeItem('mx_access_token');
-                localStorage.removeItem('mx_user_id');
-                localStorage.removeItem('mx_device_id');
-                localStorage.removeItem('mx_hs_url');
-              } catch (e) {
-                logger.warn('[matrixTokenRefresher] Failed to clear localStorage:', e);
-              }
-
-              // Return null to indicate we need to re-authenticate
-              return null;
-            }
-
-            // For other errors, just rethrow
-            throw error;
           }
 
           // This code is now handled inside the try/catch block above

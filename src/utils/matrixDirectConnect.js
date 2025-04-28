@@ -108,11 +108,69 @@ const matrixDirectConnect = {
 
       // Instead of trying to register or login directly, we should use the API
       logger.info('[matrixDirectConnect] Existing credentials are invalid or not found');
-      logger.info('[matrixDirectConnect] Credentials should be obtained from the API');
 
-      // We'll throw an error here to indicate that we need to get credentials from the API
-      // This will be caught by the caller and handled appropriately
-      throw new Error('Matrix credentials are invalid or not found. Please use the API to get new credentials.');
+      // Try to get new credentials from the API
+      try {
+        logger.info('[matrixDirectConnect] Attempting to get new credentials from the API');
+
+        // Import the API utility to ensure proper authentication headers
+        const api = (await import('./api')).default;
+
+        // Call the Matrix status API to get fresh credentials using the API utility
+        // This endpoint calls matrixService.preCheckMatrixUser which includes token refresh logic
+        const { data, error } = await api.get('/api/v1/matrix/status');
+
+        if (error) {
+          throw new Error(`API error: ${error}`);
+        }
+
+        if (!data || !data.credentials) {
+          throw new Error('API response did not contain credentials');
+        }
+
+        // Create a Matrix client with the new credentials
+        const newCredentials = data.credentials;
+
+        // Store the credentials for future use
+        try {
+          const localStorageKey = `dailyfix_connection_${userId}`;
+          const existingData = localStorage.getItem(localStorageKey);
+          const parsedData = existingData ? JSON.parse(existingData) : {};
+          parsedData.matrix_credentials = newCredentials;
+          localStorage.setItem(localStorageKey, JSON.stringify(parsedData));
+
+          // Also update IndexedDB if available
+          try {
+            const { saveToIndexedDB } = await import('./indexedDBHelper');
+            const { MATRIX_CREDENTIALS_KEY } = await import('../constants');
+            await saveToIndexedDB(userId, {
+              [MATRIX_CREDENTIALS_KEY]: newCredentials
+            });
+          } catch (dbError) {
+            logger.warn('[matrixDirectConnect] Error saving to IndexedDB:', dbError);
+          }
+
+          logger.info('[matrixDirectConnect] Stored new credentials in localStorage and IndexedDB');
+        } catch (storageError) {
+          logger.warn('[matrixDirectConnect] Failed to store credentials in localStorage:', storageError);
+        }
+
+        // Create a new client with the fresh credentials
+        const client = matrixSdk.createClient({
+          baseUrl: newCredentials.homeserver || 'https://dfix-hsbridge.duckdns.org',
+          accessToken: newCredentials.accessToken,
+          userId: newCredentials.userId,
+          deviceId: newCredentials.deviceId,
+          timelineSupport: true,
+          useAuthorizationHeader: true
+        });
+
+        logger.info('[matrixDirectConnect] Successfully created client with new credentials from API');
+        return client;
+      } catch (apiError) {
+        logger.error('[matrixDirectConnect] Error getting credentials from API:', apiError);
+        throw new Error('Failed to get Matrix credentials from API. Please refresh the page and try again.');
+      }
     } catch (error) {
       logger.error('[matrixDirectConnect] Error connecting to Matrix:', error);
       throw error;
