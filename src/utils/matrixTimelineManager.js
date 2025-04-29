@@ -1027,9 +1027,17 @@ class MatrixTimelineManager {
           eventType = 'm.room.message';
         }
 
-        // Only process message events, stickers, and encrypted messages
-        // This matches the behavior in SlidingSyncManager
-        const messageEventTypes = ['m.room.message', 'm.sticker', 'm.room.encrypted'];
+        // Process message events, stickers, encrypted messages, and Telegram-specific events
+        // This is an expanded list compared to SlidingSyncManager to handle Telegram bridge events
+        const messageEventTypes = [
+          'm.room.message',
+          'm.sticker',
+          'm.room.encrypted',
+          // Telegram-specific event types
+          'm.bridge',
+          'uk.half-shot.bridge',
+          'fi.mau.dummy.portal_created'
+        ];
 
         // Skip non-message events
         if (!eventType || !messageEventTypes.includes(eventType)) {
@@ -1363,16 +1371,36 @@ class MatrixTimelineManager {
           };
           logger.warn(`[MatrixTimelineManager] First event details: ${JSON.stringify(eventDetails)}`);
 
+          // Get content from the event
+          let content = null;
+          if (typeof firstEvent.getContent === 'function') {
+            content = firstEvent.getContent();
+          } else if (firstEvent.content) {
+            content = firstEvent.content;
+          } else {
+            content = { body: 'Message content unavailable' };
+          }
+
+          // For Telegram rooms, create a better message
+          let messageBody = 'Conversation started';
+          if (eventDetails.type === 'm.room.create') {
+            messageBody = 'Conversation created';
+          } else if (eventDetails.type === 'm.bridge' || eventDetails.type === 'uk.half-shot.bridge') {
+            messageBody = 'Telegram bridge connected';
+          } else if (eventDetails.type === 'fi.mau.dummy.portal_created') {
+            messageBody = 'Telegram chat connected';
+          }
+
           // Try to create a message from this event directly
           const message = {
             id: eventDetails.id || `msg_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
             sender: eventDetails.sender,
             senderName: eventDetails.sender,
-            content: { body: 'Forced message from event' },
+            content: { ...content, body: messageBody },
             timestamp: eventDetails.timestamp,
             isFromMe: false,
             eventType: eventDetails.type,
-            roomId: null,
+            roomId: typeof firstEvent.getRoomId === 'function' ? firstEvent.getRoomId() : (firstEvent.room_id || null),
             rawEvent: firstEvent
           };
 
@@ -1385,6 +1413,59 @@ class MatrixTimelineManager {
       }
 
       return messages;
+    }
+  }
+
+  /**
+   * Get cached messages for a room
+   * @param {string} roomId - Room ID
+   * @returns {Promise<Array>} - Array of cached messages
+   */
+  async getCachedMessages(roomId) {
+    if (!roomId) {
+      logger.error('[MatrixTimelineManager] Cannot get cached messages: No roomId provided');
+      return [];
+    }
+
+    try {
+      // Check if we have a CacheManager instance
+      if (window.cacheManager) {
+        logger.info(`[MatrixTimelineManager] Getting cached messages for room ${roomId}`);
+        try {
+          // Try different methods that might exist on the cache manager
+          let cachedMessages = null;
+
+          if (typeof window.cacheManager.getMessages === 'function') {
+            cachedMessages = await window.cacheManager.getMessages(roomId);
+          } else if (typeof window.cacheManager.getCachedMessages === 'function') {
+            cachedMessages = await window.cacheManager.getCachedMessages(roomId);
+          } else if (typeof window.cacheManager.getMessagesForRoom === 'function') {
+            cachedMessages = await window.cacheManager.getMessagesForRoom(roomId);
+          }
+
+          if (cachedMessages && cachedMessages.length > 0) {
+            logger.info(`[MatrixTimelineManager] Found ${cachedMessages.length} cached messages for room ${roomId}`);
+            return cachedMessages;
+          }
+        } catch (cacheError) {
+          logger.warn(`[MatrixTimelineManager] Error accessing cache manager methods: ${cacheError.message}`);
+          // Continue to try other methods
+        }
+      }
+
+      // If no CacheManager or no cached messages, check our internal cache
+      const timelineData = this.roomTimelines.get(roomId);
+      if (timelineData && timelineData.events && timelineData.events.length > 0) {
+        logger.info(`[MatrixTimelineManager] Processing ${timelineData.events.length} events from internal cache`);
+        const messages = await this.processEventsToMessages(timelineData.events);
+        return messages;
+      }
+
+      logger.info(`[MatrixTimelineManager] No cached messages found for room ${roomId}`);
+      return [];
+    } catch (error) {
+      logger.error(`[MatrixTimelineManager] Error getting cached messages: ${error.message}`);
+      return [];
     }
   }
 

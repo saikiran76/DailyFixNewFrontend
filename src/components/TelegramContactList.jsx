@@ -276,9 +276,48 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
 
   // Handle rooms updated event
   const handleRoomsUpdated = (rooms) => {
-    logger.info('[TelegramContactList] Rooms updated:', rooms.length);
-    setContacts(rooms);
-    setFilteredContacts(rooms);
+    logger.info(`[TelegramContactList] Rooms updated: ${rooms.length}`);
+
+    // CRITICAL FIX: Merge with existing contacts instead of replacing them
+    setContacts(prevContacts => {
+      // Create a map of existing contacts by ID for quick lookup
+      const existingContactsMap = new Map(prevContacts.map(contact => [contact.id, contact]));
+
+      // Add new rooms to the map, preserving existing ones
+      // CRITICAL FIX: Add null check to prevent "Cannot read properties of undefined (reading 'id')" error
+      rooms.forEach(room => {
+        if (room && room.id) {
+          existingContactsMap.set(room.id, room);
+        } else {
+          logger.warn('[TelegramContactList] Skipping invalid room in handleRoomsUpdated:', room);
+        }
+      });
+
+      // Convert map back to array
+      const mergedContacts = Array.from(existingContactsMap.values());
+      logger.info(`[TelegramContactList] Merged contacts in handleRoomsUpdated: ${mergedContacts.length} total (${prevContacts.length} existing + ${rooms.length} new)`);
+      return mergedContacts;
+    });
+
+    // Update filtered contacts as well
+    setFilteredContacts(prevFiltered => {
+      // Create a map of existing filtered contacts by ID
+      const existingFilteredMap = new Map(prevFiltered.map(contact => [contact.id, contact]));
+
+      // Add new rooms to the map
+      // CRITICAL FIX: Add null check to prevent "Cannot read properties of undefined (reading 'id')" error
+      rooms.forEach(room => {
+        if (room && room.id) {
+          existingFilteredMap.set(room.id, room);
+        }
+        // No need to log here as we already logged in the previous forEach
+      });
+
+      // Convert map back to array
+      const mergedFiltered = Array.from(existingFilteredMap.values());
+      return mergedFiltered;
+    });
+
     setLoading(false);
   };
 
@@ -517,20 +556,30 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
     // Use a ref to track if we're still loading
     const isLoadingRef = { current: true };
 
-    // Set a timeout to prevent hanging indefinitely
+    // Set a timeout to prevent hanging indefinitely, but with a much longer timeout
     const loadingTimeout = setTimeout(() => {
       if (isLoadingRef.current) {
-        logger.warn('[TelegramContactList] Loading contacts timed out');
-        setLoading(false);
-        isLoadingRef.current = false;
+        logger.warn('[TelegramContactList] Loading contacts taking longer than expected, but continuing in background');
+        setLoading(false); // Stop showing loading indicator but continue loading
 
-        // Clear the loading flag
-        window._loadingContactsInProgress = false;
+        // Don't set isLoadingRef.current = false yet to allow the loading to continue
+        // Just log a warning and let the process continue in the background
 
-        // We already set a placeholder contact, so just finish loading
-        logger.info('[TelegramContactList] Finishing load after timeout');
+        // Set a final timeout that will actually stop the loading process
+        setTimeout(() => {
+          if (isLoadingRef.current) {
+            logger.warn('[TelegramContactList] Final loading timeout reached');
+            isLoadingRef.current = false;
+
+            // Clear the loading flag
+            window._loadingContactsInProgress = false;
+
+            // We already set a placeholder contact, so just finish loading
+            logger.info('[TelegramContactList] Finishing load after final timeout');
+          }
+        }, 30000); // 30 second final timeout
       }
-    }, 5000); // 5 seconds timeout for better UX
+    }, 15000); // 15 seconds initial warning timeout for better UX
 
     // Declare telegramRooms at the function level so it's accessible throughout
     let telegramRooms = [];
@@ -697,11 +746,18 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
               };
               slidingSyncManager.on('syncComplete', onSyncComplete);
 
-              // Set a timeout in case sync takes too long
+              // Set a timeout in case sync takes too long, but with a longer timeout
               setTimeout(() => {
-                slidingSyncManager.removeListener('syncComplete', onSyncComplete);
-                resolve();
-              }, 10000); // 10 second timeout
+                logger.warn('[TelegramContactList] Sliding sync taking longer than expected, but continuing');
+                // Don't resolve immediately, just log a warning
+
+                // Set a final timeout that will actually resolve the promise
+                setTimeout(() => {
+                  logger.warn('[TelegramContactList] Final sliding sync timeout reached');
+                  slidingSyncManager.removeListener('syncComplete', onSyncComplete);
+                  resolve();
+                }, 20000); // 20 second final timeout
+              }, 15000); // 15 second initial warning
             });
 
             await syncPromise;
@@ -724,9 +780,36 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
               const userId = client.getUserId();
               telegramRooms = roomListManager.transformRooms(userId, slidingSyncTelegramRooms, client);
 
-              // Update contacts
-              setContacts(telegramRooms);
-              setFilteredContacts(telegramRooms);
+              // CRITICAL FIX: Merge with existing contacts instead of replacing them
+              // This prevents rooms from disappearing when sliding sync finds fewer rooms
+              setContacts(prevContacts => {
+                // Create a map of existing contacts by ID for quick lookup
+                const existingContactsMap = new Map(prevContacts.map(contact => [contact.id, contact]));
+
+                // Add new rooms to the map, preserving existing ones
+                telegramRooms.forEach(room => {
+                  existingContactsMap.set(room.id, room);
+                });
+
+                // Convert map back to array
+                const mergedContacts = Array.from(existingContactsMap.values());
+                logger.info(`[TelegramContactList] Merged contacts: ${mergedContacts.length} total (${prevContacts.length} existing + ${telegramRooms.length} new)`);
+                return mergedContacts;
+              });
+
+              // Update filtered contacts as well
+              setFilteredContacts(prevFiltered => {
+                // Create a map of existing filtered contacts by ID
+                const existingFilteredMap = new Map(prevFiltered.map(contact => [contact.id, contact]));
+
+                // Add new rooms to the map
+                telegramRooms.forEach(room => {
+                  existingFilteredMap.set(room.id, room);
+                });
+
+                // Convert map back to array
+                return Array.from(existingFilteredMap.values());
+              });
 
               // Cache the contacts - but first remove circular references
               try {
@@ -1107,8 +1190,37 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
       try {
         // Only update contacts if we found real rooms
         if (telegramRooms.length > 0) {
-          setContacts(telegramRooms);
-          setFilteredContacts(telegramRooms);
+          // CRITICAL FIX: Merge with existing contacts instead of replacing them
+          setContacts(prevContacts => {
+            // Create a map of existing contacts by ID for quick lookup
+            const existingContactsMap = new Map(prevContacts.map(contact => [contact.id, contact]));
+
+            // Add new rooms to the map, preserving existing ones
+            telegramRooms.forEach(room => {
+              existingContactsMap.set(room.id, room);
+            });
+
+            // Convert map back to array
+            const mergedContacts = Array.from(existingContactsMap.values());
+            logger.info(`[TelegramContactList] Merged contacts in loadContacts: ${mergedContacts.length} total (${prevContacts.length} existing + ${telegramRooms.length} new)`);
+            return mergedContacts;
+          });
+
+          // Update filtered contacts as well
+          setFilteredContacts(prevFiltered => {
+            // Create a map of existing filtered contacts by ID
+            const existingFilteredMap = new Map(prevFiltered.map(contact => [contact.id, contact]));
+
+            // Add new rooms to the map
+            telegramRooms.forEach(room => {
+              existingFilteredMap.set(room.id, room);
+            });
+
+            // Convert map back to array
+            const mergedFiltered = Array.from(existingFilteredMap.values());
+            return mergedFiltered;
+          });
+
           logger.info(`[TelegramContactList] Successfully loaded ${telegramRooms.length} Telegram contacts`);
 
           // Cache the contacts for future use
@@ -1164,14 +1276,22 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
     // Show immediate feedback
     toast.loading('Refreshing conversations...', { id: 'refresh-toast' });
 
-    // Set a timeout to prevent the refresh from hanging indefinitely
+    // Set a timeout to prevent the refresh from hanging indefinitely, but with a longer timeout
     const refreshTimeout = setTimeout(() => {
       if (refreshing) {
-        logger.warn('[TelegramContactList] Refresh timed out');
-        setRefreshing(false);
-        toast.error('Refresh timed out. Please try again.', { id: 'refresh-toast' });
+        logger.warn('[TelegramContactList] Refresh taking longer than expected, but continuing in background');
+        toast.loading('Refresh taking longer than expected, but continuing in background...', { id: 'refresh-toast' });
+
+        // Set a final timeout that will actually stop the refresh
+        setTimeout(() => {
+          if (refreshing) {
+            logger.warn('[TelegramContactList] Final refresh timeout reached');
+            setRefreshing(false);
+            toast.error('Refresh completed in background. Some contacts may still be loading.', { id: 'refresh-toast' });
+          }
+        }, 30000); // 30 second final timeout
       }
-    }, 20000); // 20 seconds timeout
+    }, 20000); // 20 seconds initial warning
 
     // Check the Matrix client state and ensure it's running properly
     try {
@@ -1360,21 +1480,55 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
 
           // If we found Telegram rooms, update the contacts
           if (telegramRooms.length > 0) {
-            setContacts(telegramRooms);
-            setFilteredContacts(telegramRooms);
+            // CRITICAL FIX: Merge with existing contacts instead of replacing them
+            setContacts(prevContacts => {
+              // Create a map of existing contacts by ID for quick lookup
+              const existingContactsMap = new Map(prevContacts.map(contact => [contact.id, contact]));
+
+              // Add new rooms to the map, preserving existing ones
+              telegramRooms.forEach(room => {
+                existingContactsMap.set(room.id, room);
+              });
+
+              // Convert map back to array
+              const mergedContacts = Array.from(existingContactsMap.values());
+              logger.info(`[TelegramContactList] Merged contacts in handleRefresh: ${mergedContacts.length} total (${prevContacts.length} existing + ${telegramRooms.length} new)`);
+              return mergedContacts;
+            });
+
+            // Update filtered contacts as well
+            setFilteredContacts(prevFiltered => {
+              // Create a map of existing filtered contacts by ID
+              const existingFilteredMap = new Map(prevFiltered.map(contact => [contact.id, contact]));
+
+              // Add new rooms to the map
+              telegramRooms.forEach(room => {
+                existingFilteredMap.set(room.id, room);
+              });
+
+              // Convert map back to array
+              const mergedFiltered = Array.from(existingFilteredMap.values());
+              return mergedFiltered;
+            });
           }
         }
       } catch (roomSyncError) {
         logger.error('[TelegramContactList] Error syncing rooms:', roomSyncError);
       }
 
-      // Load contacts with a timeout to prevent hanging
+      // Load contacts with a longer timeout to prevent premature timeout
       const loadPromise = loadContacts();
       const timeoutPromise = new Promise((resolve) => {
         setTimeout(() => {
-          logger.warn('[TelegramContactList] Contact loading timed out');
-          resolve();
-        }, 5000);
+          logger.warn('[TelegramContactList] Contact loading timed out, but will continue in background');
+          // Don't resolve immediately, just log the warning
+          // This allows the loadContacts to continue in the background
+          // We'll still resolve after a much longer timeout as a safety measure
+          setTimeout(() => {
+            logger.warn('[TelegramContactList] Final contact loading timeout reached');
+            resolve();
+          }, 30000); // 30 second final timeout
+        }, 15000); // 15 second warning timeout
       });
 
       await Promise.race([loadPromise, timeoutPromise]);
@@ -1418,8 +1572,32 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
                   }
                 };
 
-                setContacts([contact]);
-                setFilteredContacts([contact]);
+                // CRITICAL FIX: Merge with existing contacts instead of replacing them
+                setContacts(prevContacts => {
+                  // Create a map of existing contacts by ID for quick lookup
+                  const existingContactsMap = new Map(prevContacts.map(c => [c.id, c]));
+
+                  // Add the new contact to the map
+                  existingContactsMap.set(contact.id, contact);
+
+                  // Convert map back to array
+                  const mergedContacts = Array.from(existingContactsMap.values());
+                  logger.info(`[TelegramContactList] Merged direct join contact: ${mergedContacts.length} total`);
+                  return mergedContacts;
+                });
+
+                // Update filtered contacts as well
+                setFilteredContacts(prevFiltered => {
+                  // Create a map of existing filtered contacts by ID
+                  const existingFilteredMap = new Map(prevFiltered.map(c => [c.id, c]));
+
+                  // Add the new contact to the map
+                  existingFilteredMap.set(contact.id, contact);
+
+                  // Convert map back to array
+                  return Array.from(existingFilteredMap.values());
+                });
+
                 logger.info('[TelegramContactList] Created contact from directly joined Telegram room');
               }
             } catch (joinError) {
@@ -1460,8 +1638,32 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
                 }
               };
 
-              setContacts([contact]);
-              setFilteredContacts([contact]);
+              // CRITICAL FIX: Merge with existing contacts instead of replacing them
+              setContacts(prevContacts => {
+                // Create a map of existing contacts by ID for quick lookup
+                const existingContactsMap = new Map(prevContacts.map(c => [c.id, c]));
+
+                // Add the new contact to the map
+                existingContactsMap.set(contact.id, contact);
+
+                // Convert map back to array
+                const mergedContacts = Array.from(existingContactsMap.values());
+                logger.info(`[TelegramContactList] Merged placeholder contact: ${mergedContacts.length} total`);
+                return mergedContacts;
+              });
+
+              // Update filtered contacts as well
+              setFilteredContacts(prevFiltered => {
+                // Create a map of existing filtered contacts by ID
+                const existingFilteredMap = new Map(prevFiltered.map(c => [c.id, c]));
+
+                // Add the new contact to the map
+                existingFilteredMap.set(contact.id, contact);
+
+                // Convert map back to array
+                return Array.from(existingFilteredMap.values());
+              });
+
               logger.info('[TelegramContactList] Created placeholder contact from known Telegram room');
             }
           }
@@ -1511,8 +1713,31 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
               }
             };
 
-            setContacts([contact]);
-            setFilteredContacts([contact]);
+            // CRITICAL FIX: Merge with existing contacts instead of replacing them
+            setContacts(prevContacts => {
+              // Create a map of existing contacts by ID for quick lookup
+              const existingContactsMap = new Map(prevContacts.map(c => [c.id, c]));
+
+              // Add the new contact to the map
+              existingContactsMap.set(contact.id, contact);
+
+              // Convert map back to array
+              const mergedContacts = Array.from(existingContactsMap.values());
+              logger.info(`[TelegramContactList] Merged fallback contact: ${mergedContacts.length} total`);
+              return mergedContacts;
+            });
+
+            // Update filtered contacts as well
+            setFilteredContacts(prevFiltered => {
+              // Create a map of existing filtered contacts by ID
+              const existingFilteredMap = new Map(prevFiltered.map(c => [c.id, c]));
+
+              // Add the new contact to the map
+              existingFilteredMap.set(contact.id, contact);
+
+              // Convert map back to array
+              return Array.from(existingFilteredMap.values());
+            });
           }
         }
       } catch (fallbackError) {
@@ -1625,8 +1850,32 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
                   members: telegramRoom.getJoinedMembers().length
                 };
 
-                setContacts([contact]);
-                setFilteredContacts([contact]);
+                // CRITICAL FIX: Merge with existing contacts instead of replacing them
+                setContacts(prevContacts => {
+                  // Create a map of existing contacts by ID for quick lookup
+                  const existingContactsMap = new Map(prevContacts.map(c => [c.id, c]));
+
+                  // Add the new contact to the map
+                  existingContactsMap.set(contact.id, contact);
+
+                  // Convert map back to array
+                  const mergedContacts = Array.from(existingContactsMap.values());
+                  logger.info(`[TelegramContactList] Merged direct load contact: ${mergedContacts.length} total`);
+                  return mergedContacts;
+                });
+
+                // Update filtered contacts as well
+                setFilteredContacts(prevFiltered => {
+                  // Create a map of existing filtered contacts by ID
+                  const existingFilteredMap = new Map(prevFiltered.map(c => [c.id, c]));
+
+                  // Add the new contact to the map
+                  existingFilteredMap.set(contact.id, contact);
+
+                  // Convert map back to array
+                  return Array.from(existingFilteredMap.values());
+                });
+
                 setLoading(false);
               }
             }
@@ -1649,8 +1898,32 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
               isPlaceholder: true
             };
 
-            setContacts([placeholderContact]);
-            setFilteredContacts([placeholderContact]);
+            // CRITICAL FIX: Merge with existing contacts instead of replacing them
+            setContacts(prevContacts => {
+              // Create a map of existing contacts by ID for quick lookup
+              const existingContactsMap = new Map(prevContacts.map(c => [c.id, c]));
+
+              // Add the new contact to the map
+              existingContactsMap.set(placeholderContact.id, placeholderContact);
+
+              // Convert map back to array
+              const mergedContacts = Array.from(existingContactsMap.values());
+              logger.info(`[TelegramContactList] Merged direct load placeholder: ${mergedContacts.length} total`);
+              return mergedContacts;
+            });
+
+            // Update filtered contacts as well
+            setFilteredContacts(prevFiltered => {
+              // Create a map of existing filtered contacts by ID
+              const existingFilteredMap = new Map(prevFiltered.map(c => [c.id, c]));
+
+              // Add the new contact to the map
+              existingFilteredMap.set(placeholderContact.id, placeholderContact);
+
+              // Convert map back to array
+              return Array.from(existingFilteredMap.values());
+            });
+
             setLoading(false);
           }
         }
@@ -1703,8 +1976,32 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
                       members: 1,
                       isPlaceholder: true
                     };
-                    setContacts([placeholderContact]);
-                    setFilteredContacts([placeholderContact]);
+                    // CRITICAL FIX: Merge with existing contacts instead of replacing them
+                    setContacts(prevContacts => {
+                      // Create a map of existing contacts by ID for quick lookup
+                      const existingContactsMap = new Map(prevContacts.map(c => [c.id, c]));
+
+                      // Add the new contact to the map
+                      existingContactsMap.set(placeholderContact.id, placeholderContact);
+
+                      // Convert map back to array
+                      const mergedContacts = Array.from(existingContactsMap.values());
+                      logger.info(`[TelegramContactList] Merged manual refresh placeholder: ${mergedContacts.length} total`);
+                      return mergedContacts;
+                    });
+
+                    // Update filtered contacts as well
+                    setFilteredContacts(prevFiltered => {
+                      // Create a map of existing filtered contacts by ID
+                      const existingFilteredMap = new Map(prevFiltered.map(c => [c.id, c]));
+
+                      // Add the new contact to the map
+                      existingFilteredMap.set(placeholderContact.id, placeholderContact);
+
+                      // Convert map back to array
+                      return Array.from(existingFilteredMap.values());
+                    });
+
                     setLoading(false);
                   }
                 }, 5000);

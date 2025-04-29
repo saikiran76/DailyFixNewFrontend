@@ -136,47 +136,125 @@ const AIAssistantButton = ({ client, selectedContact, className = "" }) => {
 
       // Send a typing indicator message only if we're sending to room
       if (sendToRoom) {
-        typingMsgId = await client.sendMessage(roomId, {
-          msgtype: 'm.room.message',
-          body: 'AI Assistant is thinking...',
-          format: 'org.matrix.custom.html',
-          formatted_body: `<div class="ai-typing-indicator">AI Assistant is thinking...</div>`,
-          'm.relates_to': {
-            rel_type: 'm.replace',
-            event_id: null // Will be filled in later
+        // CRITICAL FIX: Add null check for client.sendMessage
+        try {
+          if (client && typeof client.sendMessage === 'function') {
+            typingMsgId = await client.sendMessage(roomId, {
+              msgtype: 'm.room.message',
+              body: 'AI Assistant is thinking...',
+              format: 'org.matrix.custom.html',
+              formatted_body: `<div class="ai-typing-indicator">AI Assistant is thinking...</div>`,
+              'm.relates_to': {
+                rel_type: 'm.replace',
+                event_id: null // Will be filled in later
+              }
+            });
+          } else {
+            logger.warn('[AIAssistant] Could not send typing indicator: client.sendMessage not available');
           }
-        });
+        } catch (typingError) {
+          logger.warn('[AIAssistant] Error sending typing indicator:', typingError);
+          // Continue without a typing indicator
+        }
       }
 
       // Get recent messages from timeline
-      const timeline = room.getLiveTimeline();
-      const events = timeline.getEvents();
+      // CRITICAL FIX: Add null checks for timeline methods
+      let events = [];
+      try {
+        if (room && typeof room.getLiveTimeline === 'function') {
+          const timeline = room.getLiveTimeline();
+          if (timeline && typeof timeline.getEvents === 'function') {
+            events = timeline.getEvents() || [];
+          }
+        }
+      } catch (timelineError) {
+        logger.warn('[AIAssistant] Error getting timeline events:', timelineError);
+        // Continue with empty events array
+      }
+
       const messages = events
-        .filter(event => event.getType() === 'm.room.message')
+        .filter(event => event.getType && event.getType() === 'm.room.message')
         .slice(-CONFIG.MAX_CONTEXT_MESSAGES)  // Last N messages based on config
-        .map(event => ({
-          id: event.getId(),
-          sender: event.getSender(),
-          content: event.getContent(),
-          timestamp: event.getOriginServerTs(),
-          room_id: roomId
-        }));
+        .map(event => {
+          // CRITICAL FIX: Add null checks and fallbacks for all event methods
+          // This prevents "TypeError: event.getOriginServerTs is not a function" errors
+          const getTimestamp = () => {
+            if (typeof event.getOriginServerTs === 'function') {
+              return event.getOriginServerTs();
+            } else if (event.origin_server_ts) {
+              return event.origin_server_ts;
+            } else {
+              return Date.now(); // Fallback to current time
+            }
+          };
+
+          return {
+            id: typeof event.getId === 'function' ? event.getId() : (event.event_id || `msg_${Date.now()}`),
+            sender: typeof event.getSender === 'function' ? event.getSender() : (event.sender || 'unknown'),
+            content: typeof event.getContent === 'function' ? event.getContent() : (event.content || { body: 'Unknown content' }),
+            timestamp: getTimestamp(),
+            room_id: roomId
+          };
+        });
 
       // Get room context
       const roomContext = {
         room_id: roomId,
         name: room.name || 'Unknown Room',
-        members: room.getJoinedMembers().map(member => ({
-          user_id: member.userId,
-          display_name: member.name
-        }))
+        members: []
       };
+
+      // CRITICAL FIX: Add null check for getJoinedMembers method
+      try {
+        if (typeof room.getJoinedMembers === 'function') {
+          const members = room.getJoinedMembers() || [];
+          roomContext.members = members.map(member => ({
+            user_id: member.userId,
+            display_name: member.name
+          }));
+        } else if (room.members) {
+          // Alternative way to get members if getJoinedMembers is not available
+          const membersList = [];
+          for (const userId in room.members) {
+            const member = room.members[userId];
+            if (member && member.membership === 'join') {
+              membersList.push({
+                user_id: userId,
+                display_name: member.name || userId
+              });
+            }
+          }
+          roomContext.members = membersList;
+        }
+      } catch (membersError) {
+        logger.warn('[AIAssistant] Error getting room members:', membersError);
+        // Keep empty members array as fallback
+      }
 
       // Get user context
       const userContext = {
-        user_id: client.getUserId(),
-        display_name: client.getUser(client.getUserId())?.displayName || 'User'
+        user_id: 'unknown',
+        display_name: 'User'
       };
+
+      // CRITICAL FIX: Add null checks for client methods
+      try {
+        if (typeof client.getUserId === 'function') {
+          userContext.user_id = client.getUserId();
+
+          // Only try to get user if getUserId succeeded
+          if (typeof client.getUser === 'function') {
+            const user = client.getUser(userContext.user_id);
+            if (user && user.displayName) {
+              userContext.display_name = user.displayName;
+            }
+          }
+        }
+      } catch (userError) {
+        logger.warn('[AIAssistant] Error getting user context:', userError);
+        // Keep default user context as fallback
+      }
 
       logger.info('[AIAssistant] Sending query to AI assistant API');
 
@@ -293,25 +371,37 @@ const AIAssistantButton = ({ client, selectedContact, className = "" }) => {
         // Note: We can't include scripts in Matrix messages, so we'll use DOM manipulation after sending
         const fullHtml = tempDiv.innerHTML;
 
-        // Send AI response to the room with HTML formatting
-        // If we have a typing indicator, replace it; otherwise send a new message
-        if (typingMsgId) {
-          await client.sendMessage(roomId, {
-            msgtype: 'm.room.message',
-            body: `🤖 AI Assistant: ${result.response}`,
-            format: 'org.matrix.custom.html',
-            formatted_body: fullHtml,
-            'm.relates_to': {
-              rel_type: 'm.replace',
-              event_id: typingMsgId
+        // CRITICAL FIX: Add null checks for client methods
+        try {
+          // Send AI response to the room with HTML formatting
+          // If we have a typing indicator, replace it; otherwise send a new message
+          if (client) {
+            if (typingMsgId && typeof client.sendMessage === 'function') {
+              await client.sendMessage(roomId, {
+                msgtype: 'm.room.message',
+                body: `🤖 AI Assistant: ${result.response}`,
+                format: 'org.matrix.custom.html',
+                formatted_body: fullHtml,
+                'm.relates_to': {
+                  rel_type: 'm.replace',
+                  event_id: typingMsgId
+                }
+              });
+            } else if (typeof client.sendHtmlMessage === 'function') {
+              await client.sendHtmlMessage(
+                roomId,
+                `🤖 AI Assistant: ${result.response}`,
+                fullHtml
+              );
+            } else {
+              logger.warn('[AIAssistant] Could not send message: client methods not available');
             }
-          });
-        } else {
-          await client.sendHtmlMessage(
-            roomId,
-            `🤖 AI Assistant: ${result.response}`,
-            fullHtml
-          );
+          } else {
+            logger.warn('[AIAssistant] Could not send message: client is null');
+          }
+        } catch (sendError) {
+          logger.error('[AIAssistant] Error sending AI response:', sendError);
+          // Continue without sending the message
         }
 
         // After sending, find the message in the DOM and attach event listeners
@@ -351,20 +441,39 @@ const AIAssistantButton = ({ client, selectedContact, className = "" }) => {
 
       // Index messages in the background
       try {
+        // CRITICAL FIX: Add null checks for client methods and room methods
+        // Get the current user ID safely
+        let currentUserId = userContext.user_id; // Use the already safely obtained user ID
+
         // Send batch of messages to be indexed
         api.post('/api/v1/ai-bot/indexeddb/batch', {
-          messages: messages.map(msg => ({
-            id: msg.id,
-            sender: msg.sender,
-            senderName: room.getMember(msg.sender)?.name || 'Unknown',
-            content: msg.content,
-            timestamp: msg.timestamp,
-            roomId: msg.room_id,
-            eventType: 'm.room.message',
-            isFromMe: msg.sender === client.getUserId()
-          })),
+          messages: messages.map(msg => {
+            // Get sender name safely
+            let senderName = 'Unknown';
+            try {
+              if (room && typeof room.getMember === 'function' && msg.sender) {
+                const member = room.getMember(msg.sender);
+                if (member && member.name) {
+                  senderName = member.name;
+                }
+              }
+            } catch (memberError) {
+              // Ignore errors getting member name
+            }
+
+            return {
+              id: msg.id,
+              sender: msg.sender,
+              senderName: senderName,
+              content: msg.content,
+              timestamp: msg.timestamp,
+              roomId: msg.room_id,
+              eventType: 'm.room.message',
+              isFromMe: msg.sender === currentUserId
+            };
+          }),
           room_id: roomId,
-          user_id: client.getUserId() // This was already correct
+          user_id: currentUserId
         }).catch(error => {
           logger.error('[AIAssistant] Error indexing messages:', error);
         });
@@ -379,29 +488,38 @@ const AIAssistantButton = ({ client, selectedContact, className = "" }) => {
       logger.error('[AIAssistant] Error querying AI assistant:', error);
       toast.error('Sorry, the AI assistant encountered an error');
 
+      // CRITICAL FIX: Store roomId in a variable that's accessible in the catch block
       // If we have a typing indicator and we're sending to room, replace it with an error message
-      if (typingMsgId && sendToRoom) {
+      if (typingMsgId && sendToRoom && selectedContact) {
         try {
-          await client.sendMessage(roomId, {
-            msgtype: 'm.room.message',
-            body: '🤖 AI Assistant: Sorry, I encountered an error processing your request.',
-            format: 'org.matrix.custom.html',
-            formatted_body: `
-              <div class="ai-response-container ai-error">
-                <div class="ai-response-header">
-                  <span class="ai-icon">🤖</span>
-                  <span class="ai-title">AI Assistant</span>
+          // Get roomId from selectedContact since it might not be in scope from the try block
+          const errorRoomId = selectedContact.id;
+
+          // Only proceed if we have a valid roomId
+          if (errorRoomId && client && typeof client.sendMessage === 'function') {
+            await client.sendMessage(errorRoomId, {
+              msgtype: 'm.room.message',
+              body: '🤖 AI Assistant: Sorry, I encountered an error processing your request.',
+              format: 'org.matrix.custom.html',
+              formatted_body: `
+                <div class="ai-response-container ai-error">
+                  <div class="ai-response-header">
+                    <span class="ai-icon">🤖</span>
+                    <span class="ai-title">AI Assistant</span>
+                  </div>
+                  <div class="ai-response-content">
+                    Sorry, I encountered an error processing your request. Please try again later.
+                  </div>
                 </div>
-                <div class="ai-response-content">
-                  Sorry, I encountered an error processing your request. Please try again later.
-                </div>
-              </div>
-            `,
-            'm.relates_to': {
-              rel_type: 'm.replace',
-              event_id: typingMsgId
-            }
-          });
+              `,
+              'm.relates_to': {
+                rel_type: 'm.replace',
+                event_id: typingMsgId
+              }
+            });
+          } else {
+            logger.warn('[AIAssistant] Could not send error message: missing roomId or client.sendMessage');
+          }
         } catch (sendError) {
           logger.error('[AIAssistant] Error sending error message:', sendError);
         }

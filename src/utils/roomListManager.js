@@ -578,6 +578,16 @@ class RoomListManager {
         }
       }
 
+      // CRITICAL FIX: Cache all rooms before filtering to ensure we don't lose any
+      // This will allow us to recover rooms if they're filtered out incorrectly
+      try {
+        const allRoomsCache = JSON.stringify(rooms.map(room => room.roomId));
+        localStorage.setItem('all_matrix_rooms', allRoomsCache);
+        logger.info(`[RoomListManager] Cached ${rooms.length} room IDs before filtering`);
+      } catch (cacheError) {
+        logger.warn('[RoomListManager] Error caching all rooms:', cacheError);
+      }
+
       // Log all rooms for debugging
       rooms.forEach((room, index) => {
         try {
@@ -842,8 +852,56 @@ class RoomListManager {
         }
       }
 
+      // If we still haven't found any Telegram rooms, try to recover from cache
+      logger.warn('[RoomListManager] No Telegram rooms found after filtering, attempting to recover from cache');
+
+      try {
+        // Try to recover rooms from cache
+        const cachedRoomIds = JSON.parse(localStorage.getItem('all_matrix_rooms') || '[]');
+        if (cachedRoomIds.length > 0) {
+          logger.info(`[RoomListManager] Found ${cachedRoomIds.length} cached room IDs, attempting to recover`);
+
+          // Get the client from the first room or from the roomLists
+          const client = rooms[0]?.client || this.roomLists.get(Object.keys(this.roomLists)[0])?.client;
+          if (client) {
+            // Try to get each room from the client
+            const recoveredRooms = [];
+            for (const roomId of cachedRoomIds) {
+              try {
+                const room = client.getRoom(roomId);
+                if (room) {
+                  // Apply a more lenient filter for recovery
+                  const roomName = room.name || '';
+                  const members = room.getJoinedMembers() || [];
+
+                  // Check if this might be a Telegram room with very basic criteria
+                  const mightBeTelegram =
+                    roomName.includes('Telegram') ||
+                    roomName.includes('tg_') ||
+                    members.some(m => m.userId.includes('telegram'));
+
+                  if (mightBeTelegram) {
+                    logger.info(`[RoomListManager] Recovered potential Telegram room: ${roomId} - ${roomName}`);
+                    recoveredRooms.push(room);
+                  }
+                }
+              } catch (roomError) {
+                // Ignore errors getting individual rooms
+              }
+            }
+
+            if (recoveredRooms.length > 0) {
+              logger.info(`[RoomListManager] Successfully recovered ${recoveredRooms.length} potential Telegram rooms`);
+              return recoveredRooms;
+            }
+          }
+        }
+      } catch (cacheError) {
+        logger.error('[RoomListManager] Error recovering rooms from cache:', cacheError);
+      }
+
       // If we still haven't found any Telegram rooms, return an empty array
-      logger.warn('[RoomListManager] No Telegram rooms found after filtering');
+      logger.warn('[RoomListManager] No Telegram rooms found after filtering and recovery attempts');
       return [];
     }
 

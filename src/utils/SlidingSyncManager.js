@@ -487,9 +487,22 @@ class SlidingSyncManager extends EventEmitter {
       // CRITICAL FIX: Check if the user is actually in the room before processing
       // This prevents unnecessary 403 errors when trying to access rooms the user is not in
       const membership = room.getMyMembership ? room.getMyMembership() : null;
+
+      // Log the membership for debugging
+      logger.info(`[SlidingSyncManager] Room ${roomId} membership: ${membership}`);
+
+      // Process both joined and invited rooms, but skip left and banned rooms
       if (membership !== 'join' && membership !== 'invite') {
         logger.info(`[SlidingSyncManager] Skipping timeline processing for room ${roomId} - user membership is ${membership}`);
         return;
+      }
+
+      // For invited rooms, we need special handling
+      if (membership === 'invite') {
+        logger.info(`[SlidingSyncManager] Processing invited room ${roomId}`);
+        // For invited rooms, we might not have full timeline access, so handle differently
+        // Emit a special event for invited rooms
+        this.emit('roomInvite', roomId, room);
       }
 
       // Process the timeline events
@@ -582,17 +595,34 @@ class SlidingSyncManager extends EventEmitter {
    * This should not be called directly, use startSyncLoop instead
    */
   async _startSyncLoop() {
-    // Check if we've synced recently (within the last 5 seconds)
+    // Check if we've synced recently (within the last 2 seconds)
+    // CRITICAL FIX: Reduced minimum sync interval to ensure more frequent syncs
     const now = Date.now();
-    if (SlidingSyncManager._lastSyncTime && (now - SlidingSyncManager._lastSyncTime < SlidingSyncManager._minSyncInterval)) {
+    if (SlidingSyncManager._lastSyncTime && (now - SlidingSyncManager._lastSyncTime < 2000)) { // 2 seconds instead of 5
       logger.info(`[SlidingSyncManager] Skipping sync, last sync was ${(now - SlidingSyncManager._lastSyncTime) / 1000}s ago`);
+
+      // CRITICAL FIX: Schedule another sync attempt soon instead of just returning
+      if (!this.syncTimer) {
+        this.syncTimer = setTimeout(() => {
+          this.startSyncLoop();
+        }, 3000); // Try again in 3 seconds
+      }
       return;
     }
 
     // Update the last sync time
     SlidingSyncManager._lastSyncTime = now;
-    if (SlidingSyncManager._lastSyncAttempt && (now - SlidingSyncManager._lastSyncAttempt < 5000)) {
-      logger.info('[SlidingSyncManager] Another sync loop was started recently, waiting');
+
+    // CRITICAL FIX: Reduced throttling time to ensure more responsive syncing
+    if (SlidingSyncManager._lastSyncAttempt && (now - SlidingSyncManager._lastSyncAttempt < 2000)) { // 2 seconds instead of 5
+      logger.info('[SlidingSyncManager] Another sync loop was started recently, will try again soon');
+
+      // Schedule another sync attempt soon
+      if (!this.syncTimer) {
+        this.syncTimer = setTimeout(() => {
+          this.startSyncLoop();
+        }, 3000); // Try again in 3 seconds
+      }
       return;
     }
 
@@ -602,6 +632,17 @@ class SlidingSyncManager extends EventEmitter {
     // Prevent multiple sync loops from starting on this instance
     if (this.syncInProgress) {
       logger.info('[SlidingSyncManager] Sync already in progress on this instance');
+
+      // CRITICAL FIX: Set a watchdog timer to ensure sync doesn't get stuck
+      if (!this.syncWatchdog) {
+        this.syncWatchdog = setTimeout(() => {
+          if (this.syncInProgress) {
+            logger.warn('[SlidingSyncManager] Sync appears to be stuck, resetting state');
+            this.syncInProgress = false;
+            this.startSyncLoop(); // Restart the sync loop
+          }
+        }, 60000); // 60 second watchdog
+      }
       return;
     }
 
@@ -866,24 +907,50 @@ class SlidingSyncManager extends EventEmitter {
       logger.info(`[SlidingSyncManager] Found ${allRooms.length} rooms in client during sync`);
 
       // CRITICAL FIX: Filter out rooms that the user is not a member of
-      const accessibleRooms = allRooms.filter(room => {
+      const joinedRooms = [];
+      const invitedRooms = [];
+
+      // Separate rooms by membership type for better handling
+      allRooms.forEach(room => {
         try {
           // Check if the user is actually in the room
           const membership = room.getMyMembership ? room.getMyMembership() : null;
-          // Include both 'join' and 'invite' rooms, but exclude 'leave' and 'ban'
-          return membership === 'join' || membership === 'invite';
+
+          if (membership === 'join') {
+            joinedRooms.push(room);
+          } else if (membership === 'invite') {
+            invitedRooms.push(room);
+          }
         } catch (error) {
           logger.warn(`[SlidingSyncManager] Error checking membership for room ${room.roomId}:`, error);
-          return false;
         }
       });
 
-      logger.info(`[SlidingSyncManager] Filtered to ${accessibleRooms.length} accessible rooms (join + invite)`);
+      // Log detailed breakdown of room types
+      logger.info(`[SlidingSyncManager] Room breakdown - Joined: ${joinedRooms.length}, Invited: ${invitedRooms.length}`);
+
+      // Log details of invited rooms for debugging
+      if (invitedRooms.length > 0) {
+        invitedRooms.forEach(room => {
+          try {
+            const inviter = room.currentState?.getStateEvents('m.room.member', this.client.getUserId())?.getSender() || 'unknown';
+            logger.info(`[SlidingSyncManager] Invited room: ${room.roomId} - ${room.name || 'Unnamed'} - Inviter: ${inviter}`);
+          } catch (error) {
+            logger.warn(`[SlidingSyncManager] Error getting invite details for room ${room.roomId}:`, error);
+          }
+        });
+      }
+
+      // Combine joined and invited rooms
+      const accessibleRooms = [...joinedRooms, ...invitedRooms];
+      logger.info(`[SlidingSyncManager] Total of ${accessibleRooms.length} accessible rooms (join + invite)`);
 
       // Add accessible rooms to the roomSubscriptions if they're not already there
       for (const room of accessibleRooms) {
         if (room && room.roomId && !this.roomSubscriptions.has(room.roomId)) {
-          this.roomSubscriptions.set(room.roomId, { timelineLimit: DEFAULT_TIMELINE_LIMIT });
+          // Use different timeline limits for joined vs invited rooms
+          const timelineLimit = joinedRooms.includes(room) ? DEFAULT_TIMELINE_LIMIT : 1;
+          this.roomSubscriptions.set(room.roomId, { timelineLimit });
         }
       }
 

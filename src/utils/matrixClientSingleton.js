@@ -75,7 +75,9 @@ class MatrixClientSingleton {
           fallbackSyncDelay: 5000, // 5 seconds between retries
           maxTimelineRequestAttempts: 5, // More attempts for timeline requests
           timeoutMs: 60000, // Longer timeout for requests
-          localTimeoutMs: 10000 // Local request timeout
+          localTimeoutMs: 10000, // Local request timeout
+          // CRITICAL FIX: Disable call event handler to prevent "Cannot read properties of undefined (reading 'start')" error
+          disableCallEventHandler: true
         });
 
         // Store the instance

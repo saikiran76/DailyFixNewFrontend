@@ -626,12 +626,24 @@ const MatrixInitializer = ({ children, forceInitialize: initialForceInitialize =
         // Set up token monitoring
         setupTokenMonitoring();
 
+        // CRITICAL FIX: Disable call event handler to prevent "Cannot read properties of undefined (reading 'start')" error
+        try {
+          // Disable the call event handler before starting the client
+          if (client.callEventHandler) {
+            logger.info('[MatrixInitializer] Disabling call event handler to prevent errors');
+            client.callEventHandler = null;
+          }
+        } catch (callHandlerError) {
+          logger.warn('[MatrixInitializer] Error handling call event handler:', callHandlerError);
+        }
+
         // Start client
         logger.info('[MatrixInitializer] Starting Matrix client');
         await client.startClient({
           initialSyncLimit: 20,
           includeArchivedRooms: true,
-          lazyLoadMembers: true
+          lazyLoadMembers: true,
+          disableCallEventHandler: true // Add this option to disable call handling
         });
 
         // Set client in state

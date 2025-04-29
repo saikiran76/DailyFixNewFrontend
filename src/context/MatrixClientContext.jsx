@@ -75,12 +75,24 @@ export const MatrixClientProvider = ({ children }) => {
           }
         });
 
+        // CRITICAL FIX: Disable call event handler to prevent "Cannot read properties of undefined (reading 'start')" error
+        try {
+          // Disable the call event handler before starting the client
+          if (matrixClient.callEventHandler) {
+            logger.info('[MatrixClientContext] Disabling call event handler to prevent errors');
+            matrixClient.callEventHandler = null;
+          }
+        } catch (callHandlerError) {
+          logger.warn('[MatrixClientContext] Error handling call event handler:', callHandlerError);
+        }
+
         // Start client
         logger.info('[MatrixClientContext] Starting Matrix client');
         await matrixClient.startClient({
           initialSyncLimit: 20,
           includeArchivedRooms: true,
-          lazyLoadMembers: true
+          lazyLoadMembers: true,
+          disableCallEventHandler: true // Add this option to disable call handling
         });
 
         // Set client in state
