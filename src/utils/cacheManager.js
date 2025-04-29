@@ -423,6 +423,43 @@ class CacheManager {
   }
 
   /**
+   * Get cached messages for a room
+   * @param {string} roomId - Room ID
+   * @returns {Promise<Array>} - Array of cached messages
+   */
+  async getMessages(roomId) {
+    if (!roomId) {
+      logger.warn('[CacheManager] Cannot get messages: No roomId provided');
+      return [];
+    }
+
+    try {
+      const db = await this.initialize();
+      const transaction = db.transaction(STORES.MESSAGES, 'readonly');
+      const store = transaction.objectStore(STORES.MESSAGES);
+      const index = store.index('roomId');
+
+      return new Promise((resolve, reject) => {
+        const request = index.getAll(roomId);
+
+        request.onsuccess = (event) => {
+          const messages = event.target.result || [];
+          logger.info(`[CacheManager] Retrieved ${messages.length} cached messages for room ${roomId}`);
+          resolve(messages);
+        };
+
+        request.onerror = (event) => {
+          logger.warn(`[CacheManager] Error retrieving messages for room ${roomId}:`, event.target.error);
+          reject(event.target.error);
+        };
+      });
+    } catch (error) {
+      logger.error('[CacheManager] Error getting cached messages:', error);
+      return [];
+    }
+  }
+
+  /**
    * Clean up expired cache entries
    * @returns {Promise} - Promise that resolves when cleanup is complete
    */
@@ -487,5 +524,10 @@ class CacheManager {
 
 // Create a singleton instance
 const cacheManager = new CacheManager();
+
+// Make it available globally
+if (typeof window !== 'undefined') {
+  window.cacheManager = cacheManager;
+}
 
 export default cacheManager;

@@ -7,6 +7,7 @@
 
 import logger from './logger';
 import cacheManager from './cacheManager';
+import { debounce } from './debounceUtils';
 
 // Constants
 const DEFAULT_LIMIT = 100; // Increased from 50 to ensure we get more messages
@@ -26,6 +27,52 @@ class MatrixTimelineManager {
     this.roomTimelines = new Map(); // Map of roomId -> timeline data
     this.roomMembers = new Map(); // Map of roomId -> member data
     this.eventListeners = new Map(); // Map of roomId -> event listeners
+    this.activeRooms = new Set(); // Set of roomIds that are currently being loaded
+    this.pendingLoads = new Map(); // Map of roomId -> timestamp of pending load requests
+    this.messageCache = new Map(); // Map of roomId -> cached messages
+
+    // Create debounced versions of methods
+    this.debouncedLoadMessages = debounce(this._loadMessages.bind(this), 500);
+
+    // Initialize the message cache from localStorage if available
+    this._initializeCache();
+  }
+
+  /**
+   * Initialize the message cache from localStorage
+   * @private
+   */
+  _initializeCache() {
+    try {
+      const cachedData = localStorage.getItem('matrix_message_cache');
+      if (cachedData) {
+        const parsedData = JSON.parse(cachedData);
+        Object.entries(parsedData).forEach(([roomId, messages]) => {
+          this.messageCache.set(roomId, messages);
+        });
+        logger.info(`[MatrixTimelineManager] Loaded message cache for ${this.messageCache.size} rooms`);
+      }
+    } catch (error) {
+      logger.warn('[MatrixTimelineManager] Error initializing message cache:', error);
+    }
+  }
+
+  /**
+   * Save the message cache to localStorage
+   * @private
+   */
+  _saveCache() {
+    try {
+      const cacheData = {};
+      this.messageCache.forEach((messages, roomId) => {
+        // Only cache the most recent 100 messages per room to avoid localStorage limits
+        cacheData[roomId] = messages.slice(-100);
+      });
+      localStorage.setItem('matrix_message_cache', JSON.stringify(cacheData));
+      logger.info(`[MatrixTimelineManager] Saved message cache for ${this.messageCache.size} rooms`);
+    } catch (error) {
+      logger.warn('[MatrixTimelineManager] Error saving message cache:', error);
+    }
   }
 
   /**
@@ -162,15 +209,113 @@ class MatrixTimelineManager {
 
   /**
    * Load messages for a room using multiple strategies for reliability
+   * This is the public method that should be called by other components
+   * It uses debouncing to prevent multiple simultaneous calls for the same room
+   *
    * @param {string} roomId - Room ID
    * @param {Object} options - Options for loading messages
    * @param {number} options.limit - Maximum number of messages to load
    * @param {string} options.direction - Direction to load messages ('b' for backwards, 'f' for forwards)
    * @param {string} options.from - Token to start loading from
    * @param {boolean} options.forceRefresh - Force refresh from server
+   * @param {number} options.offset - Offset for pagination (default: 0)
    * @returns {Promise<Array>} - Array of processed messages
    */
   async loadMessages(roomId, options = {}) {
+    if (!this.initialized || !this.client) {
+      logger.error('[MatrixTimelineManager] Cannot load messages: Not initialized');
+      return [];
+    }
+
+    // Check if this room is already being loaded
+    if (this.activeRooms.has(roomId)) {
+      logger.info(`[MatrixTimelineManager] Room ${roomId} is already being loaded, debouncing request`);
+
+      // Update the pending load timestamp
+      this.pendingLoads.set(roomId, Date.now());
+
+      // Return cached messages if available and not forcing refresh
+      if (!options.forceRefresh && this.messageCache.has(roomId)) {
+        const cachedMessages = this.messageCache.get(roomId);
+        logger.info(`[MatrixTimelineManager] Returning ${cachedMessages.length} cached messages for room ${roomId}`);
+        return cachedMessages;
+      }
+
+      // Return the existing timeline data if available
+      const existingData = this.roomTimelines.get(roomId);
+      if (existingData && existingData.events && existingData.events.length > 0) {
+        logger.info(`[MatrixTimelineManager] Returning ${existingData.events.length} existing events for room ${roomId}`);
+        return this.processEventsToMessages(existingData.events);
+      }
+
+      // Otherwise return an empty array
+      return [];
+    }
+
+    // Check cache first if not forcing refresh
+    if (!options.forceRefresh && this.messageCache.has(roomId)) {
+      const cachedMessages = this.messageCache.get(roomId);
+
+      // Apply pagination if needed
+      if (options.offset || options.limit) {
+        const offset = options.offset || 0;
+        const limit = options.limit || cachedMessages.length;
+        const paginatedMessages = cachedMessages.slice(offset, offset + limit);
+
+        logger.info(`[MatrixTimelineManager] Returning ${paginatedMessages.length} paginated cached messages for room ${roomId}`);
+
+        // Start a background refresh to update the cache
+        setTimeout(() => {
+          this.debouncedLoadMessages(roomId, { ...options, forceRefresh: true });
+        }, 1000);
+
+        return paginatedMessages;
+      }
+
+      logger.info(`[MatrixTimelineManager] Returning ${cachedMessages.length} cached messages for room ${roomId}`);
+
+      // Start a background refresh to update the cache
+      setTimeout(() => {
+        this.debouncedLoadMessages(roomId, { ...options, forceRefresh: true });
+      }, 1000);
+
+      return cachedMessages;
+    }
+
+    // Mark this room as being loaded
+    this.activeRooms.add(roomId);
+
+    try {
+      // Use the debounced version to actually load the messages
+      const messages = await this.debouncedLoadMessages(roomId, options);
+
+      // Cache the messages
+      if (messages && messages.length > 0) {
+        this.messageCache.set(roomId, messages);
+        this._saveCache();
+      }
+
+      return messages;
+    } finally {
+      // Remove the room from the active set when done
+      this.activeRooms.delete(roomId);
+    }
+  }
+
+  /**
+   * Internal method to load messages for a room using multiple strategies for reliability
+   * This should not be called directly, use loadMessages instead
+   *
+   * @param {string} roomId - Room ID
+   * @param {Object} options - Options for loading messages
+   * @param {number} options.limit - Maximum number of messages to load
+   * @param {string} options.direction - Direction to load messages ('b' for backwards, 'f' for forwards)
+   * @param {string} options.from - Token to start loading from
+   * @param {boolean} options.forceRefresh - Force refresh from server
+   * @param {number} options.offset - Offset for pagination (default: 0)
+   * @returns {Promise<Array>} - Array of processed messages
+   */
+  async _loadMessages(roomId, options = {}) {
     if (!this.initialized || !this.client) {
       logger.error('[MatrixTimelineManager] Cannot load messages: Not initialized');
       return [];
@@ -552,12 +697,12 @@ class MatrixTimelineManager {
       const messages = await this.processEventsToMessages(loadedEvents);
 
       // Sort messages by timestamp to ensure correct order
-      const sortedMessages = messages.sort((a, b) => a.timestamp - b.timestamp);
+      const sortedMessages = messages && messages.length > 0 ? messages.sort((a, b) => a.timestamp - b.timestamp) : [];
 
       logger.info(`[MatrixTimelineManager] Successfully loaded ${sortedMessages.length} messages using ${loadingMethod}`);
 
       // Cache the messages for future use
-      if (USE_CACHE && sortedMessages.length > 0) {
+      if (USE_CACHE && sortedMessages && sortedMessages.length > 0) {
         try {
           // Create a safe copy of the messages to avoid serialization issues
           const messagesToCache = sortedMessages.map(msg => ({
@@ -827,12 +972,36 @@ class MatrixTimelineManager {
    * @returns {Promise<Array>} - Array of processed messages
    */
   async processEventsToMessages(events) {
+    // Skip processing if no events or invalid input
     if (!events || !Array.isArray(events) || events.length === 0) {
       return [];
     }
 
     logger.info(`[MatrixTimelineManager] Processing ${events.length} events into messages`);
 
+    // Debug: Log event types to understand what we're dealing with
+    const eventTypes = {};
+    events.forEach(event => {
+      let type = 'unknown';
+      if (typeof event.getType === 'function') {
+        type = event.getType();
+      } else if (event.type) {
+        type = event.type;
+      } else if (event.content && event.content.msgtype) {
+        type = `m.room.message (${event.content.msgtype})`;
+      }
+      eventTypes[type] = (eventTypes[type] || 0) + 1;
+    });
+    logger.info(`[MatrixTimelineManager] Event types breakdown: ${JSON.stringify(eventTypes)}`);
+
+    // Debug: Check if events have content
+    const eventsWithContent = events.filter(event => {
+      return event && (event.content || (typeof event.getContent === 'function' && event.getContent()));
+    }).length;
+    logger.info(`[MatrixTimelineManager] Events with content: ${eventsWithContent}/${events.length}`);
+
+    // Use a Map for faster lookups when processing a large number of events
+    const messageMap = new Map();
     const messages = [];
     const processedEventIds = new Set(); // To avoid duplicates
 
@@ -858,12 +1027,41 @@ class MatrixTimelineManager {
           eventType = 'm.room.message';
         }
 
-        // Skip if not a message event or other displayable event
-        const displayableEventTypes = ['m.room.message', 'm.room.encrypted', 'm.sticker'];
-        if (!displayableEventTypes.includes(eventType)) {
-          // Log skipped event types for debugging
-          logger.debug(`[MatrixTimelineManager] Skipping event of type: ${eventType}`);
+        // Process message events, stickers, encrypted messages, and Telegram-specific events
+        // This is an expanded list compared to SlidingSyncManager to handle Telegram bridge events
+        const messageEventTypes = [
+          'm.room.message',
+          'm.sticker',
+          'm.room.encrypted',
+          // Telegram-specific event types
+          'm.bridge',
+          'uk.half-shot.bridge',
+          'fi.mau.dummy.portal_created'
+        ];
+
+        // Skip non-message events
+        if (!eventType || !messageEventTypes.includes(eventType)) {
+          // Skip this event
+          logger.debug(`[MatrixTimelineManager] Skipping non-message event type: ${eventType || 'unknown'}`);
           continue;
+        }
+
+        // Additional check for message content
+        let content = null;
+        if (typeof event.getContent === 'function') {
+          content = event.getContent();
+        } else if (event.content) {
+          content = event.content;
+        } else if (event.event && event.event.content) {
+          content = event.event.content;
+        } else if (typeof event.get === 'function' && event.get('content')) {
+          content = event.get('content');
+        }
+
+        // If no content, create a minimal content object
+        if (!content) {
+          logger.debug(`[MatrixTimelineManager] Event has no content, creating minimal content`);
+          content = { body: 'Event with no content' };
         }
 
         // Get event ID
@@ -897,28 +1095,14 @@ class MatrixTimelineManager {
           sender = 'Unknown';
         }
 
-        // Get content
-        let content = null;
-        if (typeof event.getContent === 'function') {
-          content = event.getContent();
-        } else if (event.content) {
-          content = event.content;
-        } else if (event.event && event.event.content) {
-          content = event.event.content;
-        } else if (typeof event.get === 'function' && event.get('content')) {
-          content = event.get('content');
-        } else {
-          content = { body: 'Message content unavailable' };
+        // We already have content from above, just ensure it has a fallback body if needed
+        if (!content.body && !content.text) {
+          content.body = 'Message content unavailable';
         }
 
         // If content doesn't have a body but has formatted_body, use that
-        if (content && !content.body && content.formatted_body) {
+        if (!content.body && content.formatted_body) {
           content.body = content.formatted_body.replace(/<[^>]*>/g, '');
-        }
-
-        // If content is empty, try to create a fallback content
-        if (!content) {
-          content = { body: 'Message content unavailable' };
         }
 
         // If content doesn't have a body or text, try to extract from other fields
@@ -967,7 +1151,7 @@ class MatrixTimelineManager {
         }
 
         // Check if message is from current user
-        const isFromMe = sender === this.client.getUserId();
+        const isFromMe = this.client && sender === this.client.getUserId();
 
         // Get room ID
         let roomId = null;
@@ -1029,10 +1213,11 @@ class MatrixTimelineManager {
         // Check if the message has been read
         let isRead = isFromMe; // Own messages are always considered read
 
-        if (!isFromMe && roomObj) {
+        if (!isFromMe && roomObj && this.client) {
           try {
             // Get read receipts for this event
-            const readReceipt = roomObj.getReceiptsForEvent(event)?.find(receipt =>
+            const receipts = roomObj.getReceiptsForEvent ? roomObj.getReceiptsForEvent(event) : null;
+            const readReceipt = receipts?.find(receipt =>
               receipt.type === 'm.read' && receipt.userId === this.client.getUserId()
             );
 
@@ -1043,8 +1228,8 @@ class MatrixTimelineManager {
           }
         }
 
-        // Add to messages array
-        messages.push({
+        // Create message object
+        const message = {
           id,
           sender,
           senderName,
@@ -1055,7 +1240,11 @@ class MatrixTimelineManager {
           eventType,
           roomId,
           rawEvent: event // Store the raw event for reference
-        });
+        };
+
+        // Add to messages array and map for faster lookups
+        messages.push(message);
+        messageMap.set(id, message);
 
         // Mark as processed
         processedEventIds.add(id);
@@ -1099,8 +1288,8 @@ class MatrixTimelineManager {
           continue;
         }
 
-        // Find the related message
-        const relatedMessage = messages.find(msg => msg.id === relatedEventId);
+        // Find the related message using the map for faster lookup
+        const relatedMessage = messageMap.get(relatedEventId);
         if (relatedMessage) {
           // Add the reaction to the message
           if (!relatedMessage.reactions) {
@@ -1136,10 +1325,148 @@ class MatrixTimelineManager {
     }
 
     // Sort messages by timestamp
-    messages.sort((a, b) => a.timestamp - b.timestamp);
+    // Use a more efficient sorting algorithm for large arrays
+    if (messages.length > 1000) {
+      // For very large arrays, use a more efficient approach
+      // First bucket messages by timestamp (rounded to seconds)
+      const buckets = new Map();
+      messages.forEach(msg => {
+        const second = Math.floor(msg.timestamp / 1000);
+        if (!buckets.has(second)) {
+          buckets.set(second, []);
+        }
+        buckets.get(second).push(msg);
+      });
 
-    logger.info(`[MatrixTimelineManager] Processed ${messages.length} messages from ${events.length} events`);
-    return messages;
+      // Sort the buckets
+      const sortedKeys = Array.from(buckets.keys()).sort((a, b) => a - b);
+
+      // Flatten the sorted buckets
+      const sortedMessages = [];
+      sortedKeys.forEach(key => {
+        // Sort messages within each bucket
+        buckets.get(key).sort((a, b) => a.timestamp - b.timestamp);
+        sortedMessages.push(...buckets.get(key));
+      });
+
+      logger.info(`[MatrixTimelineManager] Processed ${sortedMessages.length} messages from ${events.length} events using bucket sort`);
+      return sortedMessages;
+    } else {
+      // For smaller arrays, use the standard sort
+      messages.sort((a, b) => a.timestamp - b.timestamp);
+
+      logger.info(`[MatrixTimelineManager] Processed ${messages.length} messages from ${events.length} events`);
+
+      // Debug: If we didn't process any messages, log more details about the events
+      if (messages.length === 0 && events.length > 0) {
+        logger.warn(`[MatrixTimelineManager] Failed to process any messages from ${events.length} events. Logging first event details:`);
+        try {
+          const firstEvent = events[0];
+          const eventDetails = {
+            id: typeof firstEvent.getId === 'function' ? firstEvent.getId() : (firstEvent.event_id || firstEvent.id || 'unknown'),
+            type: typeof firstEvent.getType === 'function' ? firstEvent.getType() : (firstEvent.type || 'unknown'),
+            sender: typeof firstEvent.getSender === 'function' ? firstEvent.getSender() : (firstEvent.sender || 'unknown'),
+            hasContent: !!(typeof firstEvent.getContent === 'function' ? firstEvent.getContent() : firstEvent.content),
+            timestamp: typeof firstEvent.getOriginServerTs === 'function' ? firstEvent.getOriginServerTs() : (firstEvent.origin_server_ts || firstEvent.timestamp || Date.now())
+          };
+          logger.warn(`[MatrixTimelineManager] First event details: ${JSON.stringify(eventDetails)}`);
+
+          // Get content from the event
+          let content = null;
+          if (typeof firstEvent.getContent === 'function') {
+            content = firstEvent.getContent();
+          } else if (firstEvent.content) {
+            content = firstEvent.content;
+          } else {
+            content = { body: 'Message content unavailable' };
+          }
+
+          // For Telegram rooms, create a better message
+          let messageBody = 'Conversation started';
+          if (eventDetails.type === 'm.room.create') {
+            messageBody = 'Conversation created';
+          } else if (eventDetails.type === 'm.bridge' || eventDetails.type === 'uk.half-shot.bridge') {
+            messageBody = 'Telegram bridge connected';
+          } else if (eventDetails.type === 'fi.mau.dummy.portal_created') {
+            messageBody = 'Telegram chat connected';
+          }
+
+          // Try to create a message from this event directly
+          const message = {
+            id: eventDetails.id || `msg_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+            sender: eventDetails.sender,
+            senderName: eventDetails.sender,
+            content: { ...content, body: messageBody },
+            timestamp: eventDetails.timestamp,
+            isFromMe: false,
+            eventType: eventDetails.type,
+            roomId: typeof firstEvent.getRoomId === 'function' ? firstEvent.getRoomId() : (firstEvent.room_id || null),
+            rawEvent: firstEvent
+          };
+
+          // Add this message to the result
+          messages.push(message);
+          logger.info(`[MatrixTimelineManager] Added a forced message from the first event`);
+        } catch (debugError) {
+          logger.error(`[MatrixTimelineManager] Error while debugging events: ${debugError.message}`);
+        }
+      }
+
+      return messages;
+    }
+  }
+
+  /**
+   * Get cached messages for a room
+   * @param {string} roomId - Room ID
+   * @returns {Promise<Array>} - Array of cached messages
+   */
+  async getCachedMessages(roomId) {
+    if (!roomId) {
+      logger.error('[MatrixTimelineManager] Cannot get cached messages: No roomId provided');
+      return [];
+    }
+
+    try {
+      // Check if we have a CacheManager instance
+      if (window.cacheManager) {
+        logger.info(`[MatrixTimelineManager] Getting cached messages for room ${roomId}`);
+        try {
+          // Try different methods that might exist on the cache manager
+          let cachedMessages = null;
+
+          if (typeof window.cacheManager.getMessages === 'function') {
+            cachedMessages = await window.cacheManager.getMessages(roomId);
+          } else if (typeof window.cacheManager.getCachedMessages === 'function') {
+            cachedMessages = await window.cacheManager.getCachedMessages(roomId);
+          } else if (typeof window.cacheManager.getMessagesForRoom === 'function') {
+            cachedMessages = await window.cacheManager.getMessagesForRoom(roomId);
+          }
+
+          if (cachedMessages && cachedMessages.length > 0) {
+            logger.info(`[MatrixTimelineManager] Found ${cachedMessages.length} cached messages for room ${roomId}`);
+            return cachedMessages;
+          }
+        } catch (cacheError) {
+          logger.warn(`[MatrixTimelineManager] Error accessing cache manager methods: ${cacheError.message}`);
+          // Continue to try other methods
+        }
+      }
+
+      // If no CacheManager or no cached messages, check our internal cache
+      const timelineData = this.roomTimelines.get(roomId);
+      if (timelineData && timelineData.events && timelineData.events.length > 0) {
+        logger.info(`[MatrixTimelineManager] Processing ${timelineData.events.length} events from internal cache`);
+        const messages = await this.processEventsToMessages(timelineData.events);
+        return messages;
+      }
+
+      logger.info(`[MatrixTimelineManager] No cached messages found for room ${roomId}`);
+      return [];
+    } catch (error) {
+      logger.error(`[MatrixTimelineManager] Error getting cached messages: ${error.message}`);
+      return [];
+    }
   }
 
   /**

@@ -102,24 +102,39 @@ const SessionExpirationHandler = () => {
           handleSessionExpiration('403-error');
         }
 
-        // Handle Matrix 401 errors separately - don't log out of Supabase
+        // CRITICAL FIX: Handle Matrix 401/403 errors separately - don't log out of Supabase
+        // and add rate limiting to prevent excessive re-authentication attempts
         if (
           typeof resource === 'string' &&
           (resource.includes('matrix') || resource.includes('dfix-hsbridge')) &&
-          response.status === 401 &&
+          (response.status === 401 || response.status === 403) &&
           !isExpiring
         ) {
-          logger.warn('[SessionExpirationHandler] Detected Matrix 401 error, triggering Matrix re-authentication');
+          // Check if we've recently triggered a Matrix re-authentication
+          const now = Date.now();
+          const lastMatrixReauth = window._lastMatrixReauthAttempt || 0;
 
-          // Trigger Matrix re-authentication without logging out of Supabase
-          try {
-            // Dispatch a custom event to trigger Matrix re-authentication
-            const event = new CustomEvent('dailyfix-initialize-matrix', {
-              detail: { reason: 'matrix_401_error' }
-            });
-            window.dispatchEvent(event);
-          } catch (error) {
-            logger.error('[SessionExpirationHandler] Error triggering Matrix re-authentication:', error);
+          // Only trigger re-authentication if it's been at least 30 seconds since the last attempt
+          if (now - lastMatrixReauth > 30000) {
+            logger.warn(`[SessionExpirationHandler] Detected Matrix ${response.status} error, triggering Matrix re-authentication`);
+            window._lastMatrixReauthAttempt = now;
+
+            // Trigger Matrix re-authentication without logging out of Supabase
+            try {
+              // Dispatch a custom event to trigger Matrix re-authentication
+              const event = new CustomEvent('dailyfix-initialize-matrix', {
+                detail: { reason: `matrix_${response.status}_error`, timestamp: now }
+              });
+              window.dispatchEvent(event);
+
+              // Log the attempt
+              logger.info(`[SessionExpirationHandler] Triggered Matrix re-authentication at ${new Date(now).toISOString()}`);
+            } catch (error) {
+              logger.error('[SessionExpirationHandler] Error triggering Matrix re-authentication:', error);
+            }
+          } else {
+            // Log that we're skipping this re-authentication attempt due to rate limiting
+            logger.info(`[SessionExpirationHandler] Skipping Matrix re-authentication due to rate limiting (last attempt: ${new Date(lastMatrixReauth).toISOString()})`);
           }
         }
 

@@ -35,7 +35,7 @@ const AppRoutes = () => {
   const whatsappConnectedInLocalStorage = session?.user?.id ? isWhatsAppConnected(session.user.id) : false;
 
   // Debug log to see values
-  console.log('[AppRoutes] Onboarding state values:', {
+  logger.info('[AppRoutes] Onboarding state values:', {
     matrixConnected,
     whatsappConnected,
     isComplete,

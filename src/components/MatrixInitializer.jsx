@@ -6,6 +6,7 @@ import { saveToIndexedDB, getFromIndexedDB } from '../utils/indexedDBHelper';
 import { setClientInitialized, setSyncState } from '../store/slices/matrixSlice';
 import { patchMatrixFetch } from '../utils/matrixFetchUtils';
 import matrixClientSingleton from '../utils/matrixClientSingleton';
+import { applyCallHandlerFix } from '../utils/matrixCallHandlerFix';
 import api from '../utils/api';
 
 // Constants
@@ -89,12 +90,21 @@ const MatrixInitializer = ({ children, forceInitialize: initialForceInitialize =
 
   // Initialize Matrix client only when needed
   useEffect(() => {
+    // Check if we need to initialize Matrix
+    const telegramConnected = localStorage.getItem('dailyfix_connection_status') &&
+                             JSON.parse(localStorage.getItem('dailyfix_connection_status')).telegram === true;
+    const connectingToTelegram = sessionStorage.getItem('connecting_to_telegram') === 'true';
+    const selectedPlatform = localStorage.getItem('dailyfix_selected_platform');
+
     // Skip if not needed
-    if (!forceInitialize && !sessionStorage.getItem('connecting_to_telegram')) {
+    if (!forceInitialize && !connectingToTelegram && !telegramConnected && selectedPlatform !== 'telegram') {
       logger.info('[MatrixInitializer] Matrix initialization not needed, skipping');
+      logger.info(`[MatrixInitializer] forceInitialize=${forceInitialize}, connectingToTelegram=${connectingToTelegram}, telegramConnected=${telegramConnected}, selectedPlatform=${selectedPlatform}`);
       setInitializing(false);
       return;
     }
+
+    logger.info(`[MatrixInitializer] Matrix initialization needed: forceInitialize=${forceInitialize}, connectingToTelegram=${connectingToTelegram}, telegramConnected=${telegramConnected}, selectedPlatform=${selectedPlatform}`);
 
     logger.info('[MatrixInitializer] Starting Matrix initialization');
     setInitializing(true);
@@ -365,6 +375,9 @@ const MatrixInitializer = ({ children, forceInitialize: initialForceInitialize =
         // Get client from singleton to ensure we only have one instance
         const client = await matrixClientSingleton.getClient(clientConfig, userId);
 
+        // Apply the call handler fix to prevent errors with undefined call handlers
+        applyCallHandlerFix(client);
+
         // Verify the access token is set
         if (!client.getAccessToken()) {
           logger.error('[MatrixInitializer] Access token not set in client, setting it manually');
@@ -604,19 +617,33 @@ const MatrixInitializer = ({ children, forceInitialize: initialForceInitialize =
             }
           };
 
-          // Start checking token validity after 30 minutes
-          setTimeout(checkTokenValidity, 30 * 60 * 1000);
+          // CRITICAL FIX: Start checking token validity much sooner (after 5 minutes)
+          // and also check immediately to catch any existing token issues
+          checkTokenValidity();
+          setTimeout(checkTokenValidity, 5 * 60 * 1000);
         };
 
         // Set up token monitoring
         setupTokenMonitoring();
+
+        // CRITICAL FIX: Disable call event handler to prevent "Cannot read properties of undefined (reading 'start')" error
+        try {
+          // Disable the call event handler before starting the client
+          if (client.callEventHandler) {
+            logger.info('[MatrixInitializer] Disabling call event handler to prevent errors');
+            client.callEventHandler = null;
+          }
+        } catch (callHandlerError) {
+          logger.warn('[MatrixInitializer] Error handling call event handler:', callHandlerError);
+        }
 
         // Start client
         logger.info('[MatrixInitializer] Starting Matrix client');
         await client.startClient({
           initialSyncLimit: 20,
           includeArchivedRooms: true,
-          lazyLoadMembers: true
+          lazyLoadMembers: true,
+          disableCallEventHandler: true // Add this option to disable call handling
         });
 
         // Set client in state
