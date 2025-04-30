@@ -222,9 +222,25 @@ class MatrixTimelineManager {
    * @returns {Promise<Array>} - Array of processed messages
    */
   async loadMessages(roomId, options = {}) {
+    // CRITICAL FIX: Try to auto-initialize if not initialized
     if (!this.initialized || !this.client) {
-      logger.error('[MatrixTimelineManager] Cannot load messages: Not initialized');
-      return [];
+      logger.warn('[MatrixTimelineManager] Not initialized, attempting to auto-initialize');
+
+      // Try to get the Matrix client from the global window object
+      if (window.matrixClient) {
+        logger.info('[MatrixTimelineManager] Found Matrix client in window object, initializing');
+        const initialized = this.initialize(window.matrixClient);
+
+        if (!initialized) {
+          logger.error('[MatrixTimelineManager] Auto-initialization failed');
+          return [];
+        }
+
+        logger.info('[MatrixTimelineManager] Auto-initialization successful');
+      } else {
+        logger.error('[MatrixTimelineManager] Cannot load messages: Not initialized and no client available');
+        return [];
+      }
     }
 
     // Check if this room is already being loaded
@@ -316,9 +332,25 @@ class MatrixTimelineManager {
    * @returns {Promise<Array>} - Array of processed messages
    */
   async _loadMessages(roomId, options = {}) {
+    // CRITICAL FIX: Try to auto-initialize if not initialized
     if (!this.initialized || !this.client) {
-      logger.error('[MatrixTimelineManager] Cannot load messages: Not initialized');
-      return [];
+      logger.warn('[MatrixTimelineManager] _loadMessages: Not initialized, attempting to auto-initialize');
+
+      // Try to get the Matrix client from the global window object
+      if (window.matrixClient) {
+        logger.info('[MatrixTimelineManager] _loadMessages: Found Matrix client in window object, initializing');
+        const initialized = this.initialize(window.matrixClient);
+
+        if (!initialized) {
+          logger.error('[MatrixTimelineManager] _loadMessages: Auto-initialization failed');
+          return [];
+        }
+
+        logger.info('[MatrixTimelineManager] _loadMessages: Auto-initialization successful');
+      } else {
+        logger.error('[MatrixTimelineManager] _loadMessages: Cannot load messages: Not initialized and no client available');
+        return [];
+      }
     }
 
     const {

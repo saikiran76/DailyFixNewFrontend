@@ -557,47 +557,47 @@ const Dashboard = () => {
           logger.info('[Dashboard] WhatsApp not connected');
 
           // Fallback to API check if Redux state says not connected
-          try {
-            logger.info('[Dashboard] Checking connected platforms via API');
-            const response = await api.get('/api/v1/matrix/whatsapp/status');
+          // try {
+          //   logger.info('[Dashboard] Checking connected platforms via API');
+          //   const response = await api.get('/api/v1/matrix/whatsapp/status');
 
-            if (response.data && response.data.status === 'active') {
-              logger.info('[Dashboard] WhatsApp platform connected via API check');
-              setAccounts([{
-                id: 'whatsapp',
-                platform: 'whatsapp',
-                name: 'WhatsApp',
-                status: 'active'
-              }]);
-              setSelectedPlatform('whatsapp');
-              // WhatsApp is connected
+          //   if (response.data && response.data.status === 'active') {
+          //     logger.info('[Dashboard] WhatsApp platform connected via API check');
+          //     setAccounts([{
+          //       id: 'whatsapp',
+          //       platform: 'whatsapp',
+          //       name: 'WhatsApp',
+          //       status: 'active'
+          //     }]);
+          //     setSelectedPlatform('whatsapp');
+          //     // WhatsApp is connected
 
-              // Initialize socket connection
-              if (!socketConnected) {
-                logger.info('[Dashboard] Initializing socket connection');
-                try {
-                  dispatch(connectSocket('whatsapp')); // Specify the platform
-                  logger.info('[Dashboard] Socket connection established');
-                } catch (error) {
-                  logger.error('[Dashboard] Socket connection failed:', error);
-                }
-              }
-            } else {
-              // No WhatsApp platform connected, show empty state
-              // Note: 'matrix' alone is not considered a connected platform for UI purposes
-              // We'll still include it in accounts for backend purposes
-              setAccounts([{
-                id: 'matrix',
-                platform: 'matrix',
-                name: 'Matrix',
-                status: 'active'
-              }]);
-              logger.info('[Dashboard] Only Matrix connected, no WhatsApp');
-            }
-          } catch (error) {
-            logger.error('[Dashboard] Error checking connected platforms:', error);
-            setAccounts([]);
-          }
+          //     // Initialize socket connection
+          //     if (!socketConnected) {
+          //       logger.info('[Dashboard] Initializing socket connection');
+          //       try {
+          //         dispatch(connectSocket('whatsapp')); // Specify the platform
+          //         logger.info('[Dashboard] Socket connection established');
+          //       } catch (error) {
+          //         logger.error('[Dashboard] Socket connection failed:', error);
+          //       }
+          //     }
+          //   } else {
+          //     // No WhatsApp platform connected, show empty state
+          //     // Note: 'matrix' alone is not considered a connected platform for UI purposes
+          //     // We'll still include it in accounts for backend purposes
+          //     setAccounts([{
+          //       id: 'matrix',
+          //       platform: 'matrix',
+          //       name: 'Matrix',
+          //       status: 'active'
+          //     }]);
+          //     logger.info('[Dashboard] Only Matrix connected, no WhatsApp');
+          //   }
+          // } catch (error) {
+          //   logger.error('[Dashboard] Error checking connected platforms:', error);
+          //   setAccounts([]);
+          // }
         }
       }
     };

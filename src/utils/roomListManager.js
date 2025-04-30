@@ -144,85 +144,9 @@ class RoomListManager {
    * @returns {Promise<Array>} - The synced rooms
    */
   async syncRooms(userId, force = false) {
-    // Try to use sliding sync first if available
-    try {
-      const roomList = this.roomLists.get(userId);
-      if (roomList && roomList.client) {
-        const client = roomList.client;
-
-        // Check if sliding sync is supported and initialize if needed
-        if (!slidingSyncManager.initialized) {
-          const initialized = slidingSyncManager.initialize(client);
-          if (initialized) {
-            logger.info('[RoomListManager] Initialized sliding sync manager');
-          }
-        }
-
-        // If sliding sync is initialized, use it to sync rooms
-        if (slidingSyncManager.initialized) {
-          logger.info('[RoomListManager] Using sliding sync to sync rooms');
-
-          try {
-            // Create a list for all rooms
-            await slidingSyncManager.setList('all_rooms', {
-              ranges: [[0, 100]],  // Get first 100 rooms
-              sort: ['by_recency'],
-              timeline_limit: 10     // Get 10 most recent messages per room
-            });
-
-            // Start the sync loop if not already running
-            if (!slidingSyncManager.syncInProgress) {
-              slidingSyncManager.startSyncLoop();
-            }
-
-            // Wait for the sync to complete
-            const syncPromise = new Promise((resolve) => {
-              const onSyncComplete = () => {
-                slidingSyncManager.removeListener('syncComplete', onSyncComplete);
-                resolve();
-              };
-              slidingSyncManager.on('syncComplete', onSyncComplete);
-
-              // Set a timeout in case sync takes too long
-              setTimeout(() => {
-                slidingSyncManager.removeListener('syncComplete', onSyncComplete);
-                resolve();
-              }, 10000); // 10 second timeout
-            });
-
-            await syncPromise;
-
-            // Get all rooms from the client (sliding sync should have updated them)
-            const allRooms = client.getRooms() || [];
-            logger.info(`[RoomListManager] Sliding sync found ${allRooms.length} rooms`);
-
-            // Continue with normal processing using the updated rooms
-            const filteredRooms = this.filterRoomsByPlatform(allRooms, roomList.filters.platform || 'all');
-            const transformedRooms = this.transformRooms(userId, filteredRooms, client);
-            const sortedRooms = this.sortRooms(transformedRooms, roomList.sortBy);
-
-            // Update room list
-            roomList.rooms = sortedRooms;
-            roomList.lastSync = new Date();
-
-            // Cache rooms
-            this.cacheRooms(userId, sortedRooms);
-
-            // Notify event handlers
-            this.notifyRoomsUpdated(userId);
-
-            logger.info('[RoomListManager] Rooms synced using sliding sync for user:', userId, 'count:', sortedRooms.length);
-            return sortedRooms;
-          } catch (slidingSyncError) {
-            logger.warn('[RoomListManager] Error using sliding sync, falling back to traditional sync:', slidingSyncError);
-            // Fall through to traditional sync
-          }
-        }
-      }
-    } catch (slidingSyncSetupError) {
-      logger.warn('[RoomListManager] Error setting up sliding sync, falling back to traditional sync:', slidingSyncSetupError);
-      // Fall through to traditional sync
-    }
+    // IMPORTANT: We're no longer using sliding sync as it's causing disruptions
+    // The sliding sync utility files are still available but we're not using them
+    logger.info('[RoomListManager] Using traditional sync method for rooms');
 
     // Traditional sync method as fallback
     // Check if sync is already in progress
@@ -303,6 +227,44 @@ class RoomListManager {
         } catch (retryError) {
           logger.error('[RoomListManager] Error retrying sync:', retryError);
         }
+      } else if (syncState === 'STOPPED') {
+        logger.warn('[RoomListManager] Matrix client is STOPPED, attempting to start it');
+
+        try {
+          // First check if the client is already running
+          if (client.clientRunning) {
+            logger.warn('[RoomListManager] Client marked as running but in STOPPED state, stopping it first');
+            try {
+              await client.stopClient();
+              // Wait a moment for the client to fully stop
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            } catch (stopError) {
+              logger.warn('[RoomListManager] Error stopping client:', stopError);
+              // Continue anyway
+            }
+          }
+
+          // Start the client with robust options
+          await client.startClient({
+            initialSyncLimit: 10,
+            includeArchivedRooms: true,
+            lazyLoadMembers: true,
+            disableCallEventHandler: true,
+            // Add these critical options for resilience
+            retryImmediately: true,
+            fallbackSyncDelay: 5000, // 5 seconds between retries
+            maxTimelineRequestAttempts: 5, // More attempts for timeline requests
+            timeoutMs: 60000, // Longer timeout for requests
+            localTimeoutMs: 10000 // Local request timeout
+          });
+          logger.info('[RoomListManager] Started Matrix client');
+
+          // Wait a moment for the sync to start
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        } catch (startError) {
+          logger.error('[RoomListManager] Error starting client:', startError);
+          // Continue anyway - we'll try to work with what we have
+        }
       } else if (syncState !== 'PREPARED' && syncState !== 'SYNCING') {
         logger.warn(`[RoomListManager] Matrix client sync state is ${syncState}, waiting for sync...`);
 
@@ -314,6 +276,12 @@ class RoomListManager {
             await new Promise(resolve => setTimeout(resolve, 1000));
           } else {
             logger.warn('[RoomListManager] syncLeftRooms method not available on client');
+          }
+
+          // Also try to force an immediate retry
+          if (client.retryImmediately) {
+            client.retryImmediately();
+            logger.info('[RoomListManager] Forced immediate retry of sync');
           }
         } catch (syncError) {
           logger.warn('[RoomListManager] Error forcing sync:', syncError);
@@ -1760,57 +1728,9 @@ class RoomListManager {
       return [];
     }
 
-    // Try to use sliding sync first if available
-    try {
-      const client = roomList.client;
-
-      // Check if sliding sync is supported and initialize if needed
-      if (!slidingSyncManager.initialized) {
-        const initialized = slidingSyncManager.initialize(client);
-        if (initialized) {
-          logger.info('[RoomListManager] Initialized sliding sync manager for message loading');
-        }
-      }
-
-      // If sliding sync is initialized, use it to load messages
-      if (slidingSyncManager.initialized) {
-        logger.info(`[RoomListManager] Using sliding sync to load messages for room ${roomId}`);
-
-        try {
-          // Subscribe to the room
-          await slidingSyncManager.subscribeToRoom(roomId, {
-            timelineLimit: limit
-          });
-
-          // Load messages using sliding sync
-          const messages = await slidingSyncManager.loadMessages(roomId, limit);
-
-          if (messages && messages.length > 0) {
-            logger.info(`[RoomListManager] Loaded ${messages.length} messages using sliding sync for room ${roomId}`);
-
-            // Cache the messages
-            this.messageCache.set(roomId, {
-              messages,
-              lastUpdated: new Date()
-            });
-
-            // Notify message update handlers
-            this.notifyMessagesUpdated(userId, roomId, messages);
-
-            return messages;
-          } else {
-            logger.warn(`[RoomListManager] No messages returned from sliding sync for room ${roomId}, falling back to traditional method`);
-            // Fall through to traditional method
-          }
-        } catch (slidingSyncError) {
-          logger.warn(`[RoomListManager] Error using sliding sync for messages, falling back to traditional method:`, slidingSyncError);
-          // Fall through to traditional method
-        }
-      }
-    } catch (slidingSyncSetupError) {
-      logger.warn('[RoomListManager] Error setting up sliding sync for messages, falling back to traditional method:', slidingSyncSetupError);
-      // Fall through to traditional method
-    }
+    // IMPORTANT: We're no longer using sliding sync as it's causing disruptions
+    // The sliding sync utility files are still available but we're not using them
+    logger.info(`[RoomListManager] Using traditional method to load messages for room ${roomId}`);
 
     try {
       const room = roomList.client.getRoom(roomId);

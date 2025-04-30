@@ -51,61 +51,13 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
   // Reference to track if we've already tried to load contacts
   const hasTriedLoading = useRef(false);
 
-  // Initialize sliding sync manager to ensure we only have one instance
+  // We're no longer using sliding sync as it's causing disruptions
+  // This is a placeholder function that does nothing but logs the decision
   const initializeSlidingSync = useCallback((client) => {
     if (!client) return false;
 
-    try {
-      // Check if the Matrix client is ready
-      const syncState = client.getSyncState ? client.getSyncState() : null;
-      logger.info(`[TelegramContactList] Matrix client sync state during sliding sync init: ${syncState}`);
-
-      // If the client is in STOPPED state, start it
-      if (syncState === 'STOPPED') {
-        logger.warn('[TelegramContactList] Matrix client is STOPPED during sliding sync init, starting it');
-
-        try {
-          client.startClient({
-            initialSyncLimit: 10,
-            includeArchivedRooms: true,
-            lazyLoadMembers: true
-          });
-          logger.info('[TelegramContactList] Started Matrix client during sliding sync init');
-        } catch (startError) {
-          logger.error('[TelegramContactList] Error starting client during sliding sync init:', startError);
-        }
-      }
-
-      // Reset all existing instances to prevent multiple sync loops
-      if (window.slidingSyncInstances && window.slidingSyncInstances.length > 0) {
-        logger.info(`[TelegramContactList] Resetting ${window.slidingSyncInstances.length} existing sliding sync instances`);
-        window.slidingSyncInstances.forEach(instance => {
-          if (instance.stopSyncLoop) {
-            instance.stopSyncLoop();
-          }
-          if (instance.reset) {
-            instance.reset();
-          }
-        });
-        // Clear the instances array
-        window.slidingSyncInstances = [];
-      }
-
-      // Initialize the sliding sync manager with the client
-      const initialized = slidingSyncManager.initialize(client);
-      logger.info(`[TelegramContactList] Initialized sliding sync manager: ${initialized}`);
-
-      // Double-check that slidingSync is properly initialized
-      if (initialized && (!slidingSyncManager.slidingSync || !slidingSyncManager.slidingSync.lists)) {
-        logger.warn('[TelegramContactList] slidingSync not properly initialized, re-implementing');
-        slidingSyncManager.implementSlidingSync();
-      }
-
-      return initialized;
-    } catch (error) {
-      logger.error('[TelegramContactList] Error initializing sliding sync manager:', error);
-      return false;
-    }
+    logger.info('[TelegramContactList] Sliding sync disabled - using traditional sync methods instead');
+    return false;
   }, []);
 
   // Initialize room list manager on component mount
@@ -253,22 +205,9 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
       if (client) {
         try {
           roomListManager.cleanup(client.getUserId());
-
-          // Clean up sliding sync manager
-          if (slidingSyncManager) {
-            // Use the appropriate cleanup method
-            if (slidingSyncManager.cleanupInstance) {
-              slidingSyncManager.cleanupInstance();
-            } else if (slidingSyncManager.cleanup) {
-              slidingSyncManager.cleanup();
-            } else {
-              // Fallback to reset if no cleanup method is available
-              slidingSyncManager.reset && slidingSyncManager.reset();
-            }
-            logger.info('[TelegramContactList] Cleaned up sliding sync manager');
-          }
+          logger.info('[TelegramContactList] Cleaned up room list manager');
         } catch (error) {
-          logger.error('[TelegramContactList] Error cleaning up managers:', error);
+          logger.error('[TelegramContactList] Error cleaning up room list manager:', error);
         }
       }
     };
@@ -602,17 +541,44 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
       const syncState = client.getSyncState();
       logger.info(`[TelegramContactList] Matrix client sync state: ${syncState}`);
 
-      // If the client is in STOPPED state, start it
+      // CRITICAL FIX: Handle STOPPED state more robustly
       if (syncState === 'STOPPED') {
         logger.warn('[TelegramContactList] Matrix client is STOPPED, starting it');
 
         try {
+          // First check if the client is already running
+          if (client.clientRunning) {
+            logger.warn('[TelegramContactList] Client marked as running but in STOPPED state, stopping it first');
+            try {
+              await client.stopClient();
+              // Wait a moment for the client to fully stop
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            } catch (stopError) {
+              logger.warn('[TelegramContactList] Error stopping client:', stopError);
+              // Continue anyway
+            }
+          }
+
+          // Start the client with robust options
           await client.startClient({
             initialSyncLimit: 10,
             includeArchivedRooms: true,
-            lazyLoadMembers: true
+            lazyLoadMembers: true,
+            disableCallEventHandler: true,
+            // Add these critical options for resilience
+            retryImmediately: true,
+            fallbackSyncDelay: 5000, // 5 seconds between retries
+            maxTimelineRequestAttempts: 5, // More attempts for timeline requests
+            timeoutMs: 60000, // Longer timeout for requests
+            localTimeoutMs: 10000 // Local request timeout
           });
           logger.info('[TelegramContactList] Started Matrix client');
+
+          // Verify client is running
+          if (!client.clientRunning) {
+            logger.error('[TelegramContactList] Client not running after start, forcing clientRunning flag');
+            client.clientRunning = true;
+          }
 
           // Wait a moment for the sync to start
           await new Promise(resolve => setTimeout(resolve, 3000));
@@ -620,8 +586,32 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
           // Check sync state again
           const newSyncState = client.getSyncState ? client.getSyncState() : null;
           logger.info('[TelegramContactList] Matrix client sync state after start:', newSyncState);
+
+          // If still in STOPPED state, try to force a sync
+          if (newSyncState === 'STOPPED') {
+            logger.warn('[TelegramContactList] Client still in STOPPED state, trying to force sync');
+            try {
+              if (client.retryImmediately) {
+                client.retryImmediately();
+                logger.info('[TelegramContactList] Forced immediate retry of sync');
+              }
+            } catch (retryError) {
+              logger.error('[TelegramContactList] Error forcing sync retry:', retryError);
+            }
+          }
         } catch (startError) {
           logger.error('[TelegramContactList] Error starting client:', startError);
+
+          // Try to trigger a full Matrix re-initialization
+          try {
+            logger.info('[TelegramContactList] Triggering full Matrix re-initialization');
+            const event = new CustomEvent('dailyfix-initialize-matrix', {
+              detail: { reason: 'client_stopped', forTelegram: true }
+            });
+            window.dispatchEvent(event);
+          } catch (eventError) {
+            logger.error('[TelegramContactList] Error triggering Matrix re-initialization:', eventError);
+          }
         }
       }
       // If the client is in ERROR state, try to recover
@@ -687,172 +677,9 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
         await new Promise(resolve => setTimeout(resolve, 2000));
       }
 
-      // Try to use sliding sync first if available
-      try {
-        // Initialize sliding sync manager to ensure we only have one instance
-        initializeSlidingSync(client);
-
-        // Check if sliding sync is supported and initialized
-        if (slidingSyncManager.initialized) {
-          logger.info('[TelegramContactList] Sliding sync manager initialized for contact loading');
-        }
-
-        // If sliding sync is initialized, use it to load contacts
-        if (slidingSyncManager.initialized) {
-          logger.info('[TelegramContactList] Using sliding sync to load contacts');
-
-          try {
-            // Check if slidingSync and setList method exist before calling it
-            if (!slidingSyncManager.slidingSync || typeof slidingSyncManager.setList !== 'function') {
-              // Re-implement sliding sync if the method is missing
-              slidingSyncManager.implementSlidingSync();
-              logger.info('[TelegramContactList] Re-implemented sliding sync methods');
-            }
-
-            // Double-check that slidingSync is properly initialized
-            if (!slidingSyncManager.slidingSync) {
-              logger.warn('[TelegramContactList] slidingSync is still null after initialization, creating it');
-              slidingSyncManager.slidingSync = {
-                lists: new Map(),
-                rooms: new Map(),
-                syncToken: null,
-                connected: false,
-                connectionId: null
-              };
-
-              // Add methods to the slidingSync object
-              if (slidingSyncManager.setList) {
-                slidingSyncManager.slidingSync.setList = slidingSyncManager.setList;
-              }
-            }
-
-            // Create a list for all rooms
-            await slidingSyncManager.setList('all_rooms', {
-              ranges: [[0, 100]],  // Get first 100 rooms
-              sort: ['by_recency'],
-              timeline_limit: 1     // We only need minimal timeline data for contacts
-            });
-
-            // Start the sync loop if not already running
-            if (!slidingSyncManager.syncInProgress) {
-              slidingSyncManager.startSyncLoop();
-            }
-
-            // Wait for the sync to complete
-            const syncPromise = new Promise((resolve) => {
-              const onSyncComplete = () => {
-                slidingSyncManager.removeListener('syncComplete', onSyncComplete);
-                resolve();
-              };
-              slidingSyncManager.on('syncComplete', onSyncComplete);
-
-              // Set a timeout in case sync takes too long, but with a longer timeout
-              setTimeout(() => {
-                logger.warn('[TelegramContactList] Sliding sync taking longer than expected, but continuing');
-                // Don't resolve immediately, just log a warning
-
-                // Set a final timeout that will actually resolve the promise
-                setTimeout(() => {
-                  logger.warn('[TelegramContactList] Final sliding sync timeout reached');
-                  slidingSyncManager.removeListener('syncComplete', onSyncComplete);
-                  resolve();
-                }, 20000); // 20 second final timeout
-              }, 15000); // 15 second initial warning
-            });
-
-            await syncPromise;
-
-            // Get all rooms from the client (sliding sync should have updated them)
-            const allRooms = client.getRooms() || [];
-            logger.info(`[TelegramContactList] Sliding sync found ${allRooms.length} rooms`);
-
-            // Filter for Telegram rooms
-            const slidingSyncTelegramRooms = allRooms.filter(room => {
-              // Check for Telegram senders in the room
-              const members = room.getJoinedMembers() || [];
-              return members.some(member => member.userId.includes('@telegram_'));
-            });
-
-            if (slidingSyncTelegramRooms.length > 0) {
-              logger.info(`[TelegramContactList] Found ${slidingSyncTelegramRooms.length} Telegram rooms via sliding sync`);
-
-              // Transform rooms to contacts
-              const userId = client.getUserId();
-              telegramRooms = roomListManager.transformRooms(userId, slidingSyncTelegramRooms, client);
-
-              // CRITICAL FIX: Merge with existing contacts instead of replacing them
-              // This prevents rooms from disappearing when sliding sync finds fewer rooms
-              setContacts(prevContacts => {
-                // Create a map of existing contacts by ID for quick lookup
-                const existingContactsMap = new Map(prevContacts.map(contact => [contact.id, contact]));
-
-                // Add new rooms to the map, preserving existing ones
-                telegramRooms.forEach(room => {
-                  existingContactsMap.set(room.id, room);
-                });
-
-                // Convert map back to array
-                const mergedContacts = Array.from(existingContactsMap.values());
-                logger.info(`[TelegramContactList] Merged contacts: ${mergedContacts.length} total (${prevContacts.length} existing + ${telegramRooms.length} new)`);
-                return mergedContacts;
-              });
-
-              // Update filtered contacts as well
-              setFilteredContacts(prevFiltered => {
-                // Create a map of existing filtered contacts by ID
-                const existingFilteredMap = new Map(prevFiltered.map(contact => [contact.id, contact]));
-
-                // Add new rooms to the map
-                telegramRooms.forEach(room => {
-                  existingFilteredMap.set(room.id, room);
-                });
-
-                // Convert map back to array
-                return Array.from(existingFilteredMap.values());
-              });
-
-              // Cache the contacts - but first remove circular references
-              try {
-                // Create a safe-to-serialize copy without circular references
-                const safeContacts = telegramRooms.map(room => ({
-                  id: room.id,
-                  name: room.name,
-                  avatar: room.avatar,
-                  lastMessage: room.lastMessage,
-                  timestamp: room.timestamp,
-                  unreadCount: room.unreadCount,
-                  isGroup: room.isGroup,
-                  isTelegram: room.isTelegram,
-                  members: room.members,
-                  telegramContact: room.telegramContact,
-                  isPlaceholder: room.isPlaceholder || false
-                }));
-
-                localStorage.setItem('cached_telegram_contacts', JSON.stringify(safeContacts));
-                logger.info(`[TelegramContactList] Cached ${safeContacts.length} contacts from sliding sync`);
-              } catch (cacheError) {
-                logger.warn('[TelegramContactList] Error caching contacts from sliding sync:', cacheError);
-              }
-
-              // Mark loading as complete
-              isLoadingRef.current = false;
-              setLoading(false);
-              clearTimeout(loadingTimeout);
-
-              return telegramRooms;
-            } else {
-              logger.warn('[TelegramContactList] No Telegram rooms found via sliding sync, falling back to traditional sync');
-              // Fall through to traditional sync
-            }
-          } catch (slidingSyncError) {
-            logger.warn('[TelegramContactList] Error using sliding sync for contacts, falling back to traditional sync:', slidingSyncError);
-            // Fall through to traditional sync
-          }
-        }
-      } catch (slidingSyncSetupError) {
-        logger.warn('[TelegramContactList] Error setting up sliding sync for contacts, falling back to traditional sync:', slidingSyncSetupError);
-        // Fall through to traditional sync
-      }
+      // We're no longer using sliding sync as it's causing disruptions
+      // The sliding sync utility files are still available but we're not using them
+      logger.info('[TelegramContactList] Sliding sync disabled - using traditional sync methods for contacts');
 
       // Try to load cached contacts first
       const cachedContacts = await loadCachedContacts();
