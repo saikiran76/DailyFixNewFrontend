@@ -448,17 +448,41 @@ const TelegramChatView = ({ selectedContact }) => {
         return;
       }
 
-      // Initialize MatrixTimelineManager
-      if (!matrixTimelineManager.initialized) {
+      // CRITICAL FIX: Ensure MatrixTimelineManager is properly initialized
+      if (!matrixTimelineManager.initialized || !matrixTimelineManager.client) {
         logger.info('[TelegramChatView] Initializing MatrixTimelineManager');
         try {
-          const initialized = matrixTimelineManager.initialize(client);
+          // First check if client is valid
+          if (!client) {
+            logger.error('[TelegramChatView] Cannot initialize MatrixTimelineManager: No Matrix client available');
 
-          if (!initialized) {
-            logger.error('[TelegramChatView] Failed to initialize MatrixTimelineManager');
-            showWelcomeMessages('Error initializing message loader. Please try again later.');
-            return;
+            // Try to get client from window object
+            if (window.matrixClient) {
+              logger.info('[TelegramChatView] Found Matrix client in window object, using it');
+              const initialized = matrixTimelineManager.initialize(window.matrixClient);
+
+              if (!initialized) {
+                logger.error('[TelegramChatView] Failed to initialize MatrixTimelineManager with window.matrixClient');
+                showWelcomeMessages('Error initializing message loader. Please try again later.');
+                return;
+              }
+            } else {
+              logger.error('[TelegramChatView] No Matrix client available in window object either');
+              showWelcomeMessages('Error initializing message loader. Please try again later.');
+              return;
+            }
+          } else {
+            // Initialize with the provided client
+            const initialized = matrixTimelineManager.initialize(client);
+
+            if (!initialized) {
+              logger.error('[TelegramChatView] Failed to initialize MatrixTimelineManager');
+              showWelcomeMessages('Error initializing message loader. Please try again later.');
+              return;
+            }
           }
+
+          logger.info('[TelegramChatView] MatrixTimelineManager initialized successfully');
         } catch (error) {
           logger.error('[TelegramChatView] Error initializing MatrixTimelineManager:', error);
           showWelcomeMessages('Error initializing message loader. Please try again later.');
@@ -989,18 +1013,40 @@ const TelegramChatView = ({ selectedContact }) => {
     try {
       logger.info(`[TelegramChatView] Loading more messages before ${oldestEventId}`);
 
-      // Initialize MatrixTimelineManager if not already initialized
-      if (!matrixTimelineManager.initialized) {
-        logger.info('[TelegramChatView] Initializing MatrixTimelineManager');
+      // CRITICAL FIX: Ensure MatrixTimelineManager is properly initialized
+      if (!matrixTimelineManager.initialized || !matrixTimelineManager.client) {
+        logger.info('[TelegramChatView] Initializing MatrixTimelineManager for loading more messages');
         try {
-          const initialized = matrixTimelineManager.initialize(client);
+          // First check if client is valid
+          if (!client) {
+            logger.error('[TelegramChatView] Cannot initialize MatrixTimelineManager: No Matrix client available');
 
-          if (!initialized) {
-            logger.error('[TelegramChatView] Failed to initialize MatrixTimelineManager');
-            return;
+            // Try to get client from window object
+            if (window.matrixClient) {
+              logger.info('[TelegramChatView] Found Matrix client in window object, using it');
+              const initialized = matrixTimelineManager.initialize(window.matrixClient);
+
+              if (!initialized) {
+                logger.error('[TelegramChatView] Failed to initialize MatrixTimelineManager with window.matrixClient');
+                return;
+              }
+            } else {
+              logger.error('[TelegramChatView] No Matrix client available in window object either');
+              return;
+            }
+          } else {
+            // Initialize with the provided client
+            const initialized = matrixTimelineManager.initialize(client);
+
+            if (!initialized) {
+              logger.error('[TelegramChatView] Failed to initialize MatrixTimelineManager');
+              return;
+            }
           }
+
+          logger.info('[TelegramChatView] MatrixTimelineManager initialized successfully for loading more messages');
         } catch (error) {
-          logger.error('[TelegramChatView] Error initializing MatrixTimelineManager:', error);
+          logger.error('[TelegramChatView] Error initializing MatrixTimelineManager for loading more messages:', error);
           return;
         }
       }
@@ -1111,18 +1157,41 @@ const TelegramChatView = ({ selectedContact }) => {
     try {
       logger.info(`[TelegramChatView] Sending message to ${selectedContact.name}`);
 
-      // Initialize MatrixTimelineManager if not already initialized
-      if (!matrixTimelineManager.initialized) {
+      // CRITICAL FIX: Ensure MatrixTimelineManager is properly initialized
+      if (!matrixTimelineManager.initialized || !matrixTimelineManager.client) {
         logger.info('[TelegramChatView] Initializing MatrixTimelineManager for sending message');
         try {
-          const initialized = matrixTimelineManager.initialize(client);
+          // First check if client is valid
+          if (!client) {
+            logger.error('[TelegramChatView] Cannot initialize MatrixTimelineManager: No Matrix client available');
 
-          if (!initialized) {
-            throw new Error('Failed to initialize MatrixTimelineManager');
+            // Try to get client from window object
+            if (window.matrixClient) {
+              logger.info('[TelegramChatView] Found Matrix client in window object, using it');
+              const initialized = matrixTimelineManager.initialize(window.matrixClient);
+
+              if (!initialized) {
+                logger.error('[TelegramChatView] Failed to initialize MatrixTimelineManager with window.matrixClient');
+                throw new Error('Failed to initialize MatrixTimelineManager');
+              }
+            } else {
+              logger.error('[TelegramChatView] No Matrix client available in window object either');
+              throw new Error('No Matrix client available');
+            }
+          } else {
+            // Initialize with the provided client
+            const initialized = matrixTimelineManager.initialize(client);
+
+            if (!initialized) {
+              logger.error('[TelegramChatView] Failed to initialize MatrixTimelineManager');
+              throw new Error('Failed to initialize MatrixTimelineManager');
+            }
           }
+
+          logger.info('[TelegramChatView] MatrixTimelineManager initialized successfully for sending message');
         } catch (error) {
           logger.error('[TelegramChatView] Error initializing MatrixTimelineManager:', error);
-          throw new Error('Failed to initialize MatrixTimelineManager');
+          throw new Error('Failed to initialize MatrixTimelineManager: ' + error.message);
         }
       }
 

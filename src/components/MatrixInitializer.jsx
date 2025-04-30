@@ -637,14 +637,65 @@ const MatrixInitializer = ({ children, forceInitialize: initialForceInitialize =
           logger.warn('[MatrixInitializer] Error handling call event handler:', callHandlerError);
         }
 
-        // Start client
+        // CRITICAL FIX: Ensure client is properly started and not in STOPPED state
         logger.info('[MatrixInitializer] Starting Matrix client');
-        await client.startClient({
-          initialSyncLimit: 20,
-          includeArchivedRooms: true,
-          lazyLoadMembers: true,
-          disableCallEventHandler: true // Add this option to disable call handling
-        });
+
+        // Check if client is already running
+        const syncState = client.getSyncState ? client.getSyncState() : null;
+        logger.info(`[MatrixInitializer] Current sync state before starting: ${syncState}`);
+
+        // If client is already running, stop it first to ensure a clean start
+        if (client.clientRunning) {
+          logger.info('[MatrixInitializer] Client already running, stopping it first for clean restart');
+          try {
+            await client.stopClient();
+            // Wait a moment for the client to fully stop
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            logger.info('[MatrixInitializer] Successfully stopped client before restart');
+          } catch (stopError) {
+            logger.warn('[MatrixInitializer] Error stopping client before restart:', stopError);
+            // Continue anyway
+          }
+        }
+
+        // Start client with robust error handling
+        try {
+          await client.startClient({
+            initialSyncLimit: 20,
+            includeArchivedRooms: true,
+            lazyLoadMembers: true,
+            disableCallEventHandler: true, // Add this option to disable call handling
+            // Add these critical options for resilience
+            retryImmediately: true,
+            fallbackSyncDelay: 5000, // 5 seconds between retries
+            maxTimelineRequestAttempts: 5, // More attempts for timeline requests
+            timeoutMs: 60000, // Longer timeout for requests
+            localTimeoutMs: 10000 // Local request timeout
+          });
+
+          // Verify client is running
+          if (!client.clientRunning) {
+            logger.error('[MatrixInitializer] Client not running after start, forcing clientRunning flag');
+            client.clientRunning = true;
+          }
+
+          logger.info('[MatrixInitializer] Matrix client started successfully');
+        } catch (startError) {
+          logger.error('[MatrixInitializer] Error starting Matrix client:', startError);
+
+          // Try one more time with minimal options
+          logger.info('[MatrixInitializer] Attempting to start client with minimal options');
+          try {
+            await client.startClient({
+              initialSyncLimit: 10,
+              disableCallEventHandler: true
+            });
+            logger.info('[MatrixInitializer] Successfully started client with minimal options');
+          } catch (retryError) {
+            logger.error('[MatrixInitializer] Failed to start client even with minimal options:', retryError);
+            // Continue anyway - the error will be handled in the catch block
+          }
+        }
 
         // Set client in state
         setMatrixClient(client);

@@ -197,10 +197,9 @@ class PlatformManager {
         }
       );
 
-      // Initialize sliding sync if available
-      if (slidingSyncManager && !slidingSyncManager.initialized) {
-        slidingSyncManager.initialize(client);
-      }
+      // We're no longer using sliding sync as it's causing disruptions
+      // The sliding sync utility files are still available but we're not using them
+      logger.info('[PlatformManager] Sliding sync disabled - using traditional sync methods instead');
 
       logger.info('[PlatformManager] Telegram platform initialized successfully');
       return true;
@@ -221,31 +220,31 @@ class PlatformManager {
   async cleanupTelegram() {
     try {
       logger.info('[PlatformManager] Cleaning up Telegram platform');
-  
+
       // Stop sliding sync if it's running
       if (slidingSyncManager && slidingSyncManager.initialized) {
         slidingSyncManager.stopSyncLoop();
       }
-  
+
       // Clear Telegram connection flags from sessionStorage
       sessionStorage.removeItem('connecting_to_telegram');
       sessionStorage.removeItem('telegram_connection_step');
       sessionStorage.removeItem('telegram_phone_number');
-  
+
       // Clean up Matrix client if it exists
       if (window.matrixClient) {
         try {
           logger.info('[PlatformManager] Cleaning up Matrix client resources');
-          
+
           // Remove all listeners to prevent memory leaks
           window.matrixClient.removeAllListeners();
-          
+
           // Don't stop the client completely as it might be needed later
           // Just pause syncing to reduce resource usage
           if (window.matrixClient.clientRunning) {
             window.matrixClient.pauseClient();
           }
-          
+
           // Clear room list manager for this user
           if (window.matrixClient.getUserId()) {
             roomListManager.cleanup(window.matrixClient.getUserId());
@@ -255,7 +254,7 @@ class PlatformManager {
           // Continue with cleanup even if there's an error
         }
       }
-  
+
       logger.info('[PlatformManager] Telegram platform cleaned up successfully');
       return true;
     } catch (error) {
@@ -277,14 +276,14 @@ class PlatformManager {
   async initializeWhatsApp(options = {}) {
     try {
       logger.info('[PlatformManager] Initializing WhatsApp platform');
-  
+
       // Check if socket is already connected
       let socket = getSocket();
-  
+
       // Actively initialize socket connection if not already connected
       if (!socket || !socket.connected) {
         logger.info('[PlatformManager] Socket not connected, initializing connection');
-        
+
         // Try to initialize socket directly
         try {
           const { initializeSocket } = await import('../utils/socketManager');
@@ -294,7 +293,7 @@ class PlatformManager {
           logger.error('[PlatformManager] Error initializing socket directly:', socketError);
         }
       }
-  
+
       logger.info('[PlatformManager] WhatsApp platform initialized successfully');
       return true;
     } catch (error) {
