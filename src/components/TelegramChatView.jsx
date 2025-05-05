@@ -1609,31 +1609,51 @@ const TelegramChatView = ({ selectedContact }) => {
 
             {/* Group messages by date and add date separators */}
             {(() => {
+              // Filter out "Message content unavailable" messages
+              const filteredMessages = messages.filter(message =>
+                !(message.content?.body === 'Message content unavailable' ||
+                  message.body === 'Message content unavailable')
+              );
+
               // Group messages by date
               const messagesByDate = {};
-              messages.forEach(message => {
-                const date = new Date(message.timestamp);
+              filteredMessages.forEach(message => {
+                // Ensure timestamp is a number
+                const timestamp = typeof message.timestamp === 'number' ?
+                  message.timestamp :
+                  new Date(message.timestamp).getTime();
+
+                // Create date string using the timestamp
+                const date = new Date(timestamp);
                 const dateString = date.toDateString();
+
                 if (!messagesByDate[dateString]) {
                   messagesByDate[dateString] = [];
                 }
-                messagesByDate[dateString].push(message);
+                messagesByDate[dateString].push({
+                  ...message,
+                  timestamp: timestamp // Ensure consistent timestamp format
+                });
               });
 
               // Render messages with date separators
               return Object.entries(messagesByDate)
                 .sort(([dateA], [dateB]) => new Date(dateA) - new Date(dateB))
-                .map(([dateString, messagesForDate]) => (
-                  <React.Fragment key={dateString}>
-                    <DateSeparator date={new Date(dateString)} />
-                    {messagesForDate.map((message, index) => (
-                      <div
-                        key={message.id || `${dateString}-${index}`}
-                        className={`message-container ${message.isFromMe ? 'message-container-sent' : 'message-container-received'} group`}
-                      >
-                {/* Avatar for received messages */}
-                {!message.isFromMe && (
-                  <div className="message-avatar message-avatar-received">
+                .map(([dateString, messagesForDate]) => {
+                  // Sort messages within each date group by timestamp
+                  const sortedMessages = messagesForDate.sort((a, b) => a.timestamp - b.timestamp);
+
+                  return (
+                    <React.Fragment key={dateString}>
+                      <DateSeparator date={new Date(dateString)} />
+                      {sortedMessages.map((message, index) => (
+                        <div
+                          key={message.id || `${dateString}-${index}`}
+                          className={`message-container ${message.isFromMe ? 'message-container-sent' : 'message-container-received'} group`}
+                        >
+                          {/* Avatar for received messages */}
+                          {!message.isFromMe && (
+                            <div className="message-avatar message-avatar-received">
                     {message.sender && message.sender.includes('telegram_') && message.content && message.content.sender_avatar ? (
                       // If we have a sender avatar URL, use it
                       <div className="w-8 h-8 rounded-full overflow-hidden border-2 border-transparent hover:border-[#0088cc] transition-colors">
@@ -1715,344 +1735,345 @@ const TelegramChatView = ({ selectedContact }) => {
                   </div>
                 )}
 
-                {/* Message bubble with action wheel - don't show action wheel for welcome messages */}
-                {message.id && message.id.startsWith('welcome-') ? (
-                  <div className="message-bubble message-bubble-received">
-                    <div className="message-content">
-                      {message.content && message.content.body ? message.content.body : 'Welcome message'}
-                    </div>
-                    <div className="message-timestamp message-timestamp-received">
-                      <span>{new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                    </div>
-                  </div>
-                ) : (
-                  <MessageBubbleWithWheel
-                    message={message}
-                    client={client}
-                    selectedContact={selectedContact}
-                    parentEvents={parentEvents}
-                    onReply={handleReplyToMessage}
-                    onDelete={() => toast.error('Delete functionality coming soon')}
-                    onPin={() => toast.error('Pin functionality coming soon')}
-                    onReact={() => toast.error('React functionality coming soon')}
-                  />
+                          {/* Message bubble with action wheel - don't show action wheel for welcome messages */}
+                          {message.id && message.id.startsWith('welcome-') ? (
+                            <div className="message-bubble message-bubble-received">
+                              <div className="message-content">
+                                {message.content && message.content.body ? message.content.body : 'Welcome message'}
+                              </div>
+                              <div className="message-timestamp message-timestamp-received">
+                                <span>{new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                              </div>
+                            </div>
+                          ) : (
+                            <MessageBubbleWithWheel
+                              message={message}
+                              client={client}
+                              selectedContact={selectedContact}
+                              parentEvents={parentEvents}
+                              onReply={handleReplyToMessage}
+                              onDelete={() => toast.error('Delete functionality coming soon')}
+                              onPin={() => toast.error('Pin functionality coming soon')}
+                              onReact={() => toast.error('React functionality coming soon')}
+                            />
                 )}
-                <div className="hidden">
-                  {/* Sender name - Hidden but kept for reference */}
-                  {!message.isFromMe && (
-                    <div className="text-xs font-medium text-blue-300 mb-1">
-                      {(() => {
-                        // First check if we have a senderName in the message object
-                        // This would have been set by matrixTimelineManager._createMessageFromEvent
-                        if (message.senderName && message.senderName !== message.sender) {
-                          return message.senderName;
-                        }
-
-                        // Get proper display name from room member
-                        if (message.sender && client) {
-                          const roomId = selectedContact.id;
-                          const room = client.getRoom(roomId);
-
-                          if (room) {
-                            const member = room.getMember(message.sender);
-                            if (member && member.name) {
-                              return member.name;
-                            }
-                          }
-
-                          // Fallback: For Telegram users, try to get a better name
-                          if (message.sender.includes('telegram_')) {
-                            // Try to extract a more user-friendly name from the room state
-                            const telegramId = message.sender.match(/telegram_(\d+)/);
-                            if (telegramId && telegramId[1]) {
-                              // Look for a display name in the room state
-                              const room = client.getRoom(selectedContact.id);
-                              if (room && room.currentState) {
-                                // Try to get from room state events
-                                try {
-                                  const stateEvents = room.currentState.getStateEvents('m.room.member');
-                                  for (const event of stateEvents) {
-                                    const content = event.getContent();
-                                    const userId = event.getStateKey();
-                                    if (userId === message.sender && content.displayname) {
-                                      return content.displayname;
-                                    }
+                          <div className="hidden">
+                            {/* Sender name - Hidden but kept for reference */}
+                            {!message.isFromMe && (
+                              <div className="text-xs font-medium text-blue-300 mb-1">
+                                {(() => {
+                                  // First check if we have a senderName in the message object
+                                  // This would have been set by matrixTimelineManager._createMessageFromEvent
+                                  if (message.senderName && message.senderName !== message.sender) {
+                                    return message.senderName;
                                   }
-                                } catch (error) {
-                                  logger.warn('[TelegramChatView] Error getting state events:', error);
-                                }
 
-                                // Try to get directly from the member state
-                                try {
-                                  const memberEvent = room.currentState.getStateEvents('m.room.member', message.sender);
-                                  if (memberEvent && typeof memberEvent.getContent === 'function') {
-                                    const memberContent = memberEvent.getContent();
-                                    if (memberContent.displayname) {
-                                      return memberContent.displayname;
-                                    }
-                                  }
-                                } catch (error) {
-                                  logger.warn('[TelegramChatView] Error getting member state:', error);
-                                }
-                              }
+                                  // Get proper display name from room member
+                                  if (message.sender && client) {
+                                    const roomId = selectedContact.id;
+                                    const room = client.getRoom(roomId);
 
-                              // Try to get the name from the message content
-                              if (message.content && message.content.sender_name) {
-                                return message.content.sender_name;
-                              }
-
-                              // If we still don't have a name, use a friendly Telegram user name
-                              return `Telegram User ${telegramId[1]}`;
-                            }
-                          }
-
-                          // For other users, just use the first part of the Matrix ID
-                          return message.sender.split(':')[0].replace('@', '');
-                        }
-                        return 'Unknown';
-                      })()}
-                    </div>
-                  )}
-
-                  {/* Reply preview if this message is a reply */}
-                  {message.rawEvent && getParentEventId(message.rawEvent) && parentEvents[getParentEventId(message.rawEvent)] && (
-                    <MessageReply
-                      replyToEvent={parentEvents[getParentEventId(message.rawEvent)]}
-                      client={client}
-                    />
-                  )}
-
-                  {/* Message content */}
-                  <div className="break-words text-sm leading-relaxed">
-                    {(() => {
-                      // Handle different message content types
-                      if (!message.content) {
-                        return 'Message content unavailable';
-                      }
-
-                      if (typeof message.content === 'string') {
-                        return message.content;
-                      }
-
-                      if (typeof message.content === 'object') {
-                        // Handle text messages
-                        if (message.content.body) {
-                          return message.content.body;
-                        }
-
-                        // Handle text messages with msgtype
-                        if (message.content.msgtype === 'm.text' && message.content.text) {
-                          return message.content.text;
-                        }
-
-                        // Handle image messages
-                        if (message.content.msgtype === 'm.image') {
-                          // Get the image URL
-                          let imageUrl = message.content.url;
-
-                          // Handle mxc:// URLs
-                          if (imageUrl && imageUrl.startsWith('mxc://') && client) {
-                            // Use our media utility to get the URL with proper caching and error handling
-                            const isLargeImage = message.content.info &&
-                                (message.content.info.w > 800 || message.content.info.h > 800);
-
-                            imageUrl = getMediaUrl(client, imageUrl, {
-                              type: isLargeImage ? 'thumbnail' : 'download',
-                              width: 800,
-                              height: 800,
-                              method: 'scale',
-                              fallbackUrl: '/images/image-placeholder.png'
-                            });
-                          }
-
-                          if (imageUrl) {
-                            return (
-                              <div className="mt-1">
-                                <img
-                                  src={imageUrl}
-                                  alt={message.content.body || 'Image'}
-                                  className="max-w-full rounded-md max-h-[200px] object-contain bg-neutral-950/50"
-                                  onError={(e) => {
-                                    // If image fails to load, try using the thumbnail
-                                    if (message.content.info && message.content.info.thumbnail_url) {
-                                      let thumbUrl = message.content.info.thumbnail_url;
-                                      if (thumbUrl.startsWith('mxc://') && client) {
-                                        thumbUrl = client.mxcUrlToHttp(thumbUrl);
+                                    if (room) {
+                                      const member = room.getMember(message.sender);
+                                      if (member && member.name) {
+                                        return member.name;
                                       }
-                                      e.target.src = thumbUrl;
-                                    } else {
-                                      // If no thumbnail, show a placeholder
-                                      e.target.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgZmlsbD0iIzMzMzMzMyIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LXNpemU9IjI0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBhbGlnbm1lbnQtYmFzZWxpbmU9Im1pZGRsZSIgZmlsbD0id2hpdGUiPkltYWdlIHVuYXZhaWxhYmxlPC90ZXh0Pjwvc3ZnPg==';
                                     }
-                                  }}
-                                />
-                                {message.content.body && message.content.body !== 'Image' && (
-                                  <div className="mt-1 text-xs text-gray-400">{message.content.body}</div>
-                                )}
-                              </div>
-                            );
-                          }
-                        }
 
-                        // Handle file messages
-                        if (message.content.msgtype === 'm.file') {
-                          // Get the file URL
-                          let fileUrl = message.content.url;
+                                    // Fallback: For Telegram users, try to get a better name
+                                    if (message.sender.includes('telegram_')) {
+                                      // Try to extract a more user-friendly name from the room state
+                                      const telegramId = message.sender.match(/telegram_(\d+)/);
+                                      if (telegramId && telegramId[1]) {
+                                        // Look for a display name in the room state
+                                        const room = client.getRoom(selectedContact.id);
+                                        if (room && room.currentState) {
+                                          // Try to get from room state events
+                                          try {
+                                            const stateEvents = room.currentState.getStateEvents('m.room.member');
+                                            for (const event of stateEvents) {
+                                              const content = event.getContent();
+                                              const userId = event.getStateKey();
+                                              if (userId === message.sender && content.displayname) {
+                                                return content.displayname;
+                                              }
+                                            }
+                                          } catch (error) {
+                                            logger.warn('[TelegramChatView] Error getting state events:', error);
+                                          }
 
-                          // Handle mxc:// URLs
-                          if (fileUrl && fileUrl.startsWith('mxc://') && client) {
-                            try {
-                              // Extract the server name and media ID from the mxc URL
-                              // Format: mxc://<server-name>/<media-id>
-                              const [, serverName, mediaId] = fileUrl.match(/^mxc:\/\/([^/]+)\/(.+)$/) || [];
+                                          // Try to get directly from the member state
+                                          try {
+                                            const memberEvent = room.currentState.getStateEvents('m.room.member', message.sender);
+                                            if (memberEvent && typeof memberEvent.getContent === 'function') {
+                                              const memberContent = memberEvent.getContent();
+                                              if (memberContent.displayname) {
+                                                return memberContent.displayname;
+                                              }
+                                            }
+                                          } catch (error) {
+                                            logger.warn('[TelegramChatView] Error getting member state:', error);
+                                          }
+                                        }
 
-                              if (serverName && mediaId) {
-                                // Use the correct Matrix media API endpoint for files
-                                const accessToken = client.getAccessToken();
-                                fileUrl = `${client.baseUrl}/_matrix/media/r0/download/${serverName}/${mediaId}?access_token=${encodeURIComponent(accessToken)}`;
-                              } else {
-                                // Fallback to the SDK's method
-                                fileUrl = client.mxcUrlToHttp(fileUrl);
+                                      // Try to get the name from the message content
+                                      if (message.content && message.content.sender_name) {
+                                        return message.content.sender_name;
+                                      }
+
+                                      // If we still don't have a name, use a friendly Telegram user name
+                                      return `Telegram User ${telegramId[1]}`;
+                                    }
+                                  }
+
+                                  // For other users, just use the first part of the Matrix ID
+                                  return message.sender.split(':')[0].replace('@', '');
+                                }
+                                return 'Unknown';
+                              })()}
+                            </div>
+                          )}
+
+                          {/* Reply preview if this message is a reply */}
+                          {message.rawEvent && getParentEventId(message.rawEvent) && parentEvents[getParentEventId(message.rawEvent)] && (
+                            <MessageReply
+                              replyToEvent={parentEvents[getParentEventId(message.rawEvent)]}
+                              client={client}
+                            />
+                          )}
+
+                          {/* Message content */}
+                          <div className="break-words text-sm leading-relaxed">
+                            {(() => {
+                              // Handle different message content types
+                              if (!message.content) {
+                                return 'Message content unavailable';
                               }
-                            } catch (error) {
-                              console.error('Error parsing file mxc URL:', error);
-                              // Fallback to the SDK's method
-                              fileUrl = client.mxcUrlToHttp(fileUrl);
-                            }
-                          }
 
-                          if (fileUrl) {
-                            return (
-                              <div className="flex items-center mt-1 bg-neutral-800/50 p-2 rounded-md">
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                                </svg>
-                                <div>
-                                  <div className="text-sm">{message.content.body || 'File'}</div>
-                                  <a href={fileUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-400 hover:underline">Download</a>
-                                  {message.content.info && message.content.info.size && (
-                                    <span className="text-xs text-gray-400 ml-2">
-                                      {Math.round(message.content.info.size / 1024)} KB
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                            );
-                          }
-                        }
+                              if (typeof message.content === 'string') {
+                                return message.content;
+                              }
 
-                        // Handle video messages
-                        if (message.content.msgtype === 'm.video') {
-                          // Get the video URL
-                          let videoUrl = message.content.url;
+                              if (typeof message.content === 'object') {
+                                // Handle text messages
+                                if (message.content.body) {
+                                  return message.content.body;
+                                }
 
-                          // Handle mxc:// URLs
-                          if (videoUrl && videoUrl.startsWith('mxc://') && client) {
-                            // Use our media utility to get the URL with proper caching and error handling
-                            videoUrl = getMediaUrl(client, videoUrl, {
-                              type: 'download',
-                              fallbackUrl: '/images/video-placeholder.png'
-                            });
-                          }
+                                // Handle text messages with msgtype
+                                if (message.content.msgtype === 'm.text' && message.content.text) {
+                                  return message.content.text;
+                                }
 
-                          if (videoUrl) {
-                            return (
-                              <div className="mt-1">
-                                <video
-                                  controls
-                                  className="max-w-full rounded-md max-h-[200px] bg-neutral-950/50"
-                                  poster={message.content.info?.thumbnail_url && client ?
-                                    getMediaUrl(client, message.content.info.thumbnail_url, {
-                                      type: 'thumbnail',
+                                // Handle image messages
+                                if (message.content.msgtype === 'm.image') {
+                                  // Get the image URL
+                                  let imageUrl = message.content.url;
+
+                                  // Handle mxc:// URLs
+                                  if (imageUrl && imageUrl.startsWith('mxc://') && client) {
+                                    // Use our media utility to get the URL with proper caching and error handling
+                                    const isLargeImage = message.content.info &&
+                                        (message.content.info.w > 800 || message.content.info.h > 800);
+
+                                    imageUrl = getMediaUrl(client, imageUrl, {
+                                      type: isLargeImage ? 'thumbnail' : 'download',
                                       width: 800,
-                                      height: 600,
+                                      height: 800,
                                       method: 'scale',
+                                      fallbackUrl: '/images/image-placeholder.png'
+                                    });
+                                  }
+
+                                  if (imageUrl) {
+                                    return (
+                                      <div className="mt-1">
+                                        <img
+                                          src={imageUrl}
+                                          alt={message.content.body || 'Image'}
+                                          className="max-w-full rounded-md max-h-[200px] object-contain bg-neutral-950/50"
+                                          onError={(e) => {
+                                            // If image fails to load, try using the thumbnail
+                                            if (message.content.info && message.content.info.thumbnail_url) {
+                                              let thumbUrl = message.content.info.thumbnail_url;
+                                              if (thumbUrl.startsWith('mxc://') && client) {
+                                                thumbUrl = client.mxcUrlToHttp(thumbUrl);
+                                              }
+                                              e.target.src = thumbUrl;
+                                            } else {
+                                              // If no thumbnail, show a placeholder
+                                              e.target.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgZmlsbD0iIzMzMzMzMyIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LXNpemU9IjI0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBhbGlnbm1lbnQtYmFzZWxpbmU9Im1pZGRsZSIgZmlsbD0id2hpdGUiPkltYWdlIHVuYXZhaWxhYmxlPC90ZXh0Pjwvc3ZnPg==';
+                                            }
+                                          }}
+                                        />
+                                        {message.content.body && message.content.body !== 'Image' && (
+                                          <div className="mt-1 text-xs text-gray-400">{message.content.body}</div>
+                                        )}
+                                      </div>
+                                    );
+                                  }
+                                }
+
+                                // Handle file messages
+                                if (message.content.msgtype === 'm.file') {
+                                  // Get the file URL
+                                  let fileUrl = message.content.url;
+
+                                  // Handle mxc:// URLs
+                                  if (fileUrl && fileUrl.startsWith('mxc://') && client) {
+                                    try {
+                                      // Extract the server name and media ID from the mxc URL
+                                      // Format: mxc://<server-name>/<media-id>
+                                      const [, serverName, mediaId] = fileUrl.match(/^mxc:\/\/([^/]+)\/(.+)$/) || [];
+
+                                      if (serverName && mediaId) {
+                                        // Use the correct Matrix media API endpoint for files
+                                        const accessToken = client.getAccessToken();
+                                        fileUrl = `${client.baseUrl}/_matrix/media/r0/download/${serverName}/${mediaId}?access_token=${encodeURIComponent(accessToken)}`;
+                                      } else {
+                                        // Fallback to the SDK's method
+                                        fileUrl = client.mxcUrlToHttp(fileUrl);
+                                      }
+                                    } catch (error) {
+                                      console.error('Error parsing file mxc URL:', error);
+                                      // Fallback to the SDK's method
+                                      fileUrl = client.mxcUrlToHttp(fileUrl);
+                                    }
+                                  }
+
+                                  if (fileUrl) {
+                                    return (
+                                      <div className="flex items-center mt-1 bg-neutral-800/50 p-2 rounded-md">
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                        </svg>
+                                        <div>
+                                          <div className="text-sm">{message.content.body || 'File'}</div>
+                                          <a href={fileUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-400 hover:underline">Download</a>
+                                          {message.content.info && message.content.info.size && (
+                                            <span className="text-xs text-gray-400 ml-2">
+                                              {Math.round(message.content.info.size / 1024)} KB
+                                            </span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  }
+                                }
+
+                                // Handle video messages
+                                if (message.content.msgtype === 'm.video') {
+                                  // Get the video URL
+                                  let videoUrl = message.content.url;
+
+                                  // Handle mxc:// URLs
+                                  if (videoUrl && videoUrl.startsWith('mxc://') && client) {
+                                    // Use our media utility to get the URL with proper caching and error handling
+                                    videoUrl = getMediaUrl(client, videoUrl, {
+                                      type: 'download',
                                       fallbackUrl: '/images/video-placeholder.png'
-                                    }) :
-                                    '/images/video-placeholder.png'}
-                                >
-                                  <source src={videoUrl} type={message.content.info?.mimetype || 'video/mp4'} />
-                                  Your browser does not support the video tag.
-                                </video>
-                                {message.content.body && message.content.body !== 'Video' && (
-                                  <div className="mt-1 text-xs text-gray-400">{message.content.body}</div>
-                                )}
-                              </div>
-                            );
-                          }
-                        }
+                                    });
+                                  }
 
-                        // Handle audio messages
-                        if (message.content.msgtype === 'm.audio') {
-                          // Get the audio URL
-                          let audioUrl = message.content.url;
+                                  if (videoUrl) {
+                                    return (
+                                      <div className="mt-1">
+                                        <video
+                                          controls
+                                          className="max-w-full rounded-md max-h-[200px] bg-neutral-950/50"
+                                          poster={message.content.info?.thumbnail_url && client ?
+                                            getMediaUrl(client, message.content.info.thumbnail_url, {
+                                              type: 'thumbnail',
+                                              width: 800,
+                                              height: 600,
+                                              method: 'scale',
+                                              fallbackUrl: '/images/video-placeholder.png'
+                                            }) :
+                                            '/images/video-placeholder.png'}
+                                        >
+                                          <source src={videoUrl} type={message.content.info?.mimetype || 'video/mp4'} />
+                                          Your browser does not support the video tag.
+                                        </video>
+                                        {message.content.body && message.content.body !== 'Video' && (
+                                          <div className="mt-1 text-xs text-gray-400">{message.content.body}</div>
+                                        )}
+                                      </div>
+                                    );
+                                  }
+                                }
 
-                          // Handle mxc:// URLs
-                          if (audioUrl && audioUrl.startsWith('mxc://') && client) {
-                            try {
-                              // Extract the server name and media ID from the mxc URL
-                              // Format: mxc://<server-name>/<media-id>
-                              const [, serverName, mediaId] = audioUrl.match(/^mxc:\/\/([^/]+)\/(.+)$/) || [];
+                                // Handle audio messages
+                                if (message.content.msgtype === 'm.audio') {
+                                  // Get the audio URL
+                                  let audioUrl = message.content.url;
 
-                              if (serverName && mediaId) {
-                                // Use the correct Matrix media API endpoint for audio
-                                const accessToken = client.getAccessToken();
-                                audioUrl = `${client.baseUrl}/_matrix/media/r0/download/${serverName}/${mediaId}?access_token=${encodeURIComponent(accessToken)}`;
-                              } else {
-                                // Fallback to the SDK's method
-                                audioUrl = client.mxcUrlToHttp(audioUrl);
+                                  // Handle mxc:// URLs
+                                  if (audioUrl && audioUrl.startsWith('mxc://') && client) {
+                                    try {
+                                      // Extract the server name and media ID from the mxc URL
+                                      // Format: mxc://<server-name>/<media-id>
+                                      const [, serverName, mediaId] = audioUrl.match(/^mxc:\/\/([^/]+)\/(.+)$/) || [];
+
+                                      if (serverName && mediaId) {
+                                        // Use the correct Matrix media API endpoint for audio
+                                        const accessToken = client.getAccessToken();
+                                        audioUrl = `${client.baseUrl}/_matrix/media/r0/download/${serverName}/${mediaId}?access_token=${encodeURIComponent(accessToken)}`;
+                                      } else {
+                                        // Fallback to the SDK's method
+                                        audioUrl = client.mxcUrlToHttp(audioUrl);
+                                      }
+                                    } catch (error) {
+                                      console.error('Error parsing audio mxc URL:', error);
+                                      // Fallback to the SDK's method
+                                      audioUrl = client.mxcUrlToHttp(audioUrl);
+                                    }
+                                  }
+
+                                  if (audioUrl) {
+                                    return (
+                                      <div className="mt-1 bg-neutral-800/50 p-2 rounded-md">
+                                        <div className="flex items-center mb-1">
+                                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                                          </svg>
+                                          <div className="text-sm">{message.content.body || 'Audio'}</div>
+                                        </div>
+                                        <audio controls className="w-full">
+                                          <source src={audioUrl} type={message.content.info?.mimetype || 'audio/mpeg'} />
+                                          Your browser does not support the audio element.
+                                        </audio>
+                                      </div>
+                                    );
+                                  }
+                                }
                               }
-                            } catch (error) {
-                              console.error('Error parsing audio mxc URL:', error);
-                              // Fallback to the SDK's method
-                              audioUrl = client.mxcUrlToHttp(audioUrl);
-                            }
-                          }
 
-                          if (audioUrl) {
-                            return (
-                              <div className="mt-1 bg-neutral-800/50 p-2 rounded-md">
-                                <div className="flex items-center mb-1">
-                                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                                  </svg>
-                                  <div className="text-sm">{message.content.body || 'Audio'}</div>
-                                </div>
-                                <audio controls className="w-full">
-                                  <source src={audioUrl} type={message.content.info?.mimetype || 'audio/mpeg'} />
-                                  Your browser does not support the audio element.
-                                </audio>
-                              </div>
-                            );
-                          }
-                        }
-                      }
+                              return 'Message content unavailable';
+                            })()}
+                          </div>
 
-                      return 'Message content unavailable';
+                          {/* Timestamp */}
+                          <div
+                            className={`text-[10px] mt-1 ${
+                              message.isFromMe ? 'text-blue-200' : 'text-gray-400'
+                            } text-right flex items-center justify-end`}
+                          >
+                            <span>{new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                          </div>
+                        </div>
+
+                        {/* Avatar for sent messages */}
+                        {message.isFromMe && (
+                          <div className="message-avatar message-avatar-sent">
+                            {client?.getUserId() ? client.getUserId().charAt(0).toUpperCase() : 'Me'}
+                          </div>
+                        )}
+                      </div>
+                            ))}
+                            </React.Fragment>
+                          );
+                        })
                     })()}
-                  </div>
-
-                  {/* Timestamp */}
-                  <div
-                    className={`text-[10px] mt-1 ${
-                      message.isFromMe ? 'text-blue-200' : 'text-gray-400'
-                    } text-right flex items-center justify-end`}
-                  >
-                    <span>{new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                  </div>
-                </div>
-
-                {/* Avatar for sent messages */}
-                {message.isFromMe && (
-                  <div className="message-avatar message-avatar-sent">
-                    {client?.getUserId() ? client.getUserId().charAt(0).toUpperCase() : 'Me'}
-                  </div>
-                )}
-              </div>
-                    ))}
-                  </React.Fragment>
-                ));
-            })()}
             <div ref={messagesEndRef} />
           </>
         )}
