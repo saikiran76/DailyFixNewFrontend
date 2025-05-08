@@ -76,7 +76,7 @@ const MessageBubbleWithWheel = ({
       onMouseLeave={() => setIsHovered(false)}
     >
       {/* Only show action wheel when message is hovered */}
-      {isHovered && (
+      {/* {isHovered && (
         <div
           className={`message-action-wheel-wrapper ${isSmallMessage ? 'small-message' : 'large-message'}`}
           onClick={(e) => e.stopPropagation()} // Prevent clicks from closing the action bar
@@ -101,7 +101,7 @@ const MessageBubbleWithWheel = ({
             }}
           />
         </div>
-      )}
+      )} */}
 
       <div
         ref={messageBubbleRef}
