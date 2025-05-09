@@ -33,6 +33,12 @@ class ContactCache {
     // Filter out contacts with null, undefined or invalid properties
     if (!contact.name) return false;
     
+    // CRITICAL: Filter out rooms with 'leave' or 'ban' states
+    if (contact.roomState === 'leave' || contact.roomState === 'ban') {
+      logger.info(`[ContactCache] Filtering out contact with state '${contact.roomState}': ${contact.id} - ${contact.name}`);
+      return false;
+    }
+    
     // Filter out contacts with names containing specific terms
     const lowerName = (contact.name || '').toLowerCase();
     if (lowerName.includes('empty') || 
