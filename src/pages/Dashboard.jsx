@@ -1053,7 +1053,7 @@ const Dashboard = () => {
                                   href="/telegram"
                                   className="flex items-center justify-center text-sm font-medium hover:underline"
                                 >
-                                  ⚡ Try faster Telegram interface
+                                  ⚡ Try improved Telegram
                                   <span className="ml-2 bg-white text-blue-600 text-xs px-2 py-0.5 rounded-full">
                                     New
                                   </span>
