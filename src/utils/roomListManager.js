@@ -1,7 +1,6 @@
 import logger from './logger';
 import { saveToIndexedDB, getFromIndexedDB } from './indexedDBHelper';
 import telegramEntityUtils, { TelegramEntityTypes } from './telegramEntityUtils';
-import slidingSyncManager from './SlidingSyncManager';
 
 /**
  * Manages room lists and syncing for Matrix clients
@@ -144,10 +143,6 @@ class RoomListManager {
    * @returns {Promise<Array>} - The synced rooms
    */
   async syncRooms(userId, force = false) {
-    // IMPORTANT: We're no longer using sliding sync as it's causing disruptions
-    // The sliding sync utility files are still available but we're not using them
-    logger.info('[RoomListManager] Using traditional sync method for rooms');
-
     // Traditional sync method as fallback
     // Check if sync is already in progress
     if (this.syncInProgress.get(userId) && !force) {
@@ -360,6 +355,16 @@ class RoomListManager {
           logger.error('[RoomListManager] Error filtering rooms by platform:', filterError);
           // Continue with unfiltered rooms
         }
+      }
+
+      // Filter out irrelevant rooms
+      try {
+        const countBefore = filteredRooms.length;
+        filteredRooms = this.filterOutIrrelevantRooms(filteredRooms);
+        logger.info(`[RoomListManager] Filtered out irrelevant rooms: ${countBefore} -> ${filteredRooms.length} rooms remaining`);
+      } catch (irrelevantFilterError) {
+        logger.error('[RoomListManager] Error filtering out irrelevant rooms:', irrelevantFilterError);
+        // Continue with the current filtered rooms
       }
 
       // If no rooms found but we're looking for Telegram rooms, check for the special Telegram room
@@ -879,6 +884,68 @@ class RoomListManager {
   }
 
   /**
+   * Filter out irrelevant rooms based on criteria
+   * @param {Array} rooms - List of Matrix rooms
+   * @returns {Array} Filtered rooms
+   */
+  filterOutIrrelevantRooms(rooms) {
+    if (!Array.isArray(rooms) || rooms.length === 0) {
+      return [];
+    }
+
+    return rooms.filter(room => {
+      try {
+        // Skip null or invalid rooms
+        if (!room || !room.roomId) {
+          logger.warn('[RoomListManager] Skipping null or invalid room in filterOutIrrelevantRooms');
+          return false;
+        }
+
+        // Get room membership state - exclude 'leave' or 'ban' states
+        let roomState = 'unknown';
+        try {
+          if (room.getMyMembership) {
+            roomState = room.getMyMembership();
+            if (roomState === 'leave' || roomState === 'ban') {
+              logger.info(`[RoomListManager] Filtering out room with state '${roomState}': ${room.roomId} - ${room.name || 'unnamed'}`);
+              return false;
+            }
+          }
+        } catch (error) {
+          // If we can't determine membership, cautiously exclude the room
+          logger.warn(`[RoomListManager] Error getting membership state for room ${room.roomId}:`, error);
+          return false;
+        }
+
+        // Filter out rooms with unwanted keywords in name
+        const roomName = (room.name || '').toLowerCase();
+        const unwantedKeywords = ['empty', 'bot', 'whatsapp', 'welcome mat', 'bridge bot', 'bridge status'];
+        for (const keyword of unwantedKeywords) {
+          if (roomName.includes(keyword)) {
+            logger.info(`[RoomListManager] Filtering out room with unwanted keyword '${keyword}': ${room.roomId} - ${room.name || 'unnamed'}`);
+            return false;
+          }
+        }
+
+        // Filter out rooms that are clearly not user-facing
+        if (roomName.match(/^[0-9a-f-]{36}$/) || // UUID-style names
+            roomName.startsWith('!') ||           // Room IDs as names
+            roomName.includes('server notice') ||
+            roomName === 'Telegram' || // Exclude default/hardcoded rooms
+            roomName === 'WhatsApp') {
+          logger.info(`[RoomListManager] Filtering out system room: ${room.roomId} - ${room.name || 'unnamed'}`);
+          return false;
+        }
+
+        return true;
+      } catch (error) {
+        logger.warn(`[RoomListManager] Error in filterOutIrrelevantRooms for room ${room?.roomId || 'unknown'}:`, error);
+        return false; // Skip problematic rooms
+      }
+    });
+  }
+
+  /**
    * Transform Matrix rooms to our format
    * @param {string} userId - User ID
    * @param {Array} rooms - List of Matrix rooms
@@ -1337,8 +1404,7 @@ class RoomListManager {
         canSendMessages: entityInfo.canSendMessages,
         isChannel: entityInfo.isChannel,
         isPrivate: entityInfo.isPrivate,
-        isBot: entityInfo.isBot,
-        room: room // Store reference to original room
+        isBot: entityInfo.isBot
       };
     });
   }
@@ -1502,9 +1568,20 @@ class RoomListManager {
    */
   async cacheRooms(userId, rooms) {
     try {
+      // Apply filtering before caching to ensure no irrelevant rooms are stored
+      const filteredRooms = this.filterOutIrrelevantRooms(rooms);
+      logger.info(`[RoomListManager] Filtered ${rooms.length} to ${filteredRooms.length} rooms before caching`);
+      
       // Prepare rooms for caching
       // Filter out any null or undefined rooms
-      const validRooms = rooms.filter(room => room != null);
+      const validRooms = filteredRooms.filter(room => room != null);
+      
+      // Skip caching if no valid rooms
+      if (validRooms.length === 0) {
+        logger.info(`[RoomListManager] No valid rooms to cache for user: ${userId}`);
+        return;
+      }
+      
       const roomsToCache = validRooms.map(room => ({
         id: room.id,
         name: room.name,
@@ -1728,8 +1805,7 @@ class RoomListManager {
       return [];
     }
 
-    // IMPORTANT: We're no longer using sliding sync as it's causing disruptions
-    // The sliding sync utility files are still available but we're not using them
+    // Traditional method to load messages
     logger.info(`[RoomListManager] Using traditional method to load messages for room ${roomId}`);
 
     try {
