@@ -15,7 +15,6 @@ const PlatformConnectionModal = lazy(() => import('../components/PlatformConnect
 const LogoutModal = lazy(() => import('../components/LogoutModal'));
 const OnboardingTooltipManager = lazy(() => import('../components/OnboardingTooltipManager'));
 const MatrixInitializer = lazy(() => import('../components/MatrixInitializer'));
-import api from '../utils/api';
 import { useDispatch, useSelector } from 'react-redux';
 import { fetchContacts } from '../store/slices/contactSlice';
 import { connect as connectSocket } from '../store/slices/socketSlice';
@@ -1047,10 +1046,24 @@ const Dashboard = () => {
                       <Suspense fallback={<div className="flex items-center justify-center h-full"><div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div></div>}>
                         {selectedPlatform === 'telegram' ? (
                           <MatrixClientProvider>
-                            <TelegramContactList
-                              onContactSelect={handleContactSelect}
-                              selectedContactId={selectedContactId}
-                            />
+                            <>
+                              {/* Banner for optimized Telegram version on mobile */}
+                              <div className="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-2 text-center">
+                                <a 
+                                  href="/telegram"
+                                  className="flex items-center justify-center text-sm font-medium hover:underline"
+                                >
+                                  ⚡ Try faster Telegram interface
+                                  <span className="ml-2 bg-white text-blue-600 text-xs px-2 py-0.5 rounded-full">
+                                    New
+                                  </span>
+                                </a>
+                              </div>
+                              <TelegramContactList
+                                onContactSelect={handleContactSelect}
+                                selectedContactId={selectedContactId}
+                              />
+                            </>
                           </MatrixClientProvider>
                         ) : whatsappConnected ? (
                           <WhatsAppContactList
@@ -1122,10 +1135,24 @@ const Dashboard = () => {
                       <Suspense fallback={<div className="flex items-center justify-center h-full"><div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div></div>}>
                         {selectedPlatform === 'telegram' ? (
                           <MatrixClientProvider>
-                            <TelegramContactList
-                              onContactSelect={handleContactSelect}
-                              selectedContactId={selectedContactId}
-                            />
+                            <>
+                              {/* Banner for optimized Telegram version */}
+                              <div className="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-2 text-center">
+                                <span
+          
+                                  className="flex items-center justify-center font-medium hover:underline"
+                                >
+                                  ⚡ optimized Telegram for faster loading
+                                  <span className="ml-2 bg-white text-blue-600 text-xs px-2 py-0.5 rounded-full">
+                                    New
+                                  </span>
+                                </span>
+                              </div>
+                              <TelegramContactList
+                                onContactSelect={handleContactSelect}
+                                selectedContactId={selectedContactId}
+                              />
+                            </>
                           </MatrixClientProvider>
                         ) : whatsappConnected ? (
                           <WhatsAppContactList

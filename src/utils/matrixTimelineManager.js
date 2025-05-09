@@ -16,9 +16,8 @@ const PAGINATION_DIRECTION = {
   FORWARD: 'f'
 };
 
-// Cache settings
-const USE_CACHE = true; // Set to false to disable caching
-const CACHE_FIRST = true; // Try cache first, then network
+// CRITICAL FIX: Disable all caching to ensure we always get fresh data
+// This is a global setting that affects the entire timeline manager
 
 class MatrixTimelineManager {
   constructor() {
@@ -124,15 +123,45 @@ class MatrixTimelineManager {
     if (!room || !event) return;
 
     const roomId = room.roomId;
-    const eventType = event.getType();
+    let eventType;
 
-    logger.debug(`[MatrixTimelineManager] Timeline event in room ${roomId}: ${eventType}`);
+    try {
+      eventType = event.getType();
+    } catch (error) {
+      eventType = event.type || 'unknown';
+      logger.warn(`[MatrixTimelineManager] Error getting event type: ${error.message}`);
+    }
+
+    // CRITICAL FIX: Improved handling of timeline events
+    logger.info(`[MatrixTimelineManager] TIMELINE EVENT in room ${roomId}: ${eventType}`);
+
+    // Get event ID with robust error handling
+    let eventId;
+    try {
+      eventId = event.getId ? event.getId() : (event.event_id || event.id);
+    } catch (error) {
+      eventId = event.event_id || event.id || `event_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      logger.warn(`[MatrixTimelineManager] Error getting event ID: ${error.message}`);
+    }
+
+    // CRITICAL FIX: Check if this is a relevant event type
+    const isRelevantEventType = [
+      'm.room.message', 'm.sticker', 'm.room.encrypted',
+      'm.bridge', 'uk.half-shot.bridge', 'fi.mau.dummy.portal_created',
+      'org.matrix.msc1767.message', 'org.matrix.msc3381.poll.start'
+    ].includes(eventType);
 
     // Update room timeline data
     const timelineData = this.roomTimelines.get(roomId) || { events: [], hasMore: true };
 
-    // Don't add duplicates
-    if (!removed && !timelineData.events.some(e => e.getId() === event.getId())) {
+    // Don't add duplicates and only process relevant event types
+    if (isRelevantEventType && !removed && eventId && !timelineData.events.some(e => {
+      try {
+        return e.getId() === eventId || e.event_id === eventId || e.id === eventId;
+      } catch {
+        return false;
+      }
+    })) {
       // Add to beginning or end based on direction
       if (toStartOfTimeline) {
         timelineData.events.unshift(event);
@@ -140,19 +169,58 @@ class MatrixTimelineManager {
         timelineData.events.push(event);
       }
 
-      // Sort by timestamp
-      timelineData.events.sort((a, b) => a.getTs() - b.getTs());
+      // Sort by timestamp with robust error handling
+      try {
+        timelineData.events.sort((a, b) => {
+          try {
+            const aTs = a.getTs ? a.getTs() : (a.origin_server_ts || a.timestamp || 0);
+            const bTs = b.getTs ? b.getTs() : (b.origin_server_ts || b.timestamp || 0);
+            return aTs - bTs;
+          } catch {
+            return 0; // Keep original order if comparison fails
+          }
+        });
+      } catch (error) {
+        logger.warn(`[MatrixTimelineManager] Error sorting timeline events: ${error.message}`);
+      }
 
       // Update the timeline data
       this.roomTimelines.set(roomId, timelineData);
 
-      // Emit event to any room-specific listeners
-      const listeners = this.eventListeners.get(roomId) || [];
-      listeners.forEach(listener => {
-        if (listener.event === 'timeline' && typeof listener.callback === 'function') {
-          listener.callback(event, room, toStartOfTimeline, removed, data);
-        }
-      });
+      // CRITICAL FIX: Clear the message cache for this room to force a refresh
+      this.messageCache.delete(roomId);
+
+      // Emit event to any room-specific listeners with robust error handling
+      try {
+        const listeners = this.eventListeners.get(roomId) || [];
+        listeners.forEach(listener => {
+          if (listener.event === 'timeline' && typeof listener.callback === 'function') {
+            try {
+              listener.callback(event, room, toStartOfTimeline, removed, data);
+            } catch (callbackError) {
+              logger.error(`[MatrixTimelineManager] Error in timeline listener callback: ${callbackError.message}`);
+            }
+          }
+        });
+      } catch (error) {
+        logger.warn(`[MatrixTimelineManager] Error notifying timeline listeners: ${error.message}`);
+      }
+
+      // CRITICAL FIX: Dispatch a custom event that the UI can listen for
+      try {
+        const customEvent = new CustomEvent('matrix-timeline-update', {
+          detail: {
+            roomId,
+            eventId,
+            eventType,
+            timestamp: Date.now()
+          }
+        });
+        window.dispatchEvent(customEvent);
+        logger.info(`[MatrixTimelineManager] Dispatched matrix-timeline-update event for room ${roomId}`);
+      } catch (error) {
+        logger.error(`[MatrixTimelineManager] Error dispatching custom event: ${error.message}`);
+      }
     }
   }
 
@@ -268,34 +336,14 @@ class MatrixTimelineManager {
       return [];
     }
 
-    // Check cache first if not forcing refresh
-    if (!options.forceRefresh && this.messageCache.has(roomId)) {
-      const cachedMessages = this.messageCache.get(roomId);
+    // CRITICAL FIX: Always force refresh to get the latest messages
+    // We're completely bypassing the cache to ensure we always get fresh data
+    options.forceRefresh = true;
 
-      // Apply pagination if needed
-      if (options.offset || options.limit) {
-        const offset = options.offset || 0;
-        const limit = options.limit || cachedMessages.length;
-        const paginatedMessages = cachedMessages.slice(offset, offset + limit);
-
-        logger.info(`[MatrixTimelineManager] Returning ${paginatedMessages.length} paginated cached messages for room ${roomId}`);
-
-        // Start a background refresh to update the cache
-        setTimeout(() => {
-          this.debouncedLoadMessages(roomId, { ...options, forceRefresh: true });
-        }, 1000);
-
-        return paginatedMessages;
-      }
-
-      logger.info(`[MatrixTimelineManager] Returning ${cachedMessages.length} cached messages for room ${roomId}`);
-
-      // Start a background refresh to update the cache
-      setTimeout(() => {
-        this.debouncedLoadMessages(roomId, { ...options, forceRefresh: true });
-      }, 1000);
-
-      return cachedMessages;
+    // Clear the message cache for this room
+    if (this.messageCache.has(roomId)) {
+      this.messageCache.delete(roomId);
+      logger.info(`[MatrixTimelineManager] Cleared message cache for room ${roomId} to ensure fresh data`);
     }
 
     // Mark this room as being loaded
@@ -363,22 +411,16 @@ class MatrixTimelineManager {
     logger.info(`[MatrixTimelineManager] Loading messages for room ${roomId}`);
 
     try {
-      // Try to get messages from cache first if not forcing refresh
-      if (USE_CACHE && !forceRefresh && CACHE_FIRST) {
-        try {
-          const cachedMessages = await cacheManager.getCachedMessages(roomId, {
-            limit,
-            before: Date.now()
-          });
+      // CRITICAL FIX: Always bypass cache and get fresh data
+      // Force refresh is always true at this point
 
-          if (cachedMessages && cachedMessages.length > 0) {
-            logger.info(`[MatrixTimelineManager] Using ${cachedMessages.length} cached messages for room ${roomId}`);
-            return cachedMessages;
-          }
-        } catch (cacheError) {
-          logger.warn('[MatrixTimelineManager] Error retrieving cached messages:', cacheError);
-          // Continue with network loading if cache fails
-        }
+      // Clear IndexedDB cache for this room
+      try {
+        await cacheManager.invalidateRoomMessages(roomId);
+        logger.info(`[MatrixTimelineManager] Invalidated IndexedDB cache for room ${roomId}`);
+      } catch (cacheError) {
+        logger.warn('[MatrixTimelineManager] Error invalidating IndexedDB cache:', cacheError);
+        // Continue with network loading if cache invalidation fails
       }
 
       // Get the room
@@ -399,6 +441,10 @@ class MatrixTimelineManager {
         // Force a sync first if requested
         if (forceRefresh) {
           try {
+            // CRITICAL FIX: Clear the message cache for this room
+            this.messageCache.delete(roomId);
+            logger.info(`[MatrixTimelineManager] Cleared message cache for room ${roomId} due to force refresh`);
+
             // Check if we're joined to the room first
             const room = this.client.getRoom(roomId);
             if (room) {
@@ -428,9 +474,24 @@ class MatrixTimelineManager {
               }
             }
 
-            // Try to force a sync to get the latest messages
-            await this.client.roomInitialSync(roomId, 100);
-            logger.info(`[MatrixTimelineManager] Forced room initial sync for ${roomId}`);
+            // CRITICAL FIX: Try multiple methods to force a sync
+            try {
+              // Method 1: Use roomInitialSync
+              await this.client.roomInitialSync(roomId, 100);
+              logger.info(`[MatrixTimelineManager] Forced room initial sync for ${roomId}`);
+            } catch (syncError1) {
+              logger.warn(`[MatrixTimelineManager] First sync method failed: ${syncError1.message}`);
+
+              // Method 2: Try to use syncLeftRooms if available
+              try {
+                if (this.client.syncLeftRooms) {
+                  await this.client.syncLeftRooms();
+                  logger.info(`[MatrixTimelineManager] Forced syncLeftRooms for ${roomId}`);
+                }
+              } catch (syncError2) {
+                logger.warn(`[MatrixTimelineManager] Second sync method failed: ${syncError2.message}`);
+              }
+            }
           } catch (syncError) {
             // Check if this is a 403 Forbidden error
             if (syncError.errcode === 'M_FORBIDDEN' ||
@@ -733,7 +794,8 @@ class MatrixTimelineManager {
 
       logger.info(`[MatrixTimelineManager] Successfully loaded ${sortedMessages.length} messages using ${loadingMethod}`);
 
-      // Cache the messages for future use
+      // CRITICAL FIX: Disable caching completely
+      const USE_CACHE = false; // Local variable to avoid linting issues
       if (USE_CACHE && sortedMessages && sortedMessages.length > 0) {
         try {
           // Create a safe copy of the messages to avoid serialization issues
@@ -1010,6 +1072,27 @@ class MatrixTimelineManager {
     }
 
     logger.info(`[MatrixTimelineManager] Processing ${events.length} events into messages`);
+
+    // CRITICAL FIX: Ensure we have a valid client
+    if (!this.initialized || !this.client) {
+      logger.warn('[MatrixTimelineManager] Not initialized, attempting to auto-initialize');
+
+      // Try to get the Matrix client from the global window object
+      if (window.matrixClient) {
+        logger.info('[MatrixTimelineManager] Found Matrix client in window object, initializing');
+        const initialized = this.initialize(window.matrixClient);
+
+        if (!initialized) {
+          logger.error('[MatrixTimelineManager] Auto-initialization failed');
+          return [];
+        }
+
+        logger.info('[MatrixTimelineManager] Auto-initialization successful');
+      } else {
+        logger.error('[MatrixTimelineManager] Cannot process events: Not initialized and no client available');
+        return [];
+      }
+    }
 
     // Debug: Log event types to understand what we're dealing with
     const eventTypes = {};
@@ -1696,19 +1779,197 @@ class MatrixTimelineManager {
       return null;
     }
 
+    // CRITICAL FIX: Check if we're initialized
+    if (!this.initialized || !this.client) {
+      logger.warn('[MatrixTimelineManager] Not initialized, attempting to auto-initialize');
+
+      // Try to get the Matrix client from the global window object
+      if (window.matrixClient) {
+        logger.info('[MatrixTimelineManager] Found Matrix client in window object, initializing');
+        const initialized = this.initialize(window.matrixClient);
+
+        if (!initialized) {
+          logger.error('[MatrixTimelineManager] Auto-initialization failed');
+          return null;
+        }
+
+        logger.info('[MatrixTimelineManager] Auto-initialization successful');
+      } else {
+        logger.error('[MatrixTimelineManager] Cannot add listener: Not initialized and no client available');
+        return null;
+      }
+    }
+
+    // CRITICAL FIX: First remove any existing listeners for this room and event type
+    // to prevent duplicate events and memory leaks
+    this.removeRoomListeners(roomId);
+
+    // Also remove any direct client listeners we might have added previously
+    if (this._directListeners && this._directListeners.has(roomId)) {
+      const directListeners = this._directListeners.get(roomId);
+      directListeners.forEach(({ event: eventName, listener }) => {
+        try {
+          this.client.removeListener(eventName, listener);
+          logger.info(`[MatrixTimelineManager] Removed direct client listener for ${eventName} in room ${roomId}`);
+        } catch (error) {
+          logger.warn(`[MatrixTimelineManager] Error removing direct client listener: ${error.message}`);
+        }
+      });
+      this._directListeners.delete(roomId);
+    }
+
+    // Also remove any room-level listeners
+    if (this._roomLevelListeners && this._roomLevelListeners.has(roomId)) {
+      const roomLevelListeners = this._roomLevelListeners.get(roomId);
+      const room = this.client.getRoom(roomId);
+      if (room) {
+        roomLevelListeners.forEach(({ event: eventName, listener }) => {
+          try {
+            room.removeListener(eventName, listener);
+            logger.info(`[MatrixTimelineManager] Removed room-level listener for ${eventName} in room ${roomId}`);
+          } catch (error) {
+            logger.warn(`[MatrixTimelineManager] Error removing room-level listener: ${error.message}`);
+          }
+        });
+      }
+      this._roomLevelListeners.delete(roomId);
+    }
+
     const listenerId = `${roomId}_${event}_${Date.now()}`;
     const listeners = this.eventListeners.get(roomId) || [];
+
+    // CRITICAL FIX: Create a wrapper that filters for relevant events
+    const wrappedCallback = (matrixEvent, room) => {
+      // Only process events for this room
+      if (!room || room.roomId !== roomId) return;
+
+      // For timeline events, filter for message-related events
+      if (event === 'timeline') {
+        let eventType;
+        try {
+          eventType = matrixEvent.getType?.() || matrixEvent.type;
+        } catch (error) {
+          logger.warn(`[MatrixTimelineManager] Error getting event type: ${error.message}`);
+          eventType = 'unknown';
+        }
+
+        // Only process message events and telegram-specific events
+        const isRelevantEvent = [
+          'm.room.message', 'm.sticker', 'm.room.encrypted',
+          'm.bridge', 'uk.half-shot.bridge', 'fi.mau.dummy.portal_created',
+          'org.matrix.msc1767.message', 'org.matrix.msc3381.poll.start'
+        ].includes(eventType) || (eventType && eventType.includes('telegram'));
+
+        if (!isRelevantEvent) return;
+
+        // Log the event for debugging
+        logger.info(`[MatrixTimelineManager] REAL-TIME EVENT in room ${roomId}: ${eventType}`);
+      }
+
+      // Call the original callback
+      callback(matrixEvent, room);
+    };
 
     listeners.push({
       id: listenerId,
       event,
-      callback
+      callback: wrappedCallback
     });
 
     this.eventListeners.set(roomId, listeners);
 
-    logger.debug(`[MatrixTimelineManager] Added ${event} listener for room ${roomId}`);
+    // CRITICAL FIX: Also add a direct client-level listener for maximum reliability
+    if (event === 'timeline') {
+      // Create a direct client listener
+      const directListener = (matrixEvent, room) => {
+        // Only process events for this room
+        if (!room || room.roomId !== roomId) return;
+
+        let eventType;
+        try {
+          eventType = matrixEvent.getType?.() || matrixEvent.type;
+        } catch (error) {
+          logger.warn(`[MatrixTimelineManager] Error getting event type: ${error.message}`);
+          eventType = 'unknown';
+        }
+
+        // Only process message events and telegram-specific events
+        const isRelevantEvent = [
+          'm.room.message', 'm.sticker', 'm.room.encrypted',
+          'm.bridge', 'uk.half-shot.bridge', 'fi.mau.dummy.portal_created',
+          'org.matrix.msc1767.message', 'org.matrix.msc3381.poll.start'
+        ].includes(eventType) || (eventType && eventType.includes('telegram'));
+
+        if (!isRelevantEvent) return;
+
+        // Log the event for debugging
+        logger.info(`[MatrixTimelineManager] DIRECT LISTENER: REAL-TIME EVENT in room ${roomId}: ${eventType}`);
+
+        // Call the callback
+        callback(matrixEvent, room);
+      };
+
+      // Add the direct listener
+      this.client.on('Room.timeline', directListener);
+
+      // Store for cleanup
+      if (!this._directListeners) this._directListeners = new Map();
+      if (!this._directListeners.has(roomId)) this._directListeners.set(roomId, []);
+      this._directListeners.get(roomId).push({ event: 'Room.timeline', listener: directListener });
+
+      // Also try to add a room-level listener for even more reliability
+      try {
+        const room = this.client.getRoom(roomId);
+        if (room) {
+          room.on('Room.timeline', directListener);
+          if (!this._roomLevelListeners) this._roomLevelListeners = new Map();
+          if (!this._roomLevelListeners.has(roomId)) this._roomLevelListeners.set(roomId, []);
+          this._roomLevelListeners.get(roomId).push({ event: 'Room.timeline', listener: directListener });
+          logger.info(`[MatrixTimelineManager] Added room-level timeline listener for ${roomId}`);
+        }
+      } catch (error) {
+        logger.warn(`[MatrixTimelineManager] Error adding room-level listener: ${error.message}`);
+      }
+
+      // CRITICAL FIX: Force an immediate sync to get the latest messages
+      try {
+        // Queue a background sync to ensure we have the latest messages
+        setTimeout(async () => {
+          try {
+            if (this.client && this.client.roomInitialSync) {
+              logger.info(`[MatrixTimelineManager] Performing background sync for room ${roomId} after adding listener`);
+              await this.client.roomInitialSync(roomId, 100);
+
+              // Clear the message cache for this room to force a refresh
+              this.messageCache.delete(roomId);
+              logger.info(`[MatrixTimelineManager] Cleared message cache for room ${roomId} after sync`);
+            }
+          } catch (syncError) {
+            logger.warn(`[MatrixTimelineManager] Error during background sync: ${syncError.message}`);
+          }
+        }, 500);
+      } catch (error) {
+        logger.warn(`[MatrixTimelineManager] Error scheduling background sync: ${error.message}`);
+      }
+    }
+
+    logger.info(`[MatrixTimelineManager] Added ${event} listener for room ${roomId} with ID ${listenerId}`);
     return listenerId;
+  }
+
+  /**
+   * Check if a room has a specific event listener
+   * @param {string} roomId - Room ID
+   * @param {string} event - Event name ('timeline', 'membership', 'state')
+   * @returns {boolean} - Whether the room has a listener for the event
+   */
+  hasRoomListener(roomId, event) {
+    if (!roomId || !event) {
+      return false;
+    }
+
+    const listeners = this.eventListeners.get(roomId) || [];
+    return listeners.some(listener => listener.event === event);
   }
 
   /**
@@ -1740,10 +2001,49 @@ class MatrixTimelineManager {
       return;
     }
 
-    // Clear all listeners for this room
+    // CRITICAL FIX: Remove all types of listeners for maximum reliability
+
+    // 1. Clear internal event listeners
     this.eventListeners.set(roomId, []);
 
-    logger.debug(`[MatrixTimelineManager] Removed all listeners for room ${roomId}`);
+    // 2. Remove direct client listeners
+    if (this._directListeners && this._directListeners.has(roomId) && this.client) {
+      const directListeners = this._directListeners.get(roomId);
+      directListeners.forEach(({ event, listener }) => {
+        try {
+          this.client.removeListener(event, listener);
+          logger.info(`[MatrixTimelineManager] Removed direct client listener for ${event} in room ${roomId}`);
+        } catch (error) {
+          logger.warn(`[MatrixTimelineManager] Error removing direct client listener: ${error.message}`);
+        }
+      });
+      this._directListeners.delete(roomId);
+    }
+
+    // 3. Remove room-level listeners
+    if (this._roomLevelListeners && this._roomLevelListeners.has(roomId) && this.client) {
+      const roomLevelListeners = this._roomLevelListeners.get(roomId);
+      const room = this.client.getRoom(roomId);
+      if (room) {
+        roomLevelListeners.forEach(({ event, listener }) => {
+          try {
+            room.removeListener(event, listener);
+            logger.info(`[MatrixTimelineManager] Removed room-level listener for ${event} in room ${roomId}`);
+          } catch (error) {
+            logger.warn(`[MatrixTimelineManager] Error removing room-level listener: ${error.message}`);
+          }
+        });
+      }
+      this._roomLevelListeners.delete(roomId);
+    }
+
+    // 4. Clear message cache for this room to force a refresh on next load
+    if (this.messageCache && this.messageCache.has(roomId)) {
+      this.messageCache.delete(roomId);
+      logger.info(`[MatrixTimelineManager] Cleared message cache for room ${roomId}`);
+    }
+
+    logger.info(`[MatrixTimelineManager] Removed all listeners for room ${roomId}`);
   }
 
   /**
