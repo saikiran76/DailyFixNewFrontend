@@ -1,13 +1,13 @@
-import React, { useRef, useEffect, useState } from 'react';
-import { useSelector, useDispatch } from 'react-redux';
-import { FiX, FiLogOut, FiMoon, FiSun, FiHelpCircle, FiCheckCircle } from 'react-icons/fi';
+import { useRef, useEffect, useState } from 'react';
+import { useSelector } from 'react-redux';
+import { FiLogOut, FiMoon, FiSun, FiHelpCircle, FiCheckCircle } from 'react-icons/fi';
 import { IoMdLogIn } from 'react-icons/io';
 import { toast } from 'react-hot-toast'; // Assuming you use react-hot-toast
 import ExpandedSettingsMenu from './ExpandedSettingsMenu';
 import { useTheme, THEMES } from '../context/ThemeContext';
-
-// Import the necessary actions/thunks
-import { initiateWhatsAppRelogin } from '../store/slices/onboardingSlice'; // Adjust path as needed
+import PlatformConnectionModal from './PlatformConnectionModal';
+import PropTypes from 'prop-types';
+import ModalPortal from './ModalPortal'; // Import the modal portal component
 
 // Placeholder for user avatar - replace with actual image if available
 const UserAvatar = ({ name }) => {
@@ -19,12 +19,15 @@ const UserAvatar = ({ name }) => {
   );
 };
 
+UserAvatar.propTypes = {
+  name: PropTypes.string
+};
 
 const SettingsMenu = ({ isOpen, onClose }) => {
-  const dispatch = useDispatch();
   const menuRef = useRef(null);
   const [showExpandedMenu, setShowExpandedMenu] = useState(false);
-  const { theme, toggleTheme, setTheme, isDarkTheme } = useTheme();
+  const [showReconnectModal, setShowReconnectModal] = useState(false);
+  const { setTheme, isDarkTheme } = useTheme();
 
   // Get user data from auth slice
   const user = useSelector((state) => state.auth.user);
@@ -34,9 +37,10 @@ const SettingsMenu = ({ isOpen, onClose }) => {
   const userName = `${userFirstName} ${userLastName}`.trim() || 'User';
 
   // Get connected platforms from onboarding slice
-  const connectedPlatforms = useSelector((state) => state.onboarding.connectedPlatforms);
   const accounts = useSelector((state) => state.onboarding.accounts)
   const isWhatsappConnected = accounts.some(account => account.platform === 'whatsapp');
+  const isTelegramConnected = accounts.some(account => account.platform === 'telegram');
+  const hasPlatformsConnected = isWhatsappConnected || isTelegramConnected;
 
   // Handle click outside to close
   useEffect(() => {
@@ -61,9 +65,12 @@ const SettingsMenu = ({ isOpen, onClose }) => {
   }, [isOpen, onClose]);
 
   // Close expanded menu when settings menu is closed
+  // IMPORTANT: Only reset showExpandedMenu, not showReconnectModal
   useEffect(() => {
     if (!isOpen) {
       setShowExpandedMenu(false);
+      // We no longer reset the reconnect modal here, allowing it to stay open
+      // even after the settings menu is closed
     }
   }, [isOpen]);
 
@@ -75,137 +82,165 @@ const SettingsMenu = ({ isOpen, onClose }) => {
     setShowExpandedMenu(false);
   };
 
-  const handleRelogin = async () => {
-    toast.loading('Initiating WhatsApp reconnection...', { id: 'relogin-toast' });
-    try {
-      await dispatch(initiateWhatsAppRelogin()).unwrap();
-      toast.success('WhatsApp reconnection process started. Check your onboarding screen.', { id: 'relogin-toast' });
-      // Optionally close the menu after starting relogin
-      // onClose();
-    } catch (error) {
-      console.error("Failed to initiate WhatsApp relogin:", error);
-      toast.error(error?.message || 'Failed to start WhatsApp reconnection.', { id: 'relogin-toast' });
-    }
-  };
-
-  const handleLogout = () => {
-     // TODO: Implement actual logout logic using the signOut thunk
-    alert("Logout not implemented yet.");
-    // dispatch(signOut()); // Example of how to call it
+  const handleRelogin = () => {
+    // Show the PlatformConnectionModal with relogin=true
+    setShowReconnectModal(true);
+    
+    // Close the settings menu - but importantly, this won't reset the showReconnectModal state
     onClose();
+    
+    // Show a toast notification
+    toast.success('Select a platform to reconnect', { 
+      id: 'relogin-toast',
+      duration: 3000
+    });
   };
 
-  if (!isOpen) {
+  const handleReconnectComplete = () => {
+    // Handle completion of the reconnection process
+    setShowReconnectModal(false);
+    toast.success('Reconnection process completed', { 
+      id: 'reconnect-complete-toast' 
+    });
+  };
+
+  if (!isOpen && !showReconnectModal) {
+    // Don't return null if reconnect modal should be showing
     return null;
   }
 
   return (
     <>
-      <div
-        ref={menuRef}
-        className={`settings-menu fixed top-10 left-[14rem] z-[9000] w-64 rounded-lg shadow-xl border text-sm font-medium theme-transition ${isDarkTheme ? 'bg-neutral-800 border-white/10 text-white' : 'bg-white border-gray-200 text-gray-900'}`}
-        // Prevent clicks inside the menu from closing it via the document listener
-        onClick={(e) => e.stopPropagation()}
-        onMouseDown={(e) => e.stopPropagation()} // Also stop mousedown propagation
-      >
-        {/* User Info */}
-        <div className="p-4 flex items-center">
-          <UserAvatar name={userName} />
-          <div>
-            <div className="font-semibold">{userName}</div>
-            <div className="text-xs text-gray-400">{userEmail}</div>
+      {isOpen && (
+        <div
+          ref={menuRef}
+          className={`settings-menu fixed top-10 left-[14rem] z-[9000] w-64 rounded-lg shadow-xl border text-sm font-medium theme-transition ${isDarkTheme ? 'bg-neutral-800 border-white/10 text-white' : 'bg-white border-gray-200 text-gray-900'}`}
+          // Prevent clicks inside the menu from closing it via the document listener
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()} // Also stop mousedown propagation
+        >
+          {/* User Info */}
+          <div className="p-4 flex items-center">
+            <UserAvatar name={userName} />
+            <div>
+              <div className="font-semibold">{userName}</div>
+              <div className="text-xs text-gray-400">{userEmail}</div>
+            </div>
           </div>
-        </div>
 
-        {/* Divider */}
-        <div className={`border-t mx-4 ${isDarkTheme ? 'border-white/10' : 'border-gray-200'}`}></div>
+          {/* Divider */}
+          <div className={`border-t mx-4 ${isDarkTheme ? 'border-white/10' : 'border-gray-200'}`}></div>
 
-        {/* Options */}
-        <div className="p-2 space-y-1">
-          {/* Account Section */}
-          <button
-            onClick={handleAccountClick}
-            className={`w-full px-3 py-2 rounded-md flex justify-between items-center cursor-pointer theme-transition ${isDarkTheme ? 'bg-neutral-700 hover:bg-neutral-600' : 'bg-gray-100 hover:bg-gray-200'}`}
-          >
-            <span>Account</span>
-            {isWhatsappConnected ? (
-              <span className="flex items-center text-xs font-semibold bg-green-600/20 text-green-400 px-2 py-0.5 rounded-full">
-                <FiCheckCircle size={12} className="mr-1" />
-                WhatsApp
-              </span>
-            ) : (
-               <span className="text-xs font-semibold bg-yellow-600/20 text-yellow-400 px-2 py-0.5 rounded-full">
-                Pending
-              </span>
-               // Or show nothing if not connected at all - adjust as needed
-            )}
-          </button>
+          {/* Options */}
+          <div className="p-2 space-y-1">
+            {/* Account Section */}
+            <button
+              onClick={handleAccountClick}
+              className={`w-full px-3 py-2 rounded-md flex justify-between items-center cursor-pointer theme-transition ${isDarkTheme ? 'bg-neutral-700 hover:bg-neutral-600' : 'bg-gray-100 hover:bg-gray-200'}`}
+            >
+              <span>Account</span>
+              {hasPlatformsConnected ? (
+                <div className="flex space-x-1">
+                  {isWhatsappConnected && (
+                    <span className="flex items-center text-xs font-semibold bg-green-600/20 text-green-400 px-2 py-0.5 rounded-full">
+                      <FiCheckCircle size={12} className="mr-1" />
+                      WA
+                    </span>
+                  )}
+                  {isTelegramConnected && (
+                    <span className="flex items-center text-xs font-semibold bg-blue-600/20 text-blue-400 px-2 py-0.5 rounded-full">
+                      <FiCheckCircle size={12} className="mr-1" />
+                      TG
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <span className="text-xs font-semibold bg-yellow-600/20 text-yellow-400 px-2 py-0.5 rounded-full">
+                  Pending
+                </span>
+              )}
+            </button>
 
-           {/* Relogin Button - Only show if WhatsApp was connected at some point maybe? Or always show? */}
-           {/* Let's show it if 'whatsapp' exists in PLATFORMS or based on onboarding status */}
+            {/* Reconnect Button - For all platforms */}
             <button
               onClick={handleRelogin}
               className="w-full bg-gradient-to-r from-purple-900/80 to-indigo-900/80 flex items-center space-x-3 px-3 py-2 rounded-md text-white hover:opacity-90 transition-colors"
             >
               <IoMdLogIn className="w-5 h-5 text-white/80" />
-              <span>Relogin WhatsApp</span>
+              <span>Reconnect Platforms</span>
             </button>
 
 
-          {/* Theme Section */}
-          <div className={`px-3 py-2 rounded-md flex justify-between items-center cursor-pointer theme-transition ${isDarkTheme ? 'hover:bg-neutral-700' : 'hover:bg-gray-100'}`}>
-             <span>Theme</span>
-             <div className="flex items-center space-x-1">
-                  <button
-                    onClick={() => setTheme(THEMES.LIGHT)}
-                    className={`p-1 rounded theme-transition ${!isDarkTheme ? `bg-gray-200 text-gray-900` : `hover:bg-neutral-600 text-gray-400`}`}
-                    aria-label="Switch to Light Theme"
-                  >
-                    <FiSun size={16} />
-                  </button>
-                  <button
-                    onClick={() => setTheme(THEMES.DARK)}
-                    className={`p-1 rounded theme-transition ${isDarkTheme ? `bg-neutral-600 text-white` : `hover:bg-gray-300 text-gray-500`}`}
-                    aria-label="Switch to Dark Theme"
-                  >
-                    <FiMoon size={16} />
-                  </button>
-             </div>
+            {/* Theme Section */}
+            <div className={`px-3 py-2 rounded-md flex justify-between items-center cursor-pointer theme-transition ${isDarkTheme ? 'hover:bg-neutral-700' : 'hover:bg-gray-100'}`}>
+              <span>Theme</span>
+              <div className="flex items-center space-x-1">
+                    <button
+                      onClick={() => setTheme(THEMES.LIGHT)}
+                      className={`p-1 rounded theme-transition ${!isDarkTheme ? `bg-gray-200 text-gray-900` : `hover:bg-neutral-600 text-gray-400`}`}
+                      aria-label="Switch to Light Theme"
+                    >
+                      <FiSun size={16} />
+                    </button>
+                    <button
+                      onClick={() => setTheme(THEMES.DARK)}
+                      className={`p-1 rounded theme-transition ${isDarkTheme ? `bg-neutral-600 text-white` : `hover:bg-gray-300 text-gray-500`}`}
+                      aria-label="Switch to Dark Theme"
+                    >
+                      <FiMoon size={16} />
+                    </button>
+              </div>
+            </div>
+
+            {/* Support Section (Static) */}
+            <button className="w-full bg-gradient-to-r from-purple-900/80 to-indigo-900/80 flex items-center space-x-3 px-3 py-2 rounded-md text-white hover:opacity-90 transition-colors">
+              <FiHelpCircle className="w-5 h-5 text-white/80" />
+              <span>Support</span>
+            </button>
           </div>
 
-          {/* Support Section (Static) */}
-          <button className="w-full bg-gradient-to-r from-purple-900/80 to-indigo-900/80 flex items-center space-x-3 px-3 py-2 rounded-md text-white hover:opacity-90 transition-colors">
-            <FiHelpCircle className="w-5 h-5 text-white/80" />
-            <span>Support</span>
-          </button>
-        </div>
+          {/* Divider */}
+          <div className={`border-t mx-4 ${isDarkTheme ? 'border-white/10' : 'border-gray-200'}`}></div>
 
-        {/* Divider */}
-        <div className={`border-t mx-4 ${isDarkTheme ? 'border-white/10' : 'border-gray-200'}`}></div>
+          {/* Logout & Version */}
+          {/* <div className="p-2">
+            <button
+              onClick={handleLogout}
+              className="w-full bg-gradient-to-r from-purple-900/80 to-indigo-900/80 flex items-center space-x-3 px-3 py-2 rounded-md text-white hover:opacity-90 transition-colors"
+            >
+              <FiLogOut className="w-5 h-5 text-white/80" />
+              <span>Logout</span>
+            </button>
+          </div> */}
 
-        {/* Logout & Version */}
-        <div className="p-2">
-          <button
-            onClick={handleLogout}
-            className="w-full bg-gradient-to-r from-purple-900/80 to-indigo-900/80 flex items-center space-x-3 px-3 py-2 rounded-md text-white hover:opacity-90 transition-colors"
-          >
-            <FiLogOut className="w-5 h-5 text-white/80" />
-            <span>Logout</span>
-          </button>
+          <div className={`px-4 py-2 text-center text-xs ${isDarkTheme ? 'text-gray-500' : 'text-gray-400'}`}>
+            Version 1.0.0
+          </div>
         </div>
-
-        <div className={`px-4 py-2 text-center text-xs ${isDarkTheme ? 'text-gray-500' : 'text-gray-400'}`}>
-          Version 1.0.0
-        </div>
-      </div>
+      )}
 
       {/* Expanded Settings Menu */}
       <ExpandedSettingsMenu
         isOpen={showExpandedMenu}
         onClose={handleCloseExpandedMenu}
       />
+
+      {/* Platform Reconnection Modal - Now rendered through portal to avoid position constraints */}
+      <ModalPortal>
+        <PlatformConnectionModal
+          isOpen={showReconnectModal}
+          onClose={() => setShowReconnectModal(false)}
+          onConnectionComplete={handleReconnectComplete}
+          relogin={true}
+        />
+      </ModalPortal>
     </>
   );
+};
+
+SettingsMenu.propTypes = {
+  isOpen: PropTypes.bool.isRequired,
+  onClose: PropTypes.func.isRequired
 };
 
 export default SettingsMenu;

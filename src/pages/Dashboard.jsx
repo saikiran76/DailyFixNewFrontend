@@ -27,6 +27,7 @@ import '../styles/platformButtons.css';
 import '../styles/platforms.css'
 import '../styles/tooltips.css';
 import '../styles/tourGuide.css';
+import '../styles/telegram.css';
 import { FiMenu, FiX } from 'react-icons/fi';
 import { IoArrowBack, IoChevronBackOutline, IoChevronForwardOutline } from "react-icons/io5";
 import platformManager from '../services/PlatformManager';
@@ -473,18 +474,22 @@ const Dashboard = () => {
       }
 
       // Determine if we should show the tour popup or acknowledgment modal
-      // Only show tour popup if no WhatsApp account is connected
+      // Only show tour popup if no accounts are connected
       const hasWhatsappAccount = storeAccounts && storeAccounts.some(acc =>
         acc.platform === 'whatsapp' && (acc.status === 'active' || acc.status === 'pending')
       );
 
-      // Check if Telegram is connected - we'll use this later
+      // Check if Telegram is connected
+      const hasTelegramAccount = storeAccounts && storeAccounts.some(acc =>
+        acc.platform === 'telegram' && (acc.status === 'active' || acc.status === 'pending')
+      );
 
       // Update connection state variables
       const whatsappIsConnected = hasWhatsappAccount || whatsappConnected || whatsappConnectedInCache;
-
-      // Show tour popup only if WhatsApp is not connected
-      setShowTourPopup(!whatsappIsConnected);
+      
+      // Only show tour popup if no accounts are connected at all
+      const hasAnyAccount = whatsappIsConnected || hasTelegramAccount || (storeAccounts && storeAccounts.length > 0);
+      setShowTourPopup(!hasAnyAccount);
 
       // Show acknowledgment modal only if WhatsApp is connected
 
@@ -896,8 +901,8 @@ const Dashboard = () => {
     <Suspense fallback={<div className="flex items-center justify-center h-screen"><div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div></div>}>
       <MatrixInitializer>
         <>
-      {/* Tour popup - Only show when no WhatsApp is connected */}
-      {showTourPopup && !whatsappConnected && !isWhatsAppConnected(session?.user?.id) && (
+      {/* Tour popup - Only show when no accounts are connected */}
+      {showTourPopup && accounts.length === 0 && (
         <Suspense fallback={null}>
           <TourPopup
             onStartTour={handleStartTour}
@@ -1170,7 +1175,7 @@ const Dashboard = () => {
                               }}
                               className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 transition-colors"
                             >
-                              Connect Platform
+                              Connect
                             </button>
                           </div>
                         </div>

@@ -1,8 +1,10 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FiAlertTriangle, FiLogOut, FiX } from 'react-icons/fi';
 import logger from '../utils/logger';
 import authService from '../services/authService';
+import ModalPortal from './ModalPortal';
+import PropTypes from 'prop-types';
 
 /**
  * A modal that appears when the user's session has expired
@@ -104,47 +106,54 @@ const SessionExpiredModal = ({ isOpen, onClose }) => {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70 backdrop-blur-sm">
-      <div
-        ref={modalRef}
-        className="bg-neutral-800 rounded-lg shadow-xl p-6 max-w-md w-full mx-4 border border-neutral-700 animate-fadeIn"
-      >
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center">
-            <div className="bg-yellow-500 bg-opacity-20 p-3 rounded-full mr-4">
-              <FiAlertTriangle className="text-yellow-500 text-2xl" />
+    <ModalPortal>
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70 backdrop-blur-sm">
+        <div
+          ref={modalRef}
+          className="bg-neutral-800 rounded-lg shadow-xl p-6 max-w-md w-full mx-4 border border-neutral-700 animate-fadeIn"
+        >
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center">
+              <div className="bg-yellow-500 bg-opacity-20 p-3 rounded-full mr-4">
+                <FiAlertTriangle className="text-yellow-500 text-2xl" />
+              </div>
+              <h2 className="text-xl font-semibold text-white">Session Expired</h2>
             </div>
-            <h2 className="text-xl font-semibold text-white">Session Expired</h2>
+            <button
+              onClick={onClose}
+              className="text-gray-400 w-auto hover:text-white transition-colors p-2"
+              aria-label="Close modal"
+            >
+              <FiX size={24} />
+            </button>
           </div>
-          <button
-            onClick={onClose}
-            className="text-gray-400 w-auto hover:text-white transition-colors p-2"
-            aria-label="Close modal"
-          >
-            <FiX size={24} />
-          </button>
-        </div>
 
-        <p className="text-neutral-300 mb-6">
-          Your session has expired due to inactivity. You will be automatically logged out in <span className="font-bold text-white">{countdown}</span> seconds.
-        </p>
+          <p className="text-neutral-300 mb-6">
+            Your session has expired due to inactivity. You will be automatically logged out in <span className="font-bold text-white">{countdown}</span> seconds.
+          </p>
 
-        <p className="text-neutral-400 text-sm mb-6">
-          For your security, please log in again to continue using the application.
-        </p>
+          <p className="text-neutral-400 text-sm mb-6">
+            For your security, please log in again to continue using the application.
+          </p>
 
-        <div className="flex justify-end space-x-4">
-          <button
-            onClick={handleLogoutNow}
-            className="flex items-center px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
-          >
-            <FiLogOut className="mr-2" />
-            Logout Now
-          </button>
+          <div className="flex justify-end space-x-4">
+            <button
+              onClick={handleLogoutNow}
+              className="flex items-center px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+            >
+              <FiLogOut className="mr-2" />
+              Logout Now
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </ModalPortal>
   );
+};
+
+SessionExpiredModal.propTypes = {
+  isOpen: PropTypes.bool.isRequired,
+  onClose: PropTypes.func.isRequired
 };
 
 export default SessionExpiredModal;

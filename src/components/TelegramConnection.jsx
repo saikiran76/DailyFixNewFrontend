@@ -16,7 +16,7 @@ import matrixTokenRefresher from '../utils/matrixTokenRefresher';
 // Telegram bot Matrix user ID for the specific homeserver
 const TELEGRAM_BOT_USER_ID = '@telegrambot:dfix-hsbridge.duckdns.org';
 
-const TelegramConnection = ({ onComplete, onCancel }) => {
+const TelegramConnection = ({ onComplete, onCancel, relogin = false }) => {
   const dispatch = useDispatch();
   // Matrix client is accessed via window.matrixClient
   const { accounts } = useSelector(state => state.onboarding);
@@ -49,10 +49,19 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
   useEffect(() => {
     // Check if Telegram is already connected
     const telegramAccount = accounts.find(acc => acc.platform === 'telegram');
+    
     if (telegramAccount) {
-      setStep('complete');
+      // If we're in relogin mode, don't skip the process
+      if (relogin) {
+        logger.info('[TelegramConnection] Telegram already connected, but in relogin mode');
+        // Continue with the normal connection flow for reconnection
+      } else {
+        // In normal connection mode, if already connected, go to complete
+        logger.info('[TelegramConnection] Telegram already connected, setting step to complete');
+        setStep('complete');
+      }
     }
-  }, [accounts]);
+  }, [accounts, relogin]);
 
   // Get Matrix state from Redux
   const { syncState: matrixSyncState } = useSelector(state => state.matrix);
@@ -470,17 +479,18 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
       isConnecting.current = false;
     }, 10000); // 10 second timeout
 
-    // Show a loading message to the user
-    // toast.loading('Initializing Telegram connection...', { id: 'telegram-connect' });
-
-    // First check if we already have a Telegram account connected
-    const existingTelegramAccount = accounts.find(account => account.platform === 'telegram' && account.status === 'active');
-    if (existingTelegramAccount) {
-      logger.info('[TelegramConnection] Telegram account already connected:', existingTelegramAccount);
-      toast.success('Telegram is already connected!', { id: 'telegram-connect' });
-      setStep('complete');
-      setLoading(false);
-      return;
+    // First check if we already have a Telegram account connected (unless we're in relogin mode)
+    if (!relogin) {
+      const existingTelegramAccount = accounts.find(account => account.platform === 'telegram' && account.status === 'active');
+      if (existingTelegramAccount) {
+        logger.info('[TelegramConnection] Telegram account already connected:', existingTelegramAccount);
+        toast.success('Telegram is already connected!', { id: 'telegram-connect' });
+        setStep('complete');
+        setLoading(false);
+        return;
+      }
+    } else {
+      logger.info('[TelegramConnection] In relogin mode, ignoring existing account check');
     }
 
     // Use the global Matrix client
@@ -782,11 +792,12 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
       setLoading(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accounts, globalClient]);
+  }, [accounts, globalClient, relogin]);
 
   // Send the login command to the bot
   const sendLoginCommand = async (client, roomId) => {
     // Show a loading toast for login command
+    logger.info('[TelegramConnection] Creating toast: Connecting to Telegram bot...');
     toast.loading('Connecting to Telegram bot...', { id: 'telegram-login-command' });
 
     // Validate the Matrix client
@@ -1093,6 +1104,21 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
                   const username = usernameMatch ? usernameMatch[1] : null;
 
                   logger.info(`[TelegramConnection] Post-send check: User already logged in as @${username || 'unknown'}`);
+                  
+                  // Immediately dismiss any loading toasts
+                  try {
+                    toast.dismiss('telegram-connecting');
+                    toast.dismiss('telegram-login-command');
+                    toast.dismiss('telegram-room-creation');
+                    toast.dismiss('telegram-verification');
+                    toast.dismiss('telegram-phone');
+                  } catch (toastError) {
+                    logger.warn('[TelegramConnection] Error dismissing toasts:', toastError);
+                  }
+                  
+                  // Show success toast
+                  toast.success(`You are already logged in to Telegram as @${username || 'unknown'}!`);
+                  
                   handleLoginSuccess(roomId, username);
                   return;
                 }
@@ -1157,6 +1183,20 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
                   const username = usernameMatch ? usernameMatch[1] : null;
 
                   logger.info(`[TelegramConnection] Immediate check: User already logged in as @${username || 'unknown'}`);
+                  
+                  // Immediately dismiss any loading toasts
+                  try {
+                    toast.dismiss('telegram-connecting');
+                    toast.dismiss('telegram-login-command');
+                    toast.dismiss('telegram-room-creation');
+                    toast.dismiss('telegram-verification');
+                    toast.dismiss('telegram-phone');
+                  } catch (toastError) {
+                    logger.warn('[TelegramConnection] Error dismissing toasts:', toastError);
+                  }
+                  
+                  // Now show success toast and proceed to login success
+                  toast.success(`You are already logged in to Telegram as ${username || '+' + phoneNumber}!`);
                   handleLoginSuccess(roomId, username);
                   return;
                 }
@@ -1516,6 +1556,18 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
           const username = usernameMatch ? usernameMatch[1] : null;
 
           logger.info(`[TelegramConnection] User already logged in as @${username || 'unknown'}`);
+          
+          // Immediately dismiss any loading toasts
+          try {
+            toast.dismiss('telegram-connecting');
+            toast.dismiss('telegram-login-command');
+            toast.dismiss('telegram-room-creation');
+            toast.dismiss('telegram-verification');
+            toast.dismiss('telegram-phone');
+          } catch (toastError) {
+            logger.warn('[TelegramConnection] Error dismissing toasts:', toastError);
+          }
+          
           try {
             toast.success(`You are already logged in to Telegram as @${username || 'unknown'}!`);
           } catch (toastError) {
@@ -2007,7 +2059,30 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
 
     // Dismiss any existing toasts
     try {
+      logger.info('[TelegramConnection] Dismissing all toast notifications');
+      
+      // Dismiss all relevant toasts to ensure none are left hanging
       toast.dismiss('telegram-connecting');
+      toast.dismiss('telegram-login-command');
+      logger.info('[TelegramConnection] Dismissed telegram-login-command toast');
+      
+      toast.dismiss('telegram-room-creation');
+      toast.dismiss('telegram-verification');
+      toast.dismiss('telegram-phone');
+      
+      // Additionally, dismiss any other potential toasts
+      toast.dismiss('telegram-connect');
+      toast.dismiss('telegram-bot-invite');
+      toast.dismiss('telegram-retry');
+      toast.dismiss('matrix-init');
+      
+      // As a last resort, try to dismiss all toasts
+      try {
+        toast.dismiss();
+        logger.info('[TelegramConnection] Attempted to dismiss all toasts');
+      } catch {
+        // Ignore errors from this catch-all approach
+      }
     } catch (toastError) {
       logger.warn('[TelegramConnection] Error dismissing toast:', toastError);
       // Continue anyway
@@ -2033,7 +2108,8 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
     setLoading(false);
     setWaitingForBotResponse(false);
 
-    // Update accounts in Redux store
+    // Create a clean, serializable telegramAccount object
+    // This prevents any React synthetic events or circular references from being stored in Redux
     const telegramAccount = {
       id: 'telegram',
       platform: 'telegram',
@@ -2133,17 +2209,20 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
 
     setStep('complete');
     try {
-      toast.success(username
-        ? `Telegram connected successfully as @${username}! 🎉`
-        : 'Telegram connected successfully! 🎉');
+      // Show different message based on whether this is a new connection or reconnection
+      const successMessage = username 
+        ? (relogin ? `Telegram reconnected successfully as @${username}! 🎉` : `Telegram connected successfully as @${username}! 🎉`)
+        : (relogin ? 'Telegram reconnected successfully! 🎉' : 'Telegram connected successfully! 🎉');
+      
+      toast.success(successMessage);
     } catch (toastError) {
       logger.warn('[TelegramConnection] Error showing success toast:', toastError);
       // Continue anyway
     }
 
-    // Notify parent component
+    // Notify parent component with the clean telegramAccount object
     if (onComplete) {
-      onComplete(telegramAccount);
+      onComplete();
     }
   };
 
@@ -2155,9 +2234,13 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
             <div className="flex justify-center mb-6">
               <FaTelegram className="text-blue-500 text-6xl" />
             </div>
-            <h3 className="text-xl font-medium text-white mb-6">Connect to Telegram</h3>
+            <h3 className="text-xl font-medium text-white mb-6">
+              {relogin ? 'Reconnect to Telegram' : 'Connect to Telegram'}
+            </h3>
             <p className="text-gray-300 mb-6">
-              Connect your Telegram account to access your chats directly in DailyFix.
+              {relogin 
+                ? 'Reconnect your Telegram account to continue accessing your chats in DailyFix.'
+                : 'Connect your Telegram account to access your chats directly in DailyFix.'}
             </p>
             <div className="bg-blue-900/30 text-blue-300 p-4 rounded-lg mb-6 text-sm text-left">
               <p className="flex items-start">
@@ -2165,70 +2248,34 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
                 <span>Logging in grants the bridge full access to your Telegram account. Your data is end-to-end encrypted and secure.</span>
               </p>
             </div>
-            {globalClient || window.matrixClient || (() => {
-              // Check if we have credentials in any storage
-              try {
-                // Check custom localStorage
-                const localStorageKey = `dailyfix_connection_${session.user.id}`;
-                const localStorageData = localStorage.getItem(localStorageKey);
-                if (localStorageData) {
-                  const parsedData = JSON.parse(localStorageData);
-                  if (parsedData.matrix_credentials && parsedData.matrix_credentials.accessToken) {
-                    return true;
-                  }
-                }
-
-                // Check Element-style localStorage
-                if (localStorage.getItem('mx_access_token')) {
-                  return true;
-                }
-
-                // Check initialization flags
-                if (localStorage.getItem('matrix_client_initialized') === 'true') {
-                  return true;
-                }
-
-                return false;
-              } catch {
-                return false;
-              }
-            })() ? (
-              <button
-                onClick={startTelegramConnection}
-                disabled={loading || (matrixSyncState !== 'PREPARED' && matrixSyncState !== 'SYNCING' &&
-                                    localStorage.getItem('matrix_sync_state') !== 'PREPARED' &&
-                                    localStorage.getItem('matrix_sync_state') !== 'SYNCING')}
-                className="w-full py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {loading ? (
-                  <span className="flex items-center justify-center">
-                    <FiLoader className="animate-spin mr-2" />
-                    Connecting...
-                  </span>
-                ) : (matrixSyncState !== 'PREPARED' && matrixSyncState !== 'SYNCING' &&
-                      localStorage.getItem('matrix_sync_state') !== 'PREPARED' &&
-                      localStorage.getItem('matrix_sync_state') !== 'SYNCING') ? (
-                  <span className="flex items-center justify-center">
-                    <FiLoader className="animate-spin mr-2" />
-                    Preparing Connection...
-                  </span>
-                ) : (
-                  'Connect Telegram'
-                )}
-              </button>
-            ) : (
-              <div className="text-center">
-                <div className="flex justify-center mb-4">
-                  <FiLoader className="animate-spin text-blue-500 text-2xl" />
-                </div>
-                <p className="text-gray-300 text-sm">
-                  Initializing Matrix client... Please wait.
-                </p>
-                <p className="text-gray-400 text-xs mt-2">
-                  This may take a moment to establish a secure connection.
-                </p>
-              </div>
-            )}
+            
+            {/* Improved button UX - Always show the button with appropriate state indicators */}
+            <button
+              onClick={startTelegramConnection}
+              disabled={loading || !(globalClient || window.matrixClient) && !(matrixSyncState === 'PREPARED' || matrixSyncState === 'SYNCING' ||
+                     localStorage.getItem('matrix_sync_state') === 'PREPARED' ||
+                     localStorage.getItem('matrix_sync_state') === 'SYNCING')}
+              className="w-full bg-blue-500 hover:bg-blue-600 text-white py-3 px-4 rounded-lg flex items-center justify-center disabled:opacity-70 disabled:cursor-not-allowed"
+            >
+              {loading ? (
+                <>
+                  <FiLoader className="animate-spin mr-2" />
+                  <span>{relogin ? 'Reconnecting...' : 'Connecting...'}</span>
+                </>
+              ) : !(globalClient || window.matrixClient) && !(matrixSyncState === 'PREPARED' || matrixSyncState === 'SYNCING' ||
+                    localStorage.getItem('matrix_sync_state') === 'PREPARED' ||
+                    localStorage.getItem('matrix_sync_state') === 'SYNCING') ? (
+                <>
+                  <FiLoader className="animate-spin mr-2" />
+                  <span>Initializing...</span>
+                </>
+              ) : (
+                <>
+                  <FaTelegram className="mr-2" />
+                  <span>{relogin ? 'Reconnect Now' : 'Connect Now'}</span>
+                </>
+              )}
+            </button>
           </div>
         );
 
@@ -2452,9 +2499,15 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
             <div className="w-20 h-20 bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-6">
               <FiCheck className="text-green-400 text-4xl" />
             </div>
-            <h3 className="text-xl font-medium text-white mb-6">Telegram Connected!</h3>
+            <h3 className="text-xl font-medium text-white mb-6">
+              {relogin ? 'Telegram Reconnected!' : 'Telegram Connected!'}
+            </h3>
             <div className="bg-green-900/30 text-green-400 p-4 rounded-lg mb-6">
-              <p>Your Telegram account has been successfully connected to DailyFix.</p>
+              <p>
+                {relogin 
+                  ? 'Your Telegram account has been successfully reconnected to DailyFix.'
+                  : 'Your Telegram account has been successfully connected to DailyFix.'}
+              </p>
             </div>
             <button
               onClick={onComplete}
@@ -2523,7 +2576,8 @@ const TelegramConnection = ({ onComplete, onCancel }) => {
 // Define prop types
 TelegramConnection.propTypes = {
   onComplete: PropTypes.func,
-  onCancel: PropTypes.func
+  onCancel: PropTypes.func,
+  relogin: PropTypes.bool
 };
 
 export default TelegramConnection;

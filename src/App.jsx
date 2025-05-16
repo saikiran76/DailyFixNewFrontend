@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Provider } from 'react-redux';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { PersistGate } from 'redux-persist/integration/react';
@@ -42,33 +42,35 @@ const App = () => {
   };
 
   return (
-    <Provider store={store}>
-      <PersistGate loading={<LoadingSpinner />} persistor={persistor}>
-        <ThemeProvider>
-          <BrowserRouter>
-            {/* Session expired modal */}
-            <SessionExpiredModal
-              isOpen={showSessionExpiredModal}
-              onClose={handleModalClose}
-            />
+    <>
+      <Provider store={store}>
+        <PersistGate loading={<LoadingSpinner />} persistor={persistor}>
+          <ThemeProvider>
+            <BrowserRouter>
+              {/* Session expired modal */}
+              <SessionExpiredModal
+                isOpen={showSessionExpiredModal}
+                onClose={handleModalClose}
+              />
 
-            <Toaster position="top-right" />
-            <Routes>
-              <Route path="/auth/callback" element={<DirectAuthCallback />} />
-              <Route path="/auth/google/callback" element={<DirectAuthCallback />} />
-              <Route path="*" element={
-                <SessionManager>
-                  {/* Add SessionExpirationHandler to handle session expiration */}
-                  <SessionExpirationHandler />
-                  {/* Only render MatrixInitializer when needed for Telegram */}
-                  <AppRoutes />
-                </SessionManager>
-              } />
-            </Routes>
-          </BrowserRouter>
-        </ThemeProvider>
-      </PersistGate>
-    </Provider>
+              <Toaster position="top-right" />
+              <Routes>
+                <Route path="/auth/callback" element={<DirectAuthCallback />} />
+                <Route path="/auth/google/callback" element={<DirectAuthCallback />} />
+                <Route path="*" element={
+                  <SessionManager>
+                    {/* Add SessionExpirationHandler to handle session expiration */}
+                    <SessionExpirationHandler />
+                    {/* Only render MatrixInitializer when needed for Telegram */}
+                    <AppRoutes />
+                  </SessionManager>
+                } />
+              </Routes>
+            </BrowserRouter>
+          </ThemeProvider>
+        </PersistGate>
+      </Provider>
+    </>
   );
 };
 

@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FaTimes, FaWhatsapp, FaLock, FaCheck } from 'react-icons/fa';
 import { FaTelegram } from 'react-icons/fa6';
 import WhatsAppBridgeSetup from './WhatsAppBridgeSetup';
 import TelegramConnection from './TelegramConnection';
+import ModalPortal from './ModalPortal';
 import logger from '../utils/logger';
 import api from '../utils/api';
 import tokenManager from '../utils/tokenManager';
@@ -15,18 +16,20 @@ import { toast } from 'react-toastify';
 import { saveToIndexedDB, getFromIndexedDB } from '../utils/indexedDBHelper';
 import matrixTokenManager from '../utils/matrixTokenManager';
 import matrixTokenRefresher from '../utils/matrixTokenRefresher';
+import PropTypes from 'prop-types';
 import '../styles/platformButtons.css';
+import '../styles/modalStyles.css';
 
 // Constants
 const MATRIX_CREDENTIALS_KEY = 'matrix_credentials';
 
-const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
+const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete, relogin = false }) => {
   const dispatch = useDispatch();
   const { accounts, whatsappConnected } = useSelector(state => state.onboarding);
   const { session } = useSelector(state => state.auth);
   const [step, setStep] = useState('intro'); // intro, matrix-setup, whatsapp-setup, telegram-setup, success
   const [loading, setLoading] = useState(false); // Add loading state for UI feedback
-  const [connectedPlatforms, setConnectedPlatforms] = useState([]);
+  const [connectedPlatform, setConnectedPlatform] = useState(null); // Track which platform was connected
 
   // CRITICAL FIX: Check multiple sources for connected platforms
   useEffect(() => {
@@ -45,6 +48,12 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
           platformStatus.telegram = true;
         }
       });
+
+      // Skip the rest of the checks if we're in relogin mode
+      if (relogin) {
+        logger.info('[PlatformConnectionModal] In relogin mode, skipping connection checks');
+        return;
+      }
 
       // 2. Check whatsappConnected from Redux
       if (whatsappConnected) {
@@ -104,19 +113,13 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
         logger.error('[PlatformConnectionModal] Error checking Telegram with helper:', error);
       }
 
-      // Update connected platforms state
-      const connected = [];
-      if (platformStatus.whatsapp) connected.push('whatsapp');
-      if (platformStatus.telegram) connected.push('telegram');
-      setConnectedPlatforms(connected);
-
-      logger.info('[PlatformConnectionModal] Connected platforms:', connected);
+      logger.info('[PlatformConnectionModal] Connected platforms status:', platformStatus);
     };
 
     if (isOpen) {
       checkConnectedPlatforms();
     }
-  }, [isOpen, accounts, whatsappConnected, session]);
+  }, [isOpen, accounts, whatsappConnected, session, relogin]);
 
   // Enhanced onClose handler that cleans up Matrix resources
   const handleClose = () => {
@@ -264,51 +267,254 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
   // It provides a more comprehensive initialization with fallbacks and direct client creation
   // DO NOT REMOVE: This function is needed for the pre-selection flow
   const initializeMatrixForWhatsApp = useCallback(async () => {
-    return new Promise(async (resolve, reject) => {
-      try {
-        // If Matrix client is already initialized, just return
-        if (window.matrixClient) {
-          logger.info('[PlatformConnectionModal] Matrix client already initialized');
-          setStep('whatsapp-setup');
-          resolve();
-          return;
-        }
-
-        logger.info('[PlatformConnectionModal] Initializing Matrix connection for WhatsApp');
-        toast.loading('Initializing connection...', { id: 'matrix-init' });
-
-        // For WhatsApp, we need to initialize through the API
+    return new Promise((resolve, reject) => {
+      // Use an immediately invoked async function inside instead
+      (async () => {
         try {
-          const response = await api.post('/api/v1/matrix/auto-initialize');
-
-          if (response.data.status === 'success') {
-            logger.info('[PlatformConnectionModal] Matrix initialized successfully through API');
-          } else {
-            throw new Error('Failed to initialize Matrix through API');
+          // If Matrix client is already initialized, just return
+          if (window.matrixClient) {
+            logger.info('[PlatformConnectionModal] Matrix client already initialized');
+            setStep('whatsapp-setup');
+            resolve();
+            return;
           }
-        } catch (apiError) {
-          logger.error('[PlatformConnectionModal] Error initializing through API for WhatsApp:', apiError);
-          toast.error('Failed to initialize connection. Please try again.', { id: 'matrix-init' });
-          reject(apiError);
-          return;
-        }
 
-        // Wait a bit for the client to be available
-        let attempts = 0;
-        const maxAttempts = 10; // 5 seconds
+          logger.info('[PlatformConnectionModal] Initializing Matrix connection for WhatsApp');
+          toast.loading('Initializing connection...', { id: 'matrix-init' });
 
-        while (!window.matrixClient && attempts < maxAttempts) {
-          await new Promise(r => setTimeout(r, 500));
-          attempts++;
+          // For WhatsApp, we need to initialize through the API
+          try {
+            const response = await api.post('/api/v1/matrix/auto-initialize');
 
-          if (attempts % 4 === 0) {
-            logger.info(`[PlatformConnectionModal] Waiting for Matrix client... (${attempts}/${maxAttempts})`);
+            if (response.data.status === 'success') {
+              logger.info('[PlatformConnectionModal] Matrix initialized successfully through API');
+            } else {
+              throw new Error('Failed to initialize Matrix through API');
+            }
+          } catch (apiError) {
+            logger.error('[PlatformConnectionModal] Error initializing through API for WhatsApp:', apiError);
+            toast.error('Failed to initialize connection. Please try again.', { id: 'matrix-init' });
+            reject(apiError);
+            return;
           }
-        }
 
-        // If client is available, we're done
-        if (window.matrixClient) {
-          logger.info('[PlatformConnectionModal] Matrix client now available');
+          // Wait a bit for the client to be available
+          let attempts = 0;
+          const maxAttempts = 10; // 5 seconds
+
+          while (!window.matrixClient && attempts < maxAttempts) {
+            await new Promise(r => setTimeout(r, 500));
+            attempts++;
+
+            if (attempts % 4 === 0) {
+              logger.info(`[PlatformConnectionModal] Waiting for Matrix client... (${attempts}/${maxAttempts})`);
+            }
+          }
+
+          // If client is available, we're done
+          if (window.matrixClient) {
+            logger.info('[PlatformConnectionModal] Matrix client now available');
+            toast.success('Connection initialized', { id: 'matrix-init' });
+
+            // For WhatsApp, proceed to WhatsApp setup
+            if (window.platformToConnect === 'whatsapp') {
+              setStep('whatsapp-setup');
+            }
+
+            resolve();
+            return;
+          }
+
+          // If client is still not available, initialize directly
+          logger.info('[PlatformConnectionModal] Matrix client not available, initializing directly');
+
+          // Import Matrix SDK
+          const matrixSdk = await import('matrix-js-sdk');
+
+          // Use the session from component scope
+          if (!session?.user?.id) {
+            throw new Error('No user session available');
+          }
+
+          // Try to get credentials from multiple sources
+          let credentials = null;
+
+          // First try to get credentials from IndexedDB
+          try {
+            const indexedDBData = await getFromIndexedDB(session.user.id);
+            logger.info('[PlatformConnectionModal] IndexedDB data:', JSON.stringify(indexedDBData, null, 2));
+
+            if (indexedDBData && indexedDBData[MATRIX_CREDENTIALS_KEY]) {
+              credentials = indexedDBData[MATRIX_CREDENTIALS_KEY];
+              logger.info('[PlatformConnectionModal] Found credentials in IndexedDB');
+            }
+          } catch (indexedDBError) {
+            logger.warn('[PlatformConnectionModal] Error getting credentials from IndexedDB:', indexedDBError);
+          }
+
+          // If not found in IndexedDB, try localStorage
+          if (!credentials || !credentials.accessToken) {
+            try {
+              // Try to get from our custom localStorage key
+              const localStorageKey = `dailyfix_connection_${session.user.id}`;
+              const localStorageData = localStorage.getItem(localStorageKey);
+
+              if (localStorageData) {
+                const parsedData = JSON.parse(localStorageData);
+                if (parsedData.matrix_credentials) {
+                  credentials = parsedData.matrix_credentials;
+                  logger.info('[PlatformConnectionModal] Found credentials in localStorage (custom key)');
+                }
+              }
+            } catch (localStorageError) {
+              logger.warn('[PlatformConnectionModal] Error getting credentials from localStorage:', localStorageError);
+            }
+          }
+
+          // If still not found, try Element-style localStorage keys
+          if (!credentials || !credentials.accessToken) {
+            const mx_access_token = localStorage.getItem('mx_access_token');
+            const mx_user_id = localStorage.getItem('mx_user_id');
+            const mx_device_id = localStorage.getItem('mx_device_id');
+            const mx_hs_url = localStorage.getItem('mx_hs_url');
+
+            if (mx_access_token && mx_user_id) {
+              credentials = {
+                accessToken: mx_access_token,
+                userId: mx_user_id,
+                deviceId: mx_device_id,
+                homeserver: mx_hs_url || 'https://dfix-hsbridge.duckdns.org'
+              };
+              logger.info('[PlatformConnectionModal] Found credentials in localStorage (Element-style)');
+            }
+          }
+
+          // If still not found, fetch from API
+          if (!credentials || !credentials.accessToken) {
+            try {
+              logger.info('[PlatformConnectionModal] No cached credentials, fetching from API');
+
+              // Use the API endpoint to get accounts
+              const response = await api.get('/api/v1/users/accounts');
+
+              // Log the response for debugging
+              logger.info('[PlatformConnectionModal] API response:', response.data);
+
+              if (!response.data || response.data.status !== 'success') {
+                throw new Error('Failed to fetch accounts from API');
+              }
+
+              // Find the Matrix account
+              const matrixAccount = response.data.data.find(account =>
+                account.platform === 'matrix' && account.status === 'active'
+              );
+
+              // Check if we found a Matrix account with credentials
+              if (!matrixAccount || !matrixAccount.credentials) {
+                throw new Error('No Matrix credentials found');
+              }
+
+              // Use the Matrix account credentials
+              credentials = matrixAccount.credentials;
+              logger.info('[PlatformConnectionModal] Found credentials from API');
+
+              // Save credentials to IndexedDB for future use
+              await saveToIndexedDB(session.user.id, {
+                [MATRIX_CREDENTIALS_KEY]: credentials
+              });
+
+              // Also save to our custom localStorage
+              const localStorageKey = `dailyfix_connection_${session.user.id}`;
+              const existingData = localStorage.getItem(localStorageKey);
+              const parsedData = existingData ? JSON.parse(existingData) : {};
+              parsedData.matrix_credentials = credentials;
+              localStorage.setItem(localStorageKey, JSON.stringify(parsedData));
+
+              logger.info('[PlatformConnectionModal] Matrix credentials saved to storage');
+            } catch (supabaseError) {
+              logger.error('[PlatformConnectionModal] Error fetching Matrix credentials from Supabase:', supabaseError);
+            }
+          }
+
+          // Final check to ensure we have valid credentials
+          if (!credentials || !credentials.accessToken) {
+            logger.info('[PlatformConnectionModal] No valid Matrix credentials found, registering new account');
+
+            try {
+              logger.info('[PlatformConnectionModal] Starting Matrix account registration for user:', session.user.id);
+
+              // Instead of client-side registration, use the backend API
+              const { data, error } = await api.post('/api/v1/matrix/auto-initialize');
+
+              if (error) {
+                throw new Error(`API error: ${error}`);
+              }
+
+              if (!data || data.status !== 'active' || !data.credentials) {
+                throw new Error('Failed to initialize Matrix account through API');
+              }
+
+              // Use the credentials from the API response
+              credentials = data.credentials;
+
+              if (!credentials || !credentials.accessToken) {
+                throw new Error('API returned invalid credentials');
+              }
+
+              logger.info('[PlatformConnectionModal] Successfully registered new Matrix account through API');
+            } catch (registrationError) {
+              logger.error('[PlatformConnectionModal] Error registering Matrix account:', registrationError);
+              toast.error('Failed to register Matrix account. Please try again.', { id: 'telegram-init' });
+              throw new Error('Could not register Matrix account: ' + registrationError.message);
+            }
+          }
+
+          // Create Matrix client
+          const { userId, accessToken, homeserver, deviceId } = credentials;
+          const homeserverUrl = homeserver || 'https://dfix-hsbridge.duckdns.org';
+
+          // Create Matrix client directly (Element-web style)
+          const clientOpts = {
+            baseUrl: homeserverUrl,
+            userId: userId,
+            deviceId: deviceId || `DFIX_WEB_${Date.now()}`,
+            accessToken: accessToken,
+            timelineSupport: true,
+            store: new matrixSdk.MemoryStore({ localStorage: window.localStorage }),
+            useAuthorizationHeader: true
+          };
+
+          logger.info('[PlatformConnectionModal] Creating new Matrix client');
+          const client = matrixSdk.createClient(clientOpts);
+
+          // Set up sync listener
+          client.on('sync', (state) => {
+            logger.info(`[PlatformConnectionModal] Matrix sync state: ${state}`);
+
+            // Save client info to localStorage
+            try {
+              localStorage.setItem('matrix_client_initialized', 'true');
+              localStorage.setItem('matrix_sync_state', state);
+              localStorage.setItem('matrix_last_sync', new Date().toISOString());
+
+              // Also update Element-style localStorage keys
+              localStorage.setItem('mx_access_token', client.getAccessToken());
+              localStorage.setItem('mx_user_id', client.getUserId());
+              localStorage.setItem('mx_device_id', client.getDeviceId());
+              localStorage.setItem('mx_hs_url', client.getHomeserverUrl());
+            } catch (storageError) {
+              logger.error('[PlatformConnectionModal] Error saving to localStorage:', storageError);
+            }
+          });
+
+          // Start client
+          logger.info('[PlatformConnectionModal] Starting Matrix client');
+          await client.startClient();
+
+          // Set client globally
+          window.matrixClient = client;
+
+          logger.info('[PlatformConnectionModal] Matrix client initialized successfully');
           toast.success('Connection initialized', { id: 'matrix-init' });
 
           // For WhatsApp, proceed to WhatsApp setup
@@ -317,223 +523,23 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
           }
 
           resolve();
-          return;
-        }
+        } catch (error) {
+          logger.error('[PlatformConnectionModal] Error initializing Matrix:', error);
 
-        // If client is still not available, initialize directly
-        logger.info('[PlatformConnectionModal] Matrix client not available, initializing directly');
-
-        // Import Matrix SDK
-        const matrixSdk = await import('matrix-js-sdk');
-
-        // Use the session from component scope
-        if (!session?.user?.id) {
-          throw new Error('No user session available');
-        }
-
-        // Try to get credentials from multiple sources
-        let credentials = null;
-
-        // First try to get credentials from IndexedDB
-        try {
-          const indexedDBData = await getFromIndexedDB(session.user.id);
-          logger.info('[PlatformConnectionModal] IndexedDB data:', JSON.stringify(indexedDBData, null, 2));
-
-          if (indexedDBData && indexedDBData[MATRIX_CREDENTIALS_KEY]) {
-            credentials = indexedDBData[MATRIX_CREDENTIALS_KEY];
-            logger.info('[PlatformConnectionModal] Found credentials in IndexedDB');
+          // Show appropriate error message
+          if (error.response && error.response.status === 401) {
+            toast.error('Your session has expired. Please log in again.', { id: 'matrix-init' });
+            // Redirect to login after a short delay
+            setTimeout(() => {
+              window.location.href = '/login';
+            }, 2000);
+          } else {
+            toast.error('Failed to initialize Matrix. Please try again.', { id: 'matrix-init' });
           }
-        } catch (indexedDBError) {
-          logger.warn('[PlatformConnectionModal] Error getting credentials from IndexedDB:', indexedDBError);
+
+          reject(error);
         }
-
-        // If not found in IndexedDB, try localStorage
-        if (!credentials || !credentials.accessToken) {
-          try {
-            // Try to get from our custom localStorage key
-            const localStorageKey = `dailyfix_connection_${session.user.id}`;
-            const localStorageData = localStorage.getItem(localStorageKey);
-
-            if (localStorageData) {
-              const parsedData = JSON.parse(localStorageData);
-              if (parsedData.matrix_credentials) {
-                credentials = parsedData.matrix_credentials;
-                logger.info('[PlatformConnectionModal] Found credentials in localStorage (custom key)');
-              }
-            }
-          } catch (localStorageError) {
-            logger.warn('[PlatformConnectionModal] Error getting credentials from localStorage:', localStorageError);
-          }
-        }
-
-        // If still not found, try Element-style localStorage keys
-        if (!credentials || !credentials.accessToken) {
-          const mx_access_token = localStorage.getItem('mx_access_token');
-          const mx_user_id = localStorage.getItem('mx_user_id');
-          const mx_device_id = localStorage.getItem('mx_device_id');
-          const mx_hs_url = localStorage.getItem('mx_hs_url');
-
-          if (mx_access_token && mx_user_id) {
-            credentials = {
-              accessToken: mx_access_token,
-              userId: mx_user_id,
-              deviceId: mx_device_id,
-              homeserver: mx_hs_url || 'https://dfix-hsbridge.duckdns.org'
-            };
-            logger.info('[PlatformConnectionModal] Found credentials in localStorage (Element-style)');
-          }
-        }
-
-        // If still not found, fetch from API
-        if (!credentials || !credentials.accessToken) {
-          try {
-            logger.info('[PlatformConnectionModal] No cached credentials, fetching from API');
-
-            // Use the API endpoint to get accounts
-            const response = await api.get('/api/v1/users/accounts');
-
-            // Log the response for debugging
-            logger.info('[PlatformConnectionModal] API response:', response.data);
-
-            if (!response.data || response.data.status !== 'success') {
-              throw new Error('Failed to fetch accounts from API');
-            }
-
-            // Find the Matrix account
-            const matrixAccount = response.data.data.find(account =>
-              account.platform === 'matrix' && account.status === 'active'
-            );
-
-            // Check if we found a Matrix account with credentials
-            if (!matrixAccount || !matrixAccount.credentials) {
-              throw new Error('No Matrix credentials found');
-            }
-
-            // Use the Matrix account credentials
-            credentials = matrixAccount.credentials;
-            logger.info('[PlatformConnectionModal] Found credentials from API');
-
-            // Save credentials to IndexedDB for future use
-            await saveToIndexedDB(session.user.id, {
-              [MATRIX_CREDENTIALS_KEY]: credentials
-            });
-
-            // Also save to our custom localStorage
-            const localStorageKey = `dailyfix_connection_${session.user.id}`;
-            const existingData = localStorage.getItem(localStorageKey);
-            const parsedData = existingData ? JSON.parse(existingData) : {};
-            parsedData.matrix_credentials = credentials;
-            localStorage.setItem(localStorageKey, JSON.stringify(parsedData));
-
-            logger.info('[PlatformConnectionModal] Matrix credentials saved to storage');
-          } catch (supabaseError) {
-            logger.error('[PlatformConnectionModal] Error fetching Matrix credentials from Supabase:', supabaseError);
-          }
-        }
-
-        // Final check to ensure we have valid credentials
-        if (!credentials || !credentials.accessToken) {
-          logger.info('[PlatformConnectionModal] No valid Matrix credentials found, registering new account');
-
-          try {
-            logger.info('[PlatformConnectionModal] Starting Matrix account registration for user:', session.user.id);
-
-            // Instead of client-side registration, use the backend API
-            const { data, error } = await api.post('/api/v1/matrix/auto-initialize');
-
-            if (error) {
-              throw new Error(`API error: ${error}`);
-            }
-
-            if (!data || data.status !== 'active' || !data.credentials) {
-              throw new Error('Failed to initialize Matrix account through API');
-            }
-
-            // Use the credentials from the API response
-            credentials = data.credentials;
-
-            if (!credentials || !credentials.accessToken) {
-              throw new Error('API returned invalid credentials');
-            }
-
-            logger.info('[PlatformConnectionModal] Successfully registered new Matrix account through API');
-          } catch (registrationError) {
-            logger.error('[PlatformConnectionModal] Error registering Matrix account:', registrationError);
-            toast.error('Failed to register Matrix account. Please try again.', { id: 'telegram-init' });
-            throw new Error('Could not register Matrix account: ' + registrationError.message);
-          }
-        }
-
-        // Create Matrix client
-        const { userId, accessToken, homeserver, deviceId } = credentials;
-        const homeserverUrl = homeserver || 'https://dfix-hsbridge.duckdns.org';
-
-        // Create Matrix client directly (Element-web style)
-        const clientOpts = {
-          baseUrl: homeserverUrl,
-          userId: userId,
-          deviceId: deviceId || `DFIX_WEB_${Date.now()}`,
-          accessToken: accessToken,
-          timelineSupport: true,
-          store: new matrixSdk.MemoryStore({ localStorage: window.localStorage }),
-          useAuthorizationHeader: true
-        };
-
-        logger.info('[PlatformConnectionModal] Creating new Matrix client');
-        const client = matrixSdk.createClient(clientOpts);
-
-        // Set up sync listener
-        client.on('sync', (state) => {
-          logger.info(`[PlatformConnectionModal] Matrix sync state: ${state}`);
-
-          // Save client info to localStorage
-          try {
-            localStorage.setItem('matrix_client_initialized', 'true');
-            localStorage.setItem('matrix_sync_state', state);
-            localStorage.setItem('matrix_last_sync', new Date().toISOString());
-
-            // Also update Element-style localStorage keys
-            localStorage.setItem('mx_access_token', client.getAccessToken());
-            localStorage.setItem('mx_user_id', client.getUserId());
-            localStorage.setItem('mx_device_id', client.getDeviceId());
-            localStorage.setItem('mx_hs_url', client.getHomeserverUrl());
-          } catch (storageError) {
-            logger.error('[PlatformConnectionModal] Error saving to localStorage:', storageError);
-          }
-        });
-
-        // Start client
-        logger.info('[PlatformConnectionModal] Starting Matrix client');
-        await client.startClient();
-
-        // Set client globally
-        window.matrixClient = client;
-
-        logger.info('[PlatformConnectionModal] Matrix client initialized successfully');
-        toast.success('Connection initialized', { id: 'matrix-init' });
-
-        // For WhatsApp, proceed to WhatsApp setup
-        if (window.platformToConnect === 'whatsapp') {
-          setStep('whatsapp-setup');
-        }
-
-        resolve();
-      } catch (error) {
-        logger.error('[PlatformConnectionModal] Error initializing Matrix:', error);
-
-        // Show appropriate error message
-        if (error.response && error.response.status === 401) {
-          toast.error('Your session has expired. Please log in again.', { id: 'matrix-init' });
-          // Redirect to login after a short delay
-          setTimeout(() => {
-            window.location.href = '/login';
-          }, 2000);
-        } else {
-          toast.error('Failed to initialize Matrix. Please try again.', { id: 'matrix-init' });
-        }
-
-        reject(error);
-      }
+      })();
     });
   }, [session.user.id]);
 
@@ -541,6 +547,7 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
   const handleWhatsAppComplete = () => {
     logger.info('[PlatformConnectionModal] WhatsApp connection completed');
     dispatch(setWhatsappConnected(true));
+    setConnectedPlatform('whatsapp');
     setStep('success');
   };
 
@@ -565,12 +572,53 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
   };
 
   // Handle Telegram connection completion
-  const handleTelegramComplete = (telegramAccount) => {
+  const handleTelegramComplete = () => {
     logger.info('[PlatformConnectionModal] Telegram connection completed');
 
-    // Update accounts in Redux store
-    dispatch(updateAccounts([...accounts, telegramAccount]));
+    // Ensure the account object is serializable by creating a clean object
+    // This prevents React SyntheticEvents or circular references from being stored in Redux
+    const cleanAccount = {
+      id: 'telegram',
+      platform: 'telegram',
+      name: 'Telegram',
+      status: 'active'
+    };
 
+    // Check if we already have this account to avoid duplicates
+    const existingAccounts = [...accounts];
+    const telegramIndex = existingAccounts.findIndex(acc => acc.platform === 'telegram');
+    
+    if (telegramIndex >= 0) {
+      // Update the existing account
+      existingAccounts[telegramIndex] = cleanAccount;
+    } else {
+      // Add the new account
+      existingAccounts.push(cleanAccount);
+    }
+    
+    // Update accounts in Redux store with the clean accounts array
+    dispatch(updateAccounts(existingAccounts));
+
+    // Save the Telegram connection status to localStorage
+    try {
+      // Update connection status
+      const connectionStatus = JSON.parse(localStorage.getItem('dailyfix_connection_status') || '{}');
+      connectionStatus.telegram = true;
+      localStorage.setItem('dailyfix_connection_status', JSON.stringify(connectionStatus));
+      
+      // Update connected platforms array
+      const connectedPlatforms = JSON.parse(localStorage.getItem('connected_platforms') || '[]');
+      if (!connectedPlatforms.includes('telegram')) {
+        connectedPlatforms.push('telegram');
+        localStorage.setItem('connected_platforms', JSON.stringify(connectedPlatforms));
+      }
+      
+      logger.info('[PlatformConnectionModal] Saved Telegram connection status to localStorage');
+    } catch (error) {
+      logger.error('[PlatformConnectionModal] Error saving Telegram connection status:', error);
+    }
+
+    setConnectedPlatform('telegram');
     setStep('success');
   };
 
@@ -725,14 +773,18 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
             {/* Content */}
             <div className="p-6">
               <div className="flex flex-col items-center text-center mb-6">
-                <h4 className="text-xl font-medium text-white mb-4">Connect a Messaging Platform</h4>
-                <p className="text-gray-300 mb-6">You need to connect a messaging platform to start using DailyFix.</p>
+                <h4 className="text-xl font-medium text-white mb-4">
+                  {relogin ? 'Reconnect a Messaging Platform' : 'Connect a Messaging Platform'}
+                </h4>
+                <p className="text-gray-300 mb-6">
+                  {relogin ? 'Choose a platform to reconnect:' : 'You need to connect a messaging platform to start using DailyFix.'}
+                </p>
               </div>
 
               <div className="flex justify-center space-x-10 mb-8" style={{ background: 'transparent' }}>
                 {/* WhatsApp Button - Redesigned to match AIAssistantWelcome */}
                 <div className="platform-icon-container">
-                  {(accounts.some(acc => acc.platform === 'whatsapp' && (acc.status === 'active' || acc.status === 'pending')) || connectedPlatforms.includes('whatsapp')) ? (
+                  {!relogin && accounts.some(acc => acc.platform === 'whatsapp' && (acc.status === 'active' || acc.status === 'pending')) ? (
                     <div className="platform-icon disabled">
                       <div className="w-20 h-20 rounded-full bg-green-500/20 flex items-center justify-center relative">
                         <FaWhatsapp className="text-green-500 text-4xl" />
@@ -760,14 +812,14 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
                           <FaWhatsapp className="text-green-500 text-4xl" />
                         )}
                       </div>
-                      <span className="mt-2 text-xs text-gray-300">{loading ? 'Connecting...' : 'Connect WhatsApp'}</span>
+                      <span className="mt-2 text-xs text-gray-300">{loading ? 'Connecting...' : relogin ? 'Reconnect WhatsApp' : 'Connect WhatsApp'}</span>
                     </div>
                   )}
                 </div>
 
                 {/* Telegram Button - Redesigned to match AIAssistantWelcome */}
                 <div className="platform-icon-container">
-                  {(accounts.some(acc => acc.platform === 'telegram' && (acc.status === 'active' || acc.status === 'pending')) || connectedPlatforms.includes('telegram')) ? (
+                  {!relogin && accounts.some(acc => acc.platform === 'telegram' && (acc.status === 'active' || acc.status === 'pending')) ? (
                     <div className="platform-icon disabled">
                       <div className="w-20 h-20 rounded-full bg-blue-500/20 flex items-center justify-center relative">
                         <FaTelegram className="text-blue-500 text-4xl" />
@@ -818,7 +870,7 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
                           <FaTelegram className="text-blue-500 text-4xl" />
                         )}
                       </div>
-                      <span className="mt-2 text-xs text-gray-300">{loading ? 'Connecting...' : 'Connect Telegram'}</span>
+                      <span className="mt-2 text-xs text-gray-300">{loading ? 'Connecting...' : relogin ? 'Reconnect Telegram' : 'Connect Telegram'}</span>
                     </div>
                   )}
                 </div>
@@ -895,15 +947,18 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
                 <div className="w-24 h-24 rounded-full bg-blue-500/20 flex items-center justify-center mb-4">
                   <FaTelegram className="w-12 h-12 text-blue-500" />
                 </div>
-                <h4 className="text-xl font-medium text-white mb-2">Connect Telegram</h4>
+                <h4 className="text-xl font-medium text-white mb-2">
+                  {relogin ? 'Reconnect Telegram' : 'Connect Telegram'}
+                </h4>
                 <p className="text-gray-300">
-                  Follow the steps to connect your Telegram account.
+                  Follow the steps to {relogin ? 'reconnect' : 'connect'} your Telegram account.
                 </p>
               </div>
 
               <TelegramConnection
                 onComplete={handleTelegramComplete}
                 onCancel={() => setStep('intro')}
+                relogin={relogin}
               />
 
               {/* Progress dots */}
@@ -935,9 +990,14 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
                 <div className="w-24 h-24 rounded-full bg-green-500/20 flex items-center justify-center mb-4">
                   <FaCheck className="w-12 h-12 text-green-500" />
                 </div>
-                <h4 className="text-xl font-medium text-white mb-2">Connection Successful!</h4>
+                <h4 className="text-xl font-medium text-white mb-2">
+                  {relogin ? 'Reconnection Successful!' : 'Connection Successful!'}
+                </h4>
                 <p className="text-gray-300">
-                  Your account has been successfully connected to DailyFix.
+                  {relogin 
+                    ? `Your ${connectedPlatform === 'telegram' ? 'Telegram' : 'WhatsApp'} account has been successfully reconnected to DailyFix.`
+                    : `Your ${connectedPlatform === 'telegram' ? 'Telegram' : 'WhatsApp'} account has been successfully connected to DailyFix.`
+                  }
                 </p>
               </div>
 
@@ -975,38 +1035,59 @@ const PlatformConnectionModal = ({ isOpen, onClose, onConnectionComplete }) => {
   return (
     <AnimatePresence>
       {isOpen && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
-        >
+        <ModalPortal>
           <motion.div
-            initial={{ scale: 0.9, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            exit={{ scale: 0.9, opacity: 0 }}
-            className="bg-neutral-900 rounded-xl shadow-2xl max-w-md w-full overflow-hidden border border-white/10 animate-fadeIn max-h-[90vh] overflow-y-auto"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="platform-connection-modal fixed inset-0 bg-black/80 flex items-center justify-center z-[9999] p-4 overflow-y-auto"
+            style={{ 
+              position: 'fixed', 
+              top: 0, 
+              left: 0, 
+              right: 0, 
+              bottom: 0, 
+              width: '100vw !important', 
+              height: '100vh',
+              backdropFilter: 'blur(5px)',
+              maxWidth: '100vw !important'
+            }}
           >
-            {/* Header with close button */}
-            <div className="flex justify-between items-center p-2 border-b border-white/10">
-              {/* <h3 className="text-xl font-medium text-white">
-                Platform Connection
-              </h3> */}
-              <button
-                onClick={handleClose}
-                className="text-gray-400 w-auto hover:text-white transition-colors"
-                aria-label="Close"
-              >
-                <FaTimes className="w-5 h-5" />
-              </button>
-            </div>
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="modal-content bg-neutral-900 rounded-xl shadow-2xl overflow-hidden border border-white/10 animate-fadeIn max-h-[90vh] overflow-y-auto relative m-auto"
+              style={{ maxWidth: '450px', width: '100%', margin: 'auto' }}
+            >
+              {/* Header with close button */}
+              <div className="flex justify-between items-center p-4 border-b border-white/10 sticky top-0 bg-neutral-900 z-10">
+                <h3 className="text-xl font-medium text-white">
+                  {relogin ? 'Reconnect Platform' : 'Connect Platform'}
+                </h3>
+                <button
+                  onClick={handleClose}
+                  className="text-gray-400 w-auto hover:text-white transition-colors bg-neutral-800 hover:bg-neutral-700 p-2 rounded-full flex items-center justify-center"
+                  aria-label="Close"
+                >
+                  <FaTimes className="w-5 h-5" />
+                </button>
+              </div>
 
-            {renderStep()}
+              {renderStep()}
+            </motion.div>
           </motion.div>
-        </motion.div>
+        </ModalPortal>
       )}
     </AnimatePresence>
   );
+};
+
+PlatformConnectionModal.propTypes = {
+  isOpen: PropTypes.bool.isRequired,
+  onClose: PropTypes.func.isRequired,
+  onConnectionComplete: PropTypes.func,
+  relogin: PropTypes.bool,
 };
 
 export default PlatformConnectionModal;

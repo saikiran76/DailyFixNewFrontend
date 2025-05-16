@@ -6,6 +6,12 @@ body {
   min-height: 100vh;
 }
 
+@layer base{
+  html {
+    font-family: 'Poppins', sans-serif;
+  }
+}
+
 #root {
   min-height: 100vh;
   display: flex;

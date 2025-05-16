@@ -1226,13 +1226,13 @@ class RoomListManager {
       // Create updated room list
       let updatedRooms;
       if (existingIndex >= 0) {
-        // Update existing room
+      // Update existing room
         updatedRooms = [...currentRooms];
         updatedRooms[existingIndex] = {
           ...updatedRooms[existingIndex],
           ...room
         };
-      } else {
+    } else {
         // Add new room
         updatedRooms = [...currentRooms, room];
       }
@@ -1393,7 +1393,7 @@ class RoomListManager {
         isPlaceholder: room.isPlaceholder || false,
         telegramContact: room.telegramContact || null
       }));
-      
+
       // Cache rooms in localStorage and IndexedDB
       try {
         // First try localStorage
@@ -1406,7 +1406,7 @@ class RoomListManager {
       // Then try IndexedDB as a more robust backup (doesn't have size limits)
       try {
         await saveToIndexedDB('rooms', { id: userId, rooms: roomsToCache, lastUpdated: new Date() });
-        logger.info(`[RoomListManager] Cached ${roomsToCache.length} rooms in IndexedDB for user: ${userId}`);
+      logger.info(`[RoomListManager] Cached ${roomsToCache.length} rooms in IndexedDB for user: ${userId}`);
       } catch (dbError) {
         logger.error(`[RoomListManager] IndexedDB caching failed: ${dbError.message}`);
       }
@@ -1525,8 +1525,8 @@ class RoomListManager {
       const eventHandler = this.eventHandlers.get(userId);
       if (eventHandler && eventHandler.onRoomsUpdated) {
         try {
-          const roomList = this.roomLists.get(userId);
-          if (roomList) {
+        const roomList = this.roomLists.get(userId);
+        if (roomList) {
             eventHandler.onRoomsUpdated(roomList.rooms);
           }
         } catch (error) {
@@ -1553,13 +1553,13 @@ class RoomListManager {
     
     // Ensure we don't flood the UI with updates - max 5 updates per second for messages
     if (now - lastNotifyTime > 200) {
-      const handlers = this.eventHandlers.get(userId);
-      if (handlers && handlers.onMessagesUpdated) {
+    const handlers = this.eventHandlers.get(userId);
+    if (handlers && handlers.onMessagesUpdated) {
         try {
-          const messageCache = this.messageCache.get(roomId);
-          if (messageCache) {
-            handlers.onMessagesUpdated(roomId, messageCache.messages);
-          }
+      const messageCache = this.messageCache.get(roomId);
+      if (messageCache) {
+        handlers.onMessagesUpdated(roomId, messageCache.messages);
+      }
         } catch (error) {
           this._throttledWarning(
             'notify_messages_error',

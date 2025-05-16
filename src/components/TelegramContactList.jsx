@@ -8,6 +8,7 @@ import logger from '../utils/logger';
 import contactOrganizer from '../utils/contactOrganizer';
 import ContactCache from '../utils/contactCache';
 import PropTypes from 'prop-types';
+import '../styles/telegram.css'
 import { Virtuoso } from 'react-virtuoso';
 
 /**
@@ -129,7 +130,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
       timestamp: room.timestamp || Date.now(),
       unreadCount: room.unreadCount || 0,
       isGroup: Boolean(room.isGroup),
-      isTelegram: true,
+          isTelegram: true,
       members: room.members || 0,
       telegramContact: room.telegramContact ? {
         id: room.telegramContact.id,
@@ -224,7 +225,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
           },
           handleRoomsUpdated
         );
-        
+
         // Start syncing rooms in background
         syncRooms();
       } catch (error) {
@@ -257,7 +258,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
       if (syncTimeoutRef.current) {
         clearTimeout(syncTimeoutRef.current);
       }
-      
+
       // Clean up room list manager
       if (client) {
         try {
@@ -418,51 +419,51 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
     setContacts(prevContacts => {
       const updatedContacts = [...prevContacts];
       const contactIndex = updatedContacts.findIndex(contact => contact && contact.id === roomId);
-      
+
       if (contactIndex >= 0) {
-        // Get the latest message
-        const latestMessage = messages[messages.length - 1];
-        
+          // Get the latest message
+          const latestMessage = messages[messages.length - 1];
+
         // Format message content based on type
-        let formattedContent = latestMessage.content;
-        
+          let formattedContent = latestMessage.content;
+
         // Format different message types
-        if (latestMessage.type === 'image') {
-          formattedContent = '📷 Image';
-        } else if (latestMessage.type === 'video') {
-          formattedContent = '🎥 Video';
-        } else if (latestMessage.type === 'audio') {
-          formattedContent = '🔊 Audio message';
-        } else if (latestMessage.type === 'file') {
-          formattedContent = '📎 File';
-        } else if (latestMessage.type === 'sticker') {
-          formattedContent = '🏷️ Sticker';
-        }
-        
+          if (latestMessage.type === 'image') {
+            formattedContent = '📷 Image';
+          } else if (latestMessage.type === 'video') {
+            formattedContent = '🎥 Video';
+          } else if (latestMessage.type === 'audio') {
+            formattedContent = '🔊 Audio message';
+          } else if (latestMessage.type === 'file') {
+            formattedContent = '📎 File';
+          } else if (latestMessage.type === 'sticker') {
+            formattedContent = '🏷️ Sticker';
+          }
+
         // Add sender name for group chats
-        if (updatedContacts[contactIndex].isGroup && !latestMessage.isFromMe) {
-          let senderName = '';
-          
-          if (latestMessage.senderName) {
+          if (updatedContacts[contactIndex].isGroup && !latestMessage.isFromMe) {
+            let senderName = '';
+
+            if (latestMessage.senderName) {
             // Clean up sender name
-            if (latestMessage.senderName.includes('@telegram_')) {
-              senderName = 'User';
-            } else {
-              senderName = latestMessage.senderName.split(' ')[0];
+              if (latestMessage.senderName.includes('@telegram_')) {
+                senderName = 'User';
+              } else {
+                senderName = latestMessage.senderName.split(' ')[0];
+              }
+            }
+
+            if (senderName) {
+              formattedContent = `${senderName}: ${formattedContent}`;
             }
           }
-          
-          if (senderName) {
-            formattedContent = `${senderName}: ${formattedContent}`;
-          }
-        }
-        
+
         // Update the contact with new message info
-        updatedContacts[contactIndex] = {
-          ...updatedContacts[contactIndex],
-          lastMessage: formattedContent,
-          timestamp: latestMessage.timestamp
-        };
+          updatedContacts[contactIndex] = {
+            ...updatedContacts[contactIndex],
+            lastMessage: formattedContent,
+            timestamp: latestMessage.timestamp
+          };
         
         // Create a contact summary for updating the cache
         const contactSummary = sanitizeRoomForCache({
@@ -480,9 +481,9 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
         // Update the contact in cache
         if (contactSummary) {
           ContactCache.updateContact(roomId, contactSummary);
-        }
-        
-        // Re-sort contacts by timestamp
+      }
+
+      // Re-sort contacts by timestamp
         return updatedContacts.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
       }
       
@@ -496,7 +497,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
     const validContacts = contacts
       .filter(contact => contact != null)
       .filter(isRelevantRoom); // Ensure we only show relevant rooms
-    
+
     if (searchQuery.trim() === '') {
       setFilteredContacts(validContacts);
     } else {
@@ -517,10 +518,10 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
       toast.loading('Already refreshing conversations...', { id: 'refresh-toast' });
       return;
     }
-    
+
     setRefreshing(true);
     toast.loading('Refreshing conversations...', { id: 'refresh-toast' });
-    
+
     try {
       // Force a background sync
       await syncRooms(true);
@@ -540,11 +541,11 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
   // Format timestamp for display
   const formatTimestamp = (timestamp) => {
     if (!timestamp) return '';
-    
+
     const date = new Date(timestamp);
     const now = new Date();
     const isToday = date.toDateString() === now.toDateString();
-    
+
     if (isToday) {
       return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     } else {
@@ -585,81 +586,81 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
     if (!contact) return null;
     
     return (
-      <div
-        key={contact.id}
-        className={`flex items-center p-3 rounded-lg cursor-pointer transition-all duration-200 ${
-          selectedContactId === contact.id
-            ? 'bg-[#0088cc] bg-opacity-20 border-l-4 border-[#0088cc]'
-            : 'hover:bg-neutral-800 border-l-4 border-transparent'
-        }`}
-        onClick={() => onContactSelect(contact)}
-      >
-        <div className="relative ml-2">
-          {contact.avatar ? (
-            <img
-              src={contact.avatar}
-              alt={contact.name}
-              className={`w-12 h-12 rounded-full object-cover transition-all duration-200 ${
-                selectedContactId === contact.id ? 'ring-2 ring-[#0088cc]' : ''
-              }`}
-              onError={(e) => {
-                e.target.onerror = null;
-                e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(contact.name)}&background=0088cc&color=fff`;
-              }}
-            />
-          ) : (
-            <div className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-200 ${
-              selectedContactId === contact.id
-                ? 'bg-[#0088cc]'
-                : 'bg-gray-700 hover:bg-[#0088cc] hover:bg-opacity-70'
-            }`}>
-              {contact.isGroup ? (
-                <FiUsers className="text-white text-lg" />
-              ) : (
-                <span className="text-white text-lg font-medium">
-                  {contact.telegramContact?.firstName?.charAt(0) || contact.name.charAt(0).toUpperCase()}
-                </span>
-              )}
-            </div>
-          )}
+                  <div
+                    key={contact.id}
+                    className={`flex items-center p-3 rounded-lg cursor-pointer transition-all duration-200 ${
+                      selectedContactId === contact.id
+                        ? 'bg-[#0088cc] bg-opacity-20 border-l-4 border-[#0088cc]'
+                        : 'hover:bg-neutral-800 border-l-4 border-transparent'
+                    }`}
+                    onClick={() => onContactSelect(contact)}
+                  >
+                    <div className="relative ml-2">
+                      {contact.avatar ? (
+                        <img
+                          src={contact.avatar}
+                          alt={contact.name}
+                          className={`w-12 h-12 rounded-full object-cover transition-all duration-200 ${
+                            selectedContactId === contact.id ? 'ring-2 ring-[#0088cc]' : ''
+                          }`}
+                          onError={(e) => {
+                            e.target.onerror = null;
+                            e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(contact.name)}&background=0088cc&color=fff`;
+                          }}
+                        />
+                      ) : (
+                        <div className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-200 ${
+                          selectedContactId === contact.id
+                            ? 'bg-[#0088cc]'
+                            : 'bg-gray-700 hover:bg-[#0088cc] hover:bg-opacity-70'
+                        }`}>
+                          {contact.isGroup ? (
+                            <FiUsers className="text-white text-lg" />
+                          ) : (
+                            <span className="text-white text-lg font-medium">
+                              {contact.telegramContact?.firstName?.charAt(0) || contact.name.charAt(0).toUpperCase()}
+                            </span>
+                          )}
+                        </div>
+                      )}
 
-          {contact.unreadCount > 0 && !contact.isPlaceholder && (
-            <div className="absolute -top-1 -right-1 bg-green-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center shadow-md">
-              {contact.unreadCount > 9 ? '9+' : contact.unreadCount}
-            </div>
-          )}
+                      {contact.unreadCount > 0 && !contact.isPlaceholder && (
+                        <div className="absolute -top-1 -right-1 bg-green-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center shadow-md">
+                          {contact.unreadCount > 9 ? '9+' : contact.unreadCount}
+                        </div>
+                      )}
 
-          {contact.isPlaceholder && (
-            <div className="absolute bottom-0 right-0 bg-[#0088cc] text-white text-xs rounded-full w-5 h-5 flex items-center justify-center shadow-md">
-              <FiPlus />
-            </div>
-          )}
-        </div>
+                      {contact.isPlaceholder && (
+                        <div className="absolute bottom-0 right-0 bg-[#0088cc] text-white text-xs rounded-full w-5 h-5 flex items-center justify-center shadow-md">
+                          <FiPlus />
+                        </div>
+                      )}
+                    </div>
 
-        <div className="ml-3 flex-1 min-w-0">
-          <div className="flex justify-between items-center">
-            <h3 className="font-medium truncate text-white">
-              {contact.telegramContact?.firstName || contact.name}
-              {contact.telegramContact?.lastName && ` ${contact.telegramContact.lastName}`}
-            </h3>
-            <span className="text-xs text-gray-400">
-              {formatTimestamp(contact.timestamp)}
-            </span>
-          </div>
+                    <div className="ml-3 flex-1 min-w-0">
+                      <div className="flex justify-between items-center">
+                        <h3 className="font-medium truncate text-white">
+                          {contact.telegramContact?.firstName || contact.name}
+                          {contact.telegramContact?.lastName && ` ${contact.telegramContact.lastName}`}
+                        </h3>
+                          <span className="text-xs text-gray-400">
+                            {formatTimestamp(contact.timestamp)}
+                          </span>
+                      </div>
 
-          <div className="flex items-center">
-            {contact.telegramContact?.username && (
-              <span className="text-[#0088cc] text-xs mr-2">@{contact.telegramContact.username}</span>
-            )}
-            <p className="text-sm truncate text-gray-400">
-              {contact.lastMessage ||
-               (contact.isGroup ? `${contact.members} members` :
-                (contact.isPlaceholder ? 'Tap to view messages' :
-                 (contact.room ? 'Loading messages...' : 'Tap to view conversation')))}
-            </p>
-          </div>
-        </div>
-      </div>
+                      <div className="flex items-center">
+                        {contact.telegramContact?.username && (
+                          <span className="text-[#0088cc] text-xs mr-2">@{contact.telegramContact.username}</span>
+                        )}
+                        <p className="text-sm truncate text-gray-400">
+                          {contact.lastMessage ||
+                           (contact.isGroup ? `${contact.members} members` :
+                            (contact.isPlaceholder ? 'Tap to view messages' :
+                             (contact.room ? 'Loading messages...' : 'Tap to view conversation')))}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
     );
   };
 
@@ -673,10 +674,10 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
             <div className="ml-3 flex-1">
               <div className="h-4 bg-neutral-800 rounded w-3/4 mb-2"></div>
               <div className="h-3 bg-neutral-800 rounded w-1/2"></div>
-            </div>
+              </div>
           </div>
         ))}
-      </div>
+        </div>
     );
   };
 
@@ -689,7 +690,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
           <h2 className="text-xl font-semibold text-white">Telegram</h2>
         </div>
         <div className="flex items-center space-x-2">
-          <button
+            <button
             className="p-2 w-auto bg-neutral-800 rounded-full text-gray-400 hover:text-white transition-colors"
             onClick={() => setShowArchived(!showArchived)}
             title={showArchived ? 'Hide archived' : 'Show archived'}
@@ -698,9 +699,9 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
           </button>
           <button
             className="p-2 w-auto bg-neutral-800 rounded-full text-gray-400 hover:text-white transition-colors"
-            onClick={handleRefresh}
-            disabled={refreshing}
-          >
+              onClick={handleRefresh}
+              disabled={refreshing}
+            >
             <FiRefreshCw className={`w-5 h-5 ${refreshing ? 'animate-spin' : ''}`} />
           </button>
         </div>
@@ -734,7 +735,7 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
             className="text-blue-400 ml-1 hover:underline"
           >
             Refresh
-          </button>
+            </button>
         </div>
       )}
 
@@ -775,27 +776,27 @@ const TelegramContactList = ({ onContactSelect, selectedContactId }) => {
       {/* Refresh button at the bottom */}
       {!loading && filteredContacts && filteredContacts.length > 0 && (
         <div className="pt-4 mt-auto">
-          <button
-            className={`w-full flex items-center justify-center py-2 px-4 rounded-lg transition-all duration-200 ${
-              refreshing
-                ? 'bg-gray-700 text-gray-400'
-                : 'bg-[#0088cc] hover:bg-[#0099dd] text-white shadow-md hover:shadow-lg'
-            }`}
-            onClick={handleRefresh}
-            disabled={refreshing}
-          >
-            {refreshing ? (
-              <>
-                <div className="animate-spin rounded-full h-4 w-4 border-2 border-t-transparent border-white mr-2"></div>
-                <span>Refreshing...</span>
-              </>
-            ) : (
-              <>
-                <FiRefreshCw className="mr-2" />
-                <span>Refresh Conversations</span>
-              </>
-            )}
-          </button>
+            <button
+              className={`w-full flex items-center justify-center py-2 px-4 rounded-lg transition-all duration-200 ${
+                refreshing
+                  ? 'bg-gray-700 text-gray-400'
+                  : 'bg-[#0088cc] hover:bg-[#0099dd] text-white shadow-md hover:shadow-lg'
+              }`}
+              onClick={handleRefresh}
+              disabled={refreshing}
+            >
+              {refreshing ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-t-transparent border-white mr-2"></div>
+                  <span>Refreshing...</span>
+                </>
+              ) : (
+                <>
+                  <FiRefreshCw className="mr-2" />
+                  <span>Refresh Conversations</span>
+                </>
+              )}
+            </button>
         </div>
       )}
     </div>
