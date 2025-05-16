@@ -73,7 +73,7 @@ const NewOnboarding = () => {
     },
     {
       title: "Your Privacy & Security",
-      description: "Before you get started, please review and accept our terms regarding your data security and privacy.",
+      description: "Please review and accept our terms regarding your data security and privacy.",
       icon: <FaUserShield className="text-4xl text-purple-500" />,
       isTerms: true
     }
@@ -219,18 +219,18 @@ const NewOnboarding = () => {
                   x: { type: 'spring', stiffness: 300, damping: 30 },
                   opacity: { duration: 0.2 }
                 }}
-                className="absolute w-full h-full flex flex-col items-center justify-center p-4"
+                className="absolute w-full h-full flex flex-col items-center justify-center p-2"
               >
                 <div className="flex flex-col items-center text-center max-w-xl p-2">
                   {/* <div className="w-12 h-12 rounded-full bg-purple-100 flex items-center justify-center">
                     {steps[activeStep].icon}
                   </div> */}
                   <h2 className="text-2xl font-bold mb-2">{steps[activeStep].title}</h2>
-                  <p className="text-gray-600 text-lg mb-4">{steps[activeStep].description}</p>
+                  <p className="text-gray-600 text-sm mb-2">{steps[activeStep].description}</p>
 
                   {/* Illustration with GIF or Terms & Conditions */}
                   {steps[activeStep].isTerms ? (
-                    <div className="w-full max-w-md bg-gradient-to-b from-white to-gray-50 rounded-lg p-6 mb-8 border border-gray-200 shadow-sm transition-all duration-300">
+                    <div className="w-full h-[20rem] max-w-md bg-gradient-to-b from-white to-gray-50 rounded-lg p-6 py-8 mb-8 my-9 border border-gray-200 shadow-sm transition-all duration-300">
                       <div className="space-y-6">
                         <div className="flex items-start space-x-3 p-4 bg-white rounded-lg border border-gray-100 shadow-sm hover:shadow-md transition-all duration-300 cursor-pointer" onClick={() => setTermsAccepted({...termsAccepted, security: !termsAccepted.security})}>
                           <div className="flex-shrink-0 mt-0.5">
@@ -284,7 +284,7 @@ const NewOnboarding = () => {
                       </div>
                     </div>
                   ) : (
-                    <div className="w-full max-w-md h-48 bg-gray-100 rounded-lg flex items-center justify-center mb-8 overflow-hidden">
+                    <div className="w-full h-[20rem] max-w-md bg-gray-100 rounded-lg flex items-center justify-center mb-8 overflow-hidden">
                       <img
                         src={steps[activeStep].image}
                         alt={steps[activeStep].title}

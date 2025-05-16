@@ -1,0 +1,113 @@
+/* Modal Portal Styles */
+#modal-portal-root {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: 9999;
+    pointer-events: none; /* Allows clicks to pass through by default */
+  }
+  
+  #modal-portal-root > div {
+    pointer-events: auto; /* Re-enable pointer events for modal content */
+  }
+  
+  /* Platform Connection Modal */
+  .platform-connection-modal {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  .platform-connection-modal::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.8);
+    backdrop-filter: blur(5px);
+    z-index: -1;
+  }
+  
+  .platform-connection-modal .modal-content {
+    width: 100%;
+    max-width: 450px;
+    margin: auto;
+    background-color: #171717; /* neutral-900 */
+    border-radius: 12px;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+    position: relative;
+    max-height: 90vh;
+    overflow-y: auto;
+  }
+  
+  /* Modal Header */
+  .platform-connection-modal .modal-content > div:first-child {
+    position: sticky;
+    top: 0;
+    background-color: #171717;
+    z-index: 10;
+  }
+  
+  /* Modal animations */
+  @keyframes modalFadeIn {
+    from { opacity: 0; transform: scale(0.9); }
+    to { opacity: 1; transform: scale(1); }
+  }
+  
+  .animate-fadeIn {
+    animation: modalFadeIn 0.3s ease-out forwards;
+  }
+  
+  /* Platform section styles */
+  .platform-icon-container {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  
+  .platform-list {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 2rem;
+  }
+  
+  /* Responsive adjustments */
+  @media (max-width: 640px) {
+    .platform-connection-modal .modal-content {
+      max-width: 95%;
+      max-height: 80vh;
+    }
+    
+    .platform-icon-container {
+      transform: scale(0.9);
+    }
+    
+    .platform-list {
+      gap: 1rem;
+    }
+  }
+  
+  /* Modal content scrollbar styling */
+  .platform-connection-modal .modal-content::-webkit-scrollbar {
+    width: 6px;
+  }
+  
+  .platform-connection-modal .modal-content::-webkit-scrollbar-track {
+    background: #171717;
+  }
+  
+  .platform-connection-modal .modal-content::-webkit-scrollbar-thumb {
+    background: #374151;
+    border-radius: 3px;
+  }
+  
+  .platform-connection-modal .modal-content::-webkit-scrollbar-thumb:hover {
+    background: #4B5563;
+  }

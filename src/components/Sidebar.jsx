@@ -24,6 +24,7 @@ import matrixIcon from '../images/matrix-icon.svg';
 import telegramIcon from '../images/telegram-icon.svg'; // You'll need to add this image
 import '../styles/platformSwitcher.css';
 import platformManager from '../services/PlatformManager';
+import Menubutton from './ui/Menubutton';
 // import logger from '../utils/logger';
 
 const TutorialModal = ({ isOpen, onClose }) => {
@@ -348,12 +349,15 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
             )}
           </div>
         ) : (
-          <button
-            onClick={onConnectPlatform}
-            className="w-full flex items-center justify-center px-3 py-3 bg-purple-600 rounded-lg text-white hover:bg-purple-700 transition-colors"
-          >
-            <span className="text-sm font-medium">Connect Platform</span>
-          </button>
+          // <button
+          //   onClick={onConnectPlatform}
+          //   className="w-full flex items-center justify-center px-2 py-2 bg-purple-600 rounded-lg text-white hover:bg-purple-700 transition-colors"
+          // >
+          //   <span className="text-sm font-medium">Connect</span>
+          // </button>
+          <Menubutton className='flex items-center justify-center' onClick={onConnectPlatform}>
+            <span className='text-sm font-medium'>Connect</span>
+          </Menubutton>
         )}
       </div>
       <nav className="flex-1 px-4 space-y-2">
@@ -421,30 +425,34 @@ const Sidebar = ({ accounts = [], selectedPlatform, onPlatformSelect, onViewTogg
 
       {/* Bottom Actions */}
       <div className="p-4 border-t border-white/10 space-y-2">
-        {/* Settings Button */}
-        <button
-          data-settings-button
-          onClick={toggleSettingsMenu}
-          className={`settings-button w-full flex items-center ${isCollapsed ? 'justify-center' : 'space-x-3'} ${isCollapsed ? 'px-2' : 'px-3'} py-2 rounded-lg transition-colors ${
-              showSettingsMenu
-                ? 'bg-neutral-700 text-white'
-                : 'text-gray-400 bg-neutral-800 hover:bg-neutral-700 hover:text-white'
-          }`}
-        >
-          <FiUser className="w-5 h-5" />
-          {!isCollapsed && <span className="text-sm font-medium ml-3">Settings</span>}
-        </button>
+        {/* Settings Button - Only show when accounts are connected */}
+        {accounts.length > 0 && (
+          <button
+            data-settings-button
+            onClick={toggleSettingsMenu}
+            className={`settings-button w-full flex items-center ${isCollapsed ? 'justify-center' : 'space-x-3'} ${isCollapsed ? 'px-2' : 'px-3'} py-2 rounded-lg transition-colors ${
+                showSettingsMenu
+                  ? 'bg-neutral-700 text-white'
+                  : 'text-gray-400 bg-neutral-800 hover:bg-neutral-700 hover:text-white'
+            }`}
+          >
+            <FiUser className="w-5 h-5" />
+            {!isCollapsed && <span className="text-sm font-medium ml-3">Settings</span>}
+          </button>
+        )}
 
-        {/* Tour Guide Button */}
-        <button
-          onClick={() => setShowTutorial(true)}
-          className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'space-x-3'} ${isCollapsed ? 'px-2' : 'px-3'} py-2 rounded-lg text-gray-400 bg-neutral-800 hover:bg-neutral-700 hover:text-white transition-colors`}
-        >
-          <FiHelpCircle className="w-5 h-5" />
-          {!isCollapsed && <span className="text-sm font-medium ml-3">Tour Guide</span>}
-        </button>
+        {/* Tour Guide Button - Only show when accounts are connected */}
+        {accounts.length > 0 && (
+          <button
+            onClick={() => setShowTutorial(true)}
+            className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'space-x-3'} ${isCollapsed ? 'px-2' : 'px-3'} py-2 rounded-lg text-gray-400 bg-neutral-800 hover:bg-neutral-700 hover:text-white transition-colors`}
+          >
+            <FiHelpCircle className="w-5 h-5" />
+            {!isCollapsed && <span className="text-sm font-medium ml-3">Tour Guide</span>}
+          </button>
+        )}
 
-        {/* Logout Button */}
+        {/* Logout Button - Always show */}
         <button
           onClick={() => setShowLogoutModal(true)}
           className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'space-x-3'} ${isCollapsed ? 'px-2' : 'px-3'} py-2 rounded-lg text-gray-400 bg-neutral-800 hover:bg-neutral-700 hover:text-white transition-colors`}
